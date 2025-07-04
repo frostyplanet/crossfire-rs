@@ -1,5 +1,4 @@
 use crate::{channel::*, AsyncTx, MAsyncTx};
-use crossbeam::channel::Sender;
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -41,8 +40,7 @@ use std::time::Duration;
 /// drop(rx);
 /// ```
 pub struct Tx<T> {
-    pub(crate) sender: Sender<T>,
-    pub(crate) shared: Arc<ChannelShared>,
+    pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
 }
@@ -70,14 +68,56 @@ impl<T> Drop for Tx<T> {
 impl<T> From<AsyncTx<T>> for Tx<T> {
     fn from(value: AsyncTx<T>) -> Self {
         value.add_tx();
-        Self::new(value.sender.clone(), value.shared.clone())
+        Self::new(value.shared.clone())
     }
 }
 
-impl<T> Tx<T> {
-    #[inline]
-    pub(crate) fn new(sender: Sender<T>, shared: Arc<ChannelShared>) -> Self {
-        Self { sender, shared, _phan: Default::default() }
+impl<T: Send + 'static> Tx<T> {
+    #[inline(always)]
+    fn _try_send(shared: &ChannelShared<T>, item: T) -> Result<(), T> {
+        match shared.try_send(item) {
+            Err(item) => {
+                return Err(item);
+            }
+            Ok(_) => {
+                shared.on_send();
+                return Ok(());
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn _send_blocking(
+        shared: &ChannelShared<T>, mut item: T,
+    ) -> Result<(), SendError<T>> {
+        if shared.is_disconnected() {
+            return Err(SendError(item));
+        }
+        if shared.bound_size == 0 {
+            match Self::_try_send(shared, item) {
+                Ok(_) => return Ok(()),
+                Err(t) => return Err(SendError(t)),
+            }
+        } else {
+            let waker = LockedWaker::new_blocking();
+            let mut init = true;
+            loop {
+                if let Err(t) = Self::_try_send(shared, item) {
+                    if shared.is_disconnected() {
+                        return Err(SendError(t));
+                    }
+                    item = t;
+                    if waker.is_waked() || init {
+                        init = false;
+                        shared.reg_send_blocking(&waker);
+                    } else {
+                        std::thread::park();
+                    }
+                } else {
+                    return Ok(());
+                }
+            }
+        }
     }
 
     /// Send message. Will block when channel is full.
@@ -88,13 +128,7 @@ impl<T> Tx<T> {
     ///
     #[inline]
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
-        match self.sender.send(item) {
-            Err(e) => return Err(e),
-            Ok(_) => {
-                self.shared.on_send();
-                return Ok(());
-            }
-        }
+        Self::_send_blocking(&self.shared, item)
     }
 
     /// Try to send message, non-blocking
@@ -106,13 +140,21 @@ impl<T> Tx<T> {
     /// Returns Err([TrySendError::Disconnected]) when all Rx dropped.
     #[inline]
     pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        match self.sender.try_send(item) {
-            Err(e) => return Err(e),
-            Ok(_) => {
-                self.shared.on_send();
-                return Ok(());
+        if let Err(t) = Self::_try_send(&self.shared, item) {
+            if self.shared.is_disconnected() {
+                return Err(TrySendError::Disconnected(t));
             }
+            return Err(TrySendError::Full(t));
+        } else {
+            Ok(())
         }
+    }
+}
+
+impl<T> Tx<T> {
+    #[inline]
+    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+        Self { shared, _phan: Default::default() }
     }
 
     /// Waits for a message to be sent into the channel, but only for a limited time.
@@ -127,31 +169,7 @@ impl<T> Tx<T> {
     /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped.
     #[inline]
     pub fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
-        match self.sender.send_timeout(item, timeout) {
-            Err(e) => return Err(e),
-            Ok(_) => {
-                self.shared.on_send();
-                return Ok(());
-            }
-        }
-    }
-
-    /// The number of messages in the channel at the moment
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.sender.len()
-    }
-
-    /// Whether channel is empty at the moment
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.sender.is_empty()
-    }
-
-    /// Whether the channel is full at the moment
-    #[inline]
-    pub fn is_full(&self) -> bool {
-        self.sender.is_full()
+        todo!();
     }
 }
 
@@ -184,7 +202,7 @@ impl<T> From<MTx<T>> for Tx<T> {
 impl<T> From<MAsyncTx<T>> for MTx<T> {
     fn from(value: MAsyncTx<T>) -> Self {
         value.add_tx();
-        Self::new(value.sender.clone(), value.shared.clone())
+        Self::new(value.shared.clone())
     }
 }
 
@@ -192,8 +210,8 @@ unsafe impl<T: Send> Sync for MTx<T> {}
 
 impl<T> MTx<T> {
     #[inline]
-    pub(crate) fn new(send: Sender<T>, shared: Arc<ChannelShared>) -> Self {
-        Self(Tx::new(send, shared))
+    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+        Self(Tx::new(shared))
     }
 }
 
@@ -202,7 +220,7 @@ impl<T: Unpin> Clone for MTx<T> {
     fn clone(&self) -> Self {
         let inner = &self.0;
         inner.shared.add_tx();
-        Self(Tx::new(inner.sender.clone(), inner.shared.clone()))
+        Self(Tx::new(inner.shared.clone()))
     }
 }
 
@@ -218,7 +236,7 @@ impl<T> Deref for MTx<T> {
 
 /// For writing generic code with MTx & Tx
 pub trait BlockingTxTrait<T: Send + 'static>:
-    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared>
+    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>>
 {
     /// Send message. Will block when channel is full.
     ///
@@ -247,13 +265,22 @@ pub trait BlockingTxTrait<T: Send + 'static>:
     fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>>;
 
     /// The number of messages in the channel at the moment
-    fn len(&self) -> usize;
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
 
     /// Whether channel is empty at the moment
-    fn is_empty(&self) -> bool;
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
 
     /// Whether the channel is full at the moment
-    fn is_full(&self) -> bool;
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
 
     /// Return true if the other side has closed
     #[inline(always)]
@@ -277,21 +304,6 @@ impl<T: Send + 'static> BlockingTxTrait<T> for Tx<T> {
     fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
         Tx::send_timeout(&self, item, timeout)
     }
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        Tx::len(self)
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        Tx::is_empty(self)
-    }
-
-    #[inline(always)]
-    fn is_full(&self) -> bool {
-        Tx::is_full(self)
-    }
 }
 
 impl<T: Send + 'static> BlockingTxTrait<T> for MTx<T> {
@@ -309,41 +321,26 @@ impl<T: Send + 'static> BlockingTxTrait<T> for MTx<T> {
     fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
         self.0.send_timeout(item, timeout)
     }
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    #[inline(always)]
-    fn is_full(&self) -> bool {
-        self.0.is_full()
-    }
 }
 
 impl<T> Deref for Tx<T> {
-    type Target = ChannelShared;
+    type Target = ChannelShared<T>;
     #[inline(always)]
-    fn deref(&self) -> &ChannelShared {
+    fn deref(&self) -> &ChannelShared<T> {
         &self.shared
     }
 }
 
-impl<T> AsRef<ChannelShared> for Tx<T> {
+impl<T> AsRef<ChannelShared<T>> for Tx<T> {
     #[inline(always)]
-    fn as_ref(&self) -> &ChannelShared {
+    fn as_ref(&self) -> &ChannelShared<T> {
         &self.shared
     }
 }
 
-impl<T> AsRef<ChannelShared> for MTx<T> {
+impl<T> AsRef<ChannelShared<T>> for MTx<T> {
     #[inline(always)]
-    fn as_ref(&self) -> &ChannelShared {
+    fn as_ref(&self) -> &ChannelShared<T> {
         &self.0.shared
     }
 }

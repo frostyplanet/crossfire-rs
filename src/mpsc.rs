@@ -45,12 +45,11 @@ use crate::channel::*;
 ///
 /// Sender will never block, so we use the same TxBlocking for threads
 pub fn unbounded_blocking<T: Unpin>() -> (MTx<T>, Rx<T>) {
-    let (tx, rx) = crossbeam::channel::unbounded();
     let send_wakers = RegistryDummy::new();
-    let recv_wakers = RegistryDummy::new();
-    let shared = ChannelShared::new(send_wakers, recv_wakers);
-    let tx = MTx::new(tx, shared.clone());
-    let rx = Rx::new(rx, shared);
+    let recv_wakers = RegistrySingle::new();
+    let shared = ChannelShared::new(Channel::new_list(), send_wakers, recv_wakers);
+    let tx = MTx::new(shared.clone());
+    let rx = Rx::new(shared);
     (tx, rx)
 }
 
@@ -58,12 +57,11 @@ pub fn unbounded_blocking<T: Unpin>() -> (MTx<T>, Rx<T>) {
 ///
 /// Although sender type is MTx, will never block.
 pub fn unbounded_async<T: Unpin>() -> (MTx<T>, AsyncRx<T>) {
-    let (tx, rx) = crossbeam::channel::unbounded();
     let send_wakers = RegistryDummy::new();
     let recv_wakers = RegistrySingle::new();
-    let shared = ChannelShared::new(send_wakers, recv_wakers);
-    let tx = MTx::new(tx, shared.clone());
-    let rx = AsyncRx::new(rx, shared);
+    let shared = ChannelShared::new(Channel::new_list(), send_wakers, recv_wakers);
+    let tx = MTx::new(shared.clone());
+    let rx = AsyncRx::new(shared);
     (tx, rx)
 }
 
@@ -74,13 +72,11 @@ pub fn bounded_blocking<T: Unpin>(mut size: usize) -> (MTx<T>, Rx<T>) {
     if size == 0 {
         size = 1;
     }
-    let (tx, rx) = crossbeam::channel::bounded(size);
-    let send_wakers = RegistryDummy::new();
-    let recv_wakers = RegistryDummy::new();
-    let shared = ChannelShared::new(send_wakers, recv_wakers);
-
-    let tx = MTx::new(tx, shared.clone());
-    let rx = Rx::new(rx, shared);
+    let send_wakers = RegistryMulti::new();
+    let recv_wakers = RegistrySingle::new();
+    let shared = ChannelShared::new(Channel::new_array(size), send_wakers, recv_wakers);
+    let tx = MTx::new(shared.clone());
+    let rx = Rx::new(shared);
     (tx, rx)
 }
 
@@ -91,13 +87,11 @@ pub fn bounded_async<T: Unpin>(mut size: usize) -> (MAsyncTx<T>, AsyncRx<T>) {
     if size == 0 {
         size = 1;
     }
-    let (tx, rx) = crossbeam::channel::bounded(size);
     let send_wakers = RegistryMulti::new();
     let recv_wakers = RegistrySingle::new();
-    let shared = ChannelShared::new(send_wakers, recv_wakers);
-
-    let tx = MAsyncTx::new(tx, shared.clone());
-    let rx = AsyncRx::new(rx, shared);
+    let shared = ChannelShared::new(Channel::new_array(size), send_wakers, recv_wakers);
+    let tx = MAsyncTx::new(shared.clone());
+    let rx = AsyncRx::new(shared);
     (tx, rx)
 }
 
@@ -108,13 +102,11 @@ pub fn bounded_tx_async_rx_blocking<T: Unpin>(mut size: usize) -> (MAsyncTx<T>, 
     if size == 0 {
         size = 1;
     }
-    let (tx, rx) = crossbeam::channel::bounded(size);
     let send_wakers = RegistryMulti::new();
-    let recv_wakers = RegistryDummy::new();
-    let shared = ChannelShared::new(send_wakers, recv_wakers);
-
-    let tx = MAsyncTx::new(tx, shared.clone());
-    let rx = Rx::new(rx, shared);
+    let recv_wakers = RegistrySingle::new();
+    let shared = ChannelShared::new(Channel::new_array(size), send_wakers, recv_wakers);
+    let tx = MAsyncTx::new(shared.clone());
+    let rx = Rx::new(shared);
     (tx, rx)
 }
 
@@ -125,12 +117,10 @@ pub fn bounded_tx_blocking_rx_async<T>(mut size: usize) -> (MTx<T>, AsyncRx<T>) 
     if size == 0 {
         size = 1;
     }
-    let (tx, rx) = crossbeam::channel::bounded(size);
-    let send_wakers = RegistryDummy::new();
+    let send_wakers = RegistryMulti::new();
     let recv_wakers = RegistrySingle::new();
-    let shared = ChannelShared::new(send_wakers, recv_wakers);
-
-    let tx = MTx::new(tx, shared.clone());
-    let rx = AsyncRx::new(rx, shared);
+    let shared = ChannelShared::new(Channel::new_array(size), send_wakers, recv_wakers);
+    let tx = MTx::new(shared.clone());
+    let rx = AsyncRx::new(shared);
     (tx, rx)
 }

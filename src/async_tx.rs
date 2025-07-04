@@ -1,6 +1,5 @@
 use crate::sink::AsyncSink;
 use crate::{channel::*, MTx, Tx};
-use crossbeam::channel::Sender;
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -52,8 +51,7 @@ use std::task::{Context, Poll};
 /// }
 /// ```
 pub struct AsyncTx<T> {
-    pub(crate) sender: Sender<T>,
-    pub(crate) shared: Arc<ChannelShared>,
+    pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
 }
@@ -80,44 +78,8 @@ impl<T> Drop for AsyncTx<T> {
 
 impl<T> AsyncTx<T> {
     #[inline]
-    pub(crate) fn new(sender: Sender<T>, shared: Arc<ChannelShared>) -> Self {
-        Self { sender, shared, _phan: Default::default() }
-    }
-
-    /// Try to send message, non-blocking
-    ///
-    /// Returns `Ok(())` when successful.
-    ///
-    /// Returns Err([TrySendError::Full]) on channel full for bounded channel.
-    ///
-    /// Returns Err([TrySendError::Disconnected]) when all Rx dropped.
-    #[inline]
-    pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        match self.sender.try_send(item) {
-            Err(e) => return Err(e),
-            Ok(_) => {
-                self.shared.on_send();
-                return Ok(());
-            }
-        }
-    }
-
-    /// The number of messages in the channel at the moment
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.sender.len()
-    }
-
-    /// Whether channel is empty at the moment
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.sender.is_empty()
-    }
-
-    /// Whether the channel is full at the moment
-    #[inline]
-    pub fn is_full(&self) -> bool {
-        self.sender.is_full()
+    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+        Self { shared, _phan: Default::default() }
     }
 
     #[inline]
@@ -142,11 +104,35 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         return SendFuture { tx: &self, item: Some(item), waker: None };
     }
 
-    /// Use send() instead
+    /// Try to send message, non-blocking
+    ///
+    /// Returns `Ok(())` when successful.
+    ///
+    /// Returns Err([TrySendError::Full]) on channel full for bounded channel.
+    ///
+    /// Returns Err([TrySendError::Disconnected]) when all Rx dropped.
+    #[inline]
+    pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
+        if self.shared.is_disconnected() {
+            return Err(TrySendError::Disconnected(item));
+        }
+        match self.shared.try_send(item) {
+            Err(item) => {
+                return Err(TrySendError::Full(item));
+            }
+            Ok(_) => {
+                self.shared.on_send();
+                return Ok(());
+            }
+        }
+    }
+
     #[inline(always)]
-    #[deprecated]
-    pub fn make_send_future<'a>(&'a self, item: T) -> SendFuture<'a, T> {
-        return SendFuture { tx: &self, item: Some(item), waker: None };
+    fn _return_full(&self, item: T) -> TrySendError<T> {
+        if self.shared.is_disconnected() {
+            return TrySendError::Disconnected(item);
+        }
+        return TrySendError::Full(item);
     }
 
     /// Waits for a message to be sent into the channel, but only for a limited time.
@@ -192,53 +178,32 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        //
-        // crossbeam-channel will check disconnected for us (if not raced)
-        let r = self.try_send(item);
-        if let Some(old_waker) = o_waker.take() {
-            // https://github.com/frostyplanet/crossfire-rs/issues/14
-            old_waker.cancel();
-        }
-        if let Err(TrySendError::Full(t)) = r {
-            item = t;
-        } else {
-            return r;
-        }
-        let waker = self.shared.reg_send_async(ctx);
-        // NOTE: The other side put something whie reg_send and did not see the waker,
-        // should check the channel again, otherwise might incur a dead lock.
-        let r = self.try_send(item);
-        if let Err(TrySendError::Full(t)) = r {
-            if self.shared.get_rx_count() == 0 {
-                // Check channel close before sleep, otherwise might block forever
-                // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
-                return Err(TrySendError::Disconnected(t));
+        for i in 0..2 {
+            match self.shared.try_send(item) {
+                Err(t) => {
+                    if i == 0 {
+                        if self.shared.reg_send_async(ctx, o_waker) {
+                            // waker is not consumed
+                            return Err(self._return_full(t));
+                        }
+                        // NOTE: The other side put something whie reg_send and did not see the waker,
+                        // should check the channel again, otherwise might incur a dead lock.
+                    } else {
+                        // No need to reg again
+                    }
+                    item = t;
+                    continue;
+                }
+                Ok(_) => {
+                    if let Some(old_waker) = o_waker.take() {
+                        self.shared.cancel_send_waker(old_waker);
+                    }
+                    self.shared.on_send();
+                    return Ok(());
+                }
             }
-            o_waker.replace(waker);
-            return Err(TrySendError::Full(t));
-        } else {
-            // Ok or Disconnected
-            self.shared.cancel_send_waker(waker);
         }
-        return r;
-    }
-
-    /// Send a message while **blocking the current thread**. Be careful!
-    ///
-    /// Returns `Ok(())`on successful.
-    ///
-    /// Returns Err([SendError]) when all Rx is dropped.
-    ///
-    /// **NOTE: Do not use it in async context otherwise will block the runtime.**
-    #[inline]
-    pub fn send_blocking(&self, item: T) -> Result<(), SendError<T>> {
-        match self.sender.send(item) {
-            Ok(()) => {
-                self.shared.on_send();
-                return Ok(());
-            }
-            Err(e) => return Err(e),
-        }
+        return Err(self._return_full(item));
     }
 }
 
@@ -340,7 +305,7 @@ impl<T: Unpin + Send + 'static> Future for SendTimeoutFuture<'_, T> {
 
 /// For writing generic code with MAsyncTx & AsyncTx
 pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
-    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared>
+    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>>
 {
     /// Try to send message, non-blocking
     ///
@@ -352,13 +317,22 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
     fn try_send(&self, item: T) -> Result<(), TrySendError<T>>;
 
     /// The number of messages in the channel at the moment
-    fn len(&self) -> usize;
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
 
     /// Whether channel is empty at the moment
-    fn is_empty(&self) -> bool;
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
 
     /// Whether the channel is full at the moment
-    fn is_full(&self) -> bool;
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
 
     /// Return true if the other side has closed
     #[inline(always)]
@@ -394,21 +368,6 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for AsyncTx<T> {
     #[inline(always)]
     fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
         AsyncTx::try_send(self, item)
-    }
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        AsyncTx::len(self)
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        AsyncTx::is_empty(self)
-    }
-
-    #[inline(always)]
-    fn is_full(&self) -> bool {
-        AsyncTx::is_full(self)
     }
 
     #[inline(always)]
@@ -458,7 +417,7 @@ impl<T: Unpin> Clone for MAsyncTx<T> {
     fn clone(&self) -> Self {
         let inner = &self.0;
         inner.shared.add_tx();
-        Self(AsyncTx::new(inner.sender.clone(), inner.shared.clone()))
+        Self(AsyncTx::new(inner.shared.clone()))
     }
 }
 
@@ -470,8 +429,8 @@ impl<T> From<MAsyncTx<T>> for AsyncTx<T> {
 
 impl<T> MAsyncTx<T> {
     #[inline]
-    pub(crate) fn new(send: Sender<T>, shared: Arc<ChannelShared>) -> Self {
-        Self(AsyncTx::new(send, shared))
+    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+        Self(AsyncTx::new(shared))
     }
 
     #[inline]
@@ -502,21 +461,6 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for MAsyncTx<T> {
     }
 
     #[inline(always)]
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    #[inline(always)]
-    fn is_full(&self) -> bool {
-        self.0.is_full()
-    }
-
-    #[inline(always)]
     fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
         self.0.send(item)
     }
@@ -532,23 +476,23 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for MAsyncTx<T> {
 }
 
 impl<T> Deref for AsyncTx<T> {
-    type Target = ChannelShared;
+    type Target = ChannelShared<T>;
     #[inline(always)]
-    fn deref(&self) -> &ChannelShared {
+    fn deref(&self) -> &ChannelShared<T> {
         &self.shared
     }
 }
 
-impl<T> AsRef<ChannelShared> for AsyncTx<T> {
+impl<T> AsRef<ChannelShared<T>> for AsyncTx<T> {
     #[inline(always)]
-    fn as_ref(&self) -> &ChannelShared {
+    fn as_ref(&self) -> &ChannelShared<T> {
         &self.shared
     }
 }
 
-impl<T> AsRef<ChannelShared> for MAsyncTx<T> {
+impl<T> AsRef<ChannelShared<T>> for MAsyncTx<T> {
     #[inline(always)]
-    fn as_ref(&self) -> &ChannelShared {
+    fn as_ref(&self) -> &ChannelShared<T> {
         &self.0.shared
     }
 }

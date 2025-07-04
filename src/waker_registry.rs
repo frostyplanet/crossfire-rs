@@ -13,7 +13,10 @@ pub enum Registry {
 #[enum_dispatch]
 pub trait RegistryTrait {
     /// For async context
-    fn reg_async(&self, _ctx: &mut Context) -> LockedWaker;
+    fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool;
+
+    /// For thread context
+    fn reg_blocking(&self, _waker: &LockedWaker);
 
     fn clear_wakers(&self, _seq: u64);
 
@@ -39,7 +42,12 @@ impl RegistryDummy {
 
 impl RegistryTrait for RegistryDummy {
     #[inline(always)]
-    fn reg_async(&self, _ctx: &mut Context) -> LockedWaker {
+    fn reg_async(&self, _ctx: &mut Context, _o_waker: &mut Option<LockedWaker>) -> bool {
+        unreachable!();
+    }
+
+    #[inline(always)]
+    fn reg_blocking(&self, _waker: &LockedWaker) {
         unreachable!();
     }
 
@@ -76,10 +84,27 @@ impl RegistrySingle {
 impl RegistryTrait for RegistrySingle {
     /// return is_skip
     #[inline(always)]
-    fn reg_async(&self, ctx: &mut Context) -> LockedWaker {
-        let waker = LockedWaker::new(ctx, 0);
+    fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
+        let waker = {
+            if o_waker.is_none() {
+                o_waker.replace(LockedWaker::new_async(ctx));
+                o_waker.as_ref().unwrap()
+            } else {
+                let _waker = o_waker.as_ref().unwrap();
+                if !_waker.is_waked() {
+                    // No need to reg again, since waker is not consumed
+                    return true;
+                }
+                _waker
+            }
+        };
         self.cell.put(waker.weak());
-        waker
+        false
+    }
+
+    #[inline(always)]
+    fn reg_blocking(&self, waker: &LockedWaker) {
+        self.cell.put(waker.weak());
     }
 
     #[inline(always)]
@@ -134,10 +159,28 @@ impl RegistryMulti {
 
 impl RegistryTrait for RegistryMulti {
     #[inline(always)]
-    fn reg_async(&self, ctx: &mut Context) -> LockedWaker {
-        let waker = LockedWaker::new(ctx, self.seq.fetch_add(1, Ordering::SeqCst));
+    fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
+        let waker = {
+            if o_waker.is_none() {
+                o_waker.replace(LockedWaker::new_async(ctx));
+                o_waker.as_ref().unwrap()
+            } else {
+                let _waker = o_waker.as_ref().unwrap();
+                if !_waker.is_waked() {
+                    // No need to reg again, since waker is not consumed
+                    return true;
+                }
+                _waker
+            }
+        };
+        waker.set_seq(self.seq.fetch_add(1, Ordering::SeqCst));
         self.queue.push(waker.weak());
-        waker
+        false
+    }
+
+    #[inline(always)]
+    fn reg_blocking(&self, waker: &LockedWaker) {
+        self.queue.push(waker.weak());
     }
 
     #[inline(always)]
