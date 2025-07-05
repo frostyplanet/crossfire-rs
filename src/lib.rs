@@ -188,13 +188,9 @@
 //! If you like to use poll function directly for complex behavior, you can call
 //! [AsyncSink::poll_send()](crate::sink::AsyncSink::poll_send()) or [AsyncStream::poll_item()](crate::stream::AsyncStream::poll_item()) with Context.
 
-extern crate crossbeam;
 extern crate futures;
 #[macro_use]
 extern crate enum_dispatch;
-
-pub use crossbeam::channel::{RecvError, RecvTimeoutError, TryRecvError};
-pub use crossbeam::channel::{SendError, SendTimeoutError, TrySendError};
 
 mod channel;
 pub use channel::ChannelShared;
@@ -217,8 +213,12 @@ mod async_tx;
 pub use async_tx::*;
 mod async_rx;
 pub use async_rx::*;
+
 pub mod sink;
 pub mod stream;
+
+mod crossbeam;
+pub use crossbeam::err::*;
 
 #[cfg(test)]
 mod tests;

@@ -1,8 +1,7 @@
 pub use super::waker_registry::*;
+pub use crate::crossbeam::err::*;
 pub use crate::locked_waker::*;
-pub use crossbeam::channel::{RecvError, RecvTimeoutError, TryRecvError};
-pub use crossbeam::channel::{SendError, SendTimeoutError, TrySendError};
-use crossbeam::queue::{ArrayQueue, SegQueue};
+use crossbeam_queue::{ArrayQueue, SegQueue};
 use lazy_static::lazy_static;
 use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
