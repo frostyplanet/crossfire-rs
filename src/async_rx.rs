@@ -240,12 +240,14 @@ impl<T> Future for ReceiveFuture<'_, T> {
         match _self.rx.poll_item(ctx, &mut _self.waker) {
             Err(e) => {
                 if !e.is_empty() {
+                    let _ = _self.waker.take();
                     return Poll::Ready(Err(RecvError {}));
                 } else {
                     return Poll::Pending;
                 }
             }
             Ok(item) => {
+                debug_assert!(_self.waker.is_none());
                 return Poll::Ready(Ok(item));
             }
         }
