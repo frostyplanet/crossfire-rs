@@ -2,8 +2,9 @@ use crate::locked_waker::LockedWaker;
 use crate::TrySendError;
 use crate::{AsyncTx, MAsyncTx};
 use std::fmt;
+use std::mem::MaybeUninit;
 use std::ops::Deref;
-use std::task::Context;
+use std::task::*;
 
 /// This is for you to write custom future with poll_send(ctx)
 pub struct AsyncSink<T> {
@@ -64,7 +65,12 @@ impl<T: Send + Unpin + 'static> AsyncSink<T> {
     /// Returns Err([crate::TrySendError::Disconnected]) when all Rx dropped.
     #[inline]
     pub fn poll_send(&mut self, ctx: &mut Context, item: T) -> Result<(), TrySendError<T>> {
-        self.tx.poll_send(ctx, item, &mut self.waker)
+        let _item = MaybeUninit::new(item);
+        match self.tx.poll_send(ctx, &_item, &mut self.waker) {
+            Poll::Ready(Ok(())) => Ok(()),
+            Poll::Ready(Err(())) => Err(TrySendError::Disconnected(unsafe { _item.assume_init() })),
+            Poll::Pending => Err(TrySendError::Full(unsafe { _item.assume_init() })),
+        }
     }
 }
 
