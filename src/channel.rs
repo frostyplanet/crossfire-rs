@@ -1,7 +1,8 @@
 pub use super::waker_registry::*;
+use crate::crossbeam::array_queue::ArrayQueue;
 pub use crate::crossbeam::err::*;
 pub use crate::locked_waker::*;
-use crossbeam_queue::{ArrayQueue, SegQueue};
+use crossbeam_queue::SegQueue;
 use lazy_static::lazy_static;
 use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -75,8 +76,7 @@ impl<T: Send + 'static> ChannelShared<T> {
                 return Ok(());
             }
             Channel::Array(inner) => {
-                if let Err(t) = inner.push(unsafe { item.assume_init_read() }) {
-                    mem::forget(t);
+                if let Err(()) = unsafe { inner.push_uninit_ref(item) } {
                     return Err(());
                 } else {
                     return Ok(());
