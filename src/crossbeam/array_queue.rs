@@ -118,9 +118,10 @@ impl<T> ArrayQueue<T> {
         }
     }
 
-    fn push_or_else<F>(&self, mut value: T, f: F) -> Result<(), T>
+    #[inline(always)]
+    fn push_or_else<F, R>(&self, value: &MaybeUninit<T>, f: F) -> Result<(), R>
     where
-        F: Fn(T, usize, usize, &Slot<T>) -> Result<T, T>,
+        F: Fn(usize, usize, &Slot<T>) -> Result<(), R>,
     {
         let backoff = Backoff::new();
         let mut tail = self.tail.load(Ordering::Relaxed);
@@ -157,7 +158,8 @@ impl<T> ArrayQueue<T> {
                     Ok(_) => {
                         // Write the value into the slot and update the stamp.
                         unsafe {
-                            slot.value.get().write(MaybeUninit::new(value));
+                            let item: &mut MaybeUninit<T> = mem::transmute(slot.value.get());
+                            item.write(value.assume_init_read());
                         }
                         slot.stamp.store(tail + 1, Ordering::Release);
                         return Ok(());
@@ -169,7 +171,7 @@ impl<T> ArrayQueue<T> {
                 }
             } else if stamp.wrapping_add(self.one_lap) == tail + 1 {
                 atomic::fence(Ordering::SeqCst);
-                value = f(value, tail, new_tail, slot)?;
+                f(tail, new_tail, slot)?;
                 backoff.spin();
                 tail = self.tail.load(Ordering::Relaxed);
             } else {
@@ -178,6 +180,41 @@ impl<T> ArrayQueue<T> {
                 tail = self.tail.load(Ordering::Relaxed);
             }
         }
+    }
+
+    /// Attempts to push an element put in MaybeUninit into the queue.
+    ///
+    /// If successful, the ownership is transfered to the queue.
+    ///
+    /// If the queue is full, the element is not moved,
+    /// and you have to perform drop or recovery by yourselfs.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use crossbeam_queue::ArrayQueue;
+    ///
+    /// let q = ArrayQueue::new(1);
+    /// assert_eq!(q.push(Box::new(10)), Ok(()));
+    /// let value = std::mem::MaybeUninit(Box::new(20));
+    /// if let Err(()) = q.push_uninit_ref(&value) {
+    ///     unsafe{value.assume_init_drop()};
+    /// } else {
+    ///     // Value is in the queue, just forget it.
+    /// }
+    /// ```
+    pub unsafe fn push_uninit_ref(&self, value: &MaybeUninit<T>) -> Result<(), ()> {
+        self.push_or_else(&value, |tail, _, _| {
+            let head = self.head.load(Ordering::Relaxed);
+
+            // If the head lags one lap behind the tail as well...
+            if head.wrapping_add(self.one_lap) == tail {
+                // ...then the queue is full.
+                Err(())
+            } else {
+                Ok(())
+            }
+        })
     }
 
     /// Attempts to push an element into the queue.
@@ -195,15 +232,16 @@ impl<T> ArrayQueue<T> {
     /// assert_eq!(q.push(20), Err(20));
     /// ```
     pub fn push(&self, value: T) -> Result<(), T> {
-        self.push_or_else(value, |v, tail, _, _| {
+        let value = MaybeUninit::new(value);
+        self.push_or_else(&value, |tail, _, _| {
             let head = self.head.load(Ordering::Relaxed);
 
             // If the head lags one lap behind the tail as well...
             if head.wrapping_add(self.one_lap) == tail {
                 // ...then the queue is full.
-                Err(v)
+                Err(unsafe { value.assume_init_read() })
             } else {
-                Ok(v)
+                Ok(())
             }
         })
     }
@@ -226,7 +264,8 @@ impl<T> ArrayQueue<T> {
     /// assert_eq!(q.pop(), Some(20));
     /// ```
     pub fn force_push(&self, value: T) -> Option<T> {
-        self.push_or_else(value, |v, tail, new_tail, slot| {
+        let value = MaybeUninit::new(value);
+        self.push_or_else(&value, |tail, new_tail, slot| {
             let head = tail.wrapping_sub(self.one_lap);
             let new_head = new_tail.wrapping_sub(self.one_lap);
 
@@ -238,16 +277,16 @@ impl<T> ArrayQueue<T> {
             {
                 // Move the tail.
                 self.tail.store(new_tail, Ordering::SeqCst);
-
-                // Swap the previous value.
-                let old = unsafe { slot.value.get().replace(MaybeUninit::new(v)).assume_init() };
+                let item: &mut MaybeUninit<T> = unsafe { mem::transmute(slot.value.get()) };
+                let old = unsafe { item.assume_init_read() };
+                unsafe { item.write(value.assume_init_read()) };
 
                 // Update the stamp.
                 slot.stamp.store(tail + 1, Ordering::Release);
 
                 Err(old)
             } else {
-                Ok(v)
+                Ok(())
             }
         })
         .err()
