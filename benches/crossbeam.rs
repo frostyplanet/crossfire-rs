@@ -9,7 +9,7 @@ mod common;
 use common::*;
 
 fn _crossbeam_bounded_sync(bound: usize, tx_count: usize, rx_count: usize, msg_count: usize) {
-    let (tx, rx) = crossbeam::channel::bounded::<usize>(bound);
+    let (tx, rx) = crossbeam_channel::bounded::<usize>(bound);
     let send_counter = Arc::new(AtomicUsize::new(0));
     let recv_counter = Arc::new(AtomicUsize::new(0));
     let mut th_s = Vec::new();
