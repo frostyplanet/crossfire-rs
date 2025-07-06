@@ -6,6 +6,61 @@ use std::sync::{
     Arc, Weak,
 };
 
+pub struct ArcCell<T> {
+    ptr: AtomicPtr<T>,
+}
+
+unsafe impl<T> Send for ArcCell<T> {}
+unsafe impl<T> Sync for ArcCell<T> {}
+
+impl<T> ArcCell<T> {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self { ptr: AtomicPtr::new(ptr::null_mut()) }
+    }
+
+    #[inline(always)]
+    pub fn exists(&self) -> bool {
+        self.ptr.load(Ordering::Acquire) != ptr::null_mut()
+    }
+
+    #[inline(always)]
+    pub fn pop(&self) -> Option<Arc<T>> {
+        let ptr = self.ptr.swap(ptr::null_mut(), Ordering::SeqCst);
+        if ptr != ptr::null_mut() {
+            return Some(unsafe { Arc::from_raw(ptr) });
+        } else {
+            None
+        }
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub fn clear(&self) {
+        let ptr = self.ptr.swap(ptr::null_mut(), Ordering::SeqCst);
+        if ptr != ptr::null_mut() {
+            // Convert into Weak and drop
+            let _ = unsafe { Arc::from_raw(ptr) };
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_put(&self, item: Arc<T>) {
+        let item_ptr = Arc::into_raw(item) as *mut T;
+        match self.ptr.compare_exchange(
+            ptr::null_mut(),
+            item_ptr,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => {}
+            Err(_) => {
+                let _ = unsafe { Arc::from_raw(item_ptr) };
+            }
+        }
+    }
+}
+
 pub struct WeakCell<T> {
     ptr: AtomicPtr<T>,
 }
