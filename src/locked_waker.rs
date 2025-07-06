@@ -1,5 +1,7 @@
-use crate::collections::WeakCell;
+use crate::collections::{ArcCell, WeakCell};
+use std::cell::UnsafeCell;
 use std::fmt;
+use std::mem::transmute;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Weak,
@@ -16,7 +18,7 @@ impl LockedWaker {
         Self(Arc::new(LockedWakerInner {
             seq: AtomicU64::new(0),
             waked: AtomicBool::new(false),
-            waker: WakerType::Async(ctx.waker().clone()),
+            waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
         }))
     }
 
@@ -25,7 +27,7 @@ impl LockedWaker {
         Self(Arc::new(LockedWakerInner {
             seq: AtomicU64::new(0),
             waked: AtomicBool::new(true),
-            waker: WakerType::Blocking(thread::current()),
+            waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
         }))
     }
 
@@ -82,7 +84,7 @@ enum WakerType {
 struct LockedWakerInner {
     waked: AtomicBool,
     seq: AtomicU64,
-    waker: WakerType,
+    waker: UnsafeCell<WakerType>,
 }
 
 unsafe impl Send for LockedWakerInner {}
@@ -98,12 +100,23 @@ impl fmt::Debug for LockedWakerRef {
 
 impl LockedWakerInner {
     /// return true on suc wake up, false when already woken up.
+
+    #[inline(always)]
+    fn get_waker(&self) -> &WakerType {
+        unsafe { transmute(self.waker.get()) }
+    }
+
+    #[inline(always)]
+    fn get_waker_mut(&self) -> &mut WakerType {
+        unsafe { transmute(self.waker.get()) }
+    }
+
     #[inline(always)]
     pub fn wake(&self) -> bool {
         if self.waked.swap(true, Ordering::SeqCst) {
             return false;
         }
-        match &self.waker {
+        match self.get_waker() {
             WakerType::Async(waker) => waker.wake_by_ref(),
             WakerType::Blocking(th) => th.unpark(),
         }
@@ -143,6 +156,39 @@ impl LockedWakerRef {
         }
         other.wake();
         false
+    }
+}
+
+pub struct WakerCache(ArcCell<LockedWakerInner>);
+
+impl WakerCache {
+    #[inline(always)]
+    pub(crate) fn new() -> Self {
+        Self(ArcCell::new())
+    }
+
+    #[inline(always)]
+    pub(crate) fn new_blocking(&self) -> LockedWaker {
+        if let Some(inner) = self.0.pop() {
+            let _waker = inner.get_waker_mut();
+            *_waker = WakerType::Blocking(thread::current());
+            return LockedWaker(inner);
+        }
+        return LockedWaker::new_blocking();
+    }
+
+    #[inline(always)]
+    pub(crate) fn push(&self, waker: LockedWaker) {
+        waker.cancel();
+        if Arc::weak_count(&waker.0) == 0 && Arc::strong_count(&waker.0) == 1 {
+            self.0.try_put(waker.0);
+        }
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub(crate) fn is_empty(&self) -> bool {
+        !self.0.exists()
     }
 }
 
@@ -187,5 +233,12 @@ mod tests {
         println!("waker size {}", std::mem::size_of::<LockedWakerRef>());
         println!("arc size {}", std::mem::size_of::<Arc<WakerCell>>());
         println!("arc size {}", std::mem::size_of::<Weak<WakerCell>>());
+
+        let cache = WakerCache::new();
+        assert!(cache.is_empty());
+        let waker = cache.new_blocking();
+        assert!(cache.is_empty());
+        cache.push(waker);
+        assert!(!cache.is_empty());
     }
 }

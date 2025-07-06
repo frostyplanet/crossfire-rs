@@ -44,6 +44,7 @@ pub struct Rx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    waker_cache: WakerCache,
 }
 
 unsafe impl<T: Send> Send for Rx<T> {}
@@ -76,12 +77,12 @@ impl<T> From<AsyncRx<T>> for Rx<T> {
 impl<T> Rx<T> {
     #[inline(always)]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
     }
 
     #[inline(always)]
     pub(crate) fn _recv_blocking(
-        shared: &ChannelShared<T>, deadline: Option<Instant>,
+        shared: &ChannelShared<T>, deadline: Option<Instant>, cache: &WakerCache,
     ) -> Result<T, RecvTimeoutError> {
         if shared.bound_size == Some(0) {
             todo!();
@@ -91,7 +92,7 @@ impl<T> Rx<T> {
                 shared.on_recv();
                 return Ok(item);
             }
-            let waker = LockedWaker::new_blocking();
+            let waker = cache.new_blocking();
             debug_assert!(waker.is_waked());
             let backoff = Backoff::new();
             let retry_limit = 3;
@@ -100,7 +101,7 @@ impl<T> Rx<T> {
                 _i += 1;
                 if let Some(item) = shared.try_recv() {
                     shared.on_recv();
-                    waker.cancel();
+                    cache.push(waker);
                     return Ok(item);
                 }
                 if _i < retry_limit {
@@ -143,7 +144,7 @@ impl<T> Rx<T> {
     /// Returns Err([RecvError]) when all Tx dropped.
     #[inline]
     pub fn recv<'a>(&'a self) -> Result<T, RecvError> {
-        Self::_recv_blocking(&self.shared, None).map_err(|err| match err {
+        Self::_recv_blocking(&self.shared, None, &self.waker_cache).map_err(|err| match err {
             RecvTimeoutError::Disconnected => RecvError,
             RecvTimeoutError::Timeout => unreachable!(),
         })
@@ -187,7 +188,7 @@ impl<T> Rx<T> {
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
-            Some(deadline) => Self::_recv_blocking(&self.shared, Some(deadline)),
+            Some(deadline) => Self::_recv_blocking(&self.shared, Some(deadline), &self.waker_cache),
             None => self.try_recv().map_err(|e| match e {
                 TryRecvError::Disconnected => RecvTimeoutError::Disconnected,
                 TryRecvError::Empty => RecvTimeoutError::Timeout,
