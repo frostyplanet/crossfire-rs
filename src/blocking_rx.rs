@@ -1,16 +1,52 @@
 use crate::channel::*;
 use crossbeam::channel::Receiver;
 pub use crossbeam::channel::{RecvError, RecvTimeoutError, TryRecvError};
+use std::cell::Cell;
 use std::fmt;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Duration;
 
 /// Receiver that works in blocking context
+///
+/// **NOTE: Rx is not Clone, nor Sync.**
+/// If you need concurrent access, use [MRx](crate::MRx) instead.
+///
+/// Rx has Send marker, can be moved to other thread.
+/// The following code is OK:
+///
+/// ``` rust
+/// use crossfire::*;
+/// let (tx, rx) = mpsc::bounded_blocking::<usize>(100);
+/// std::thread::spawn(move || {
+///     let _ = rx.recv();
+/// });
+/// drop(tx);
+/// ```
+///
+/// Because Rx does not have Sync marker, using `Arc<Rx>` will lost Send marker.
+///
+/// For your safety, the following code should not compile:
+///
+/// ``` compile_fail
+/// use crossfire::*;
+/// use std::sync::Arc;
+/// let (tx, rx) = mpsc::bounded_blocking::<usize>(100);
+/// let rx = Arc::new(rx);
+/// std::thread::spawn(move || {
+///     let _ = rx.recv();
+/// });
+/// drop(tx);
+/// ```
 pub struct Rx<T> {
     pub(crate) recv: Receiver<T>,
     pub(crate) shared: Arc<ChannelShared>,
+    // Remove the Sync marker to prevent being put in Arc
+    _phan: PhantomData<Cell<()>>,
 }
+
+unsafe impl<T: Send> Send for Rx<T> {}
 
 impl<T> fmt::Debug for Rx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -27,7 +63,7 @@ impl<T> Drop for Rx<T> {
 impl<T> Rx<T> {
     #[inline]
     pub(crate) fn new(recv: Receiver<T>, shared: Arc<ChannelShared>) -> Self {
-        Self { recv, shared }
+        Self { recv, shared, _phan: Default::default() }
     }
 
     /// Receive message, will block when channel is empty.
@@ -100,6 +136,8 @@ impl<T> Rx<T> {
 ///
 /// You can use `into()` to convert it to `Rx<T>`.
 pub struct MRx<T>(pub(crate) Rx<T>);
+
+unsafe impl<T: Send> Sync for MRx<T> {}
 
 impl<T> MRx<T> {
     #[inline]

@@ -1,5 +1,6 @@
 use super::common::*;
 use crate::*;
+use futures::{select, FutureExt};
 use log::*;
 use rstest::*;
 use std::sync::{
@@ -7,6 +8,87 @@ use std::sync::{
     Arc,
 };
 use tokio::time::*;
+
+#[tokio::test]
+async fn test_sync() {
+    let (tx, rx) = spsc::bounded_async::<usize>(100);
+    //  Example1: should fail to compile with Arc
+    //    let tx = Arc::new(tx);
+    tokio::spawn(async move {
+        let _ = tx.send(2).await;
+    });
+    drop(rx);
+
+    let (tx, rx) = mpsc::bounded_async::<usize>(100);
+    //  example2: should fail to compile with Arc
+    //    let rx = Arc::new(rx);
+    tokio::spawn(async move {
+        let _ = rx.recv().await;
+    });
+    drop(tx);
+
+    let (tx, rx) = mpsc::bounded_blocking::<usize>(100);
+    ////  example3: should fail to compile with Arc
+    //    let rx = Arc::new(rx);
+    std::thread::spawn(move || {
+        let _ = rx.recv();
+    });
+    drop(tx);
+
+    let (tx, rx) = spsc::bounded_blocking::<usize>(100);
+    ////  example4: should fail to compile after Arc
+    //   let tx = Arc::new(tx);
+    std::thread::spawn(move || {
+        let _ = tx.send(1);
+    });
+    drop(rx);
+
+    let (tx, rx) = mpmc::bounded_blocking::<usize>(100);
+    // MRx can put in Arc
+    let rx = Arc::new(rx);
+    std::thread::spawn(move || {
+        let _ = rx.try_recv();
+    });
+    // MTx can put in Arc
+    let tx = Arc::new(tx);
+    std::thread::spawn(move || {
+        let _ = tx.try_send(1);
+    });
+
+    let (tx, rx) = spsc::bounded_async::<usize>(100);
+    let th = tokio::spawn(async move {
+        let mut i = 0;
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            i += 1;
+            if let Err(_) = tx.send(i).await {
+                println!("rx dropped");
+                return;
+            }
+        }
+    });
+    let mut inv = tokio::time::interval(Duration::from_millis(500));
+    'LOOP: for _ in 0..10 {
+        select! {
+            _ = inv.tick().fuse() =>{
+                println!("tick");
+            },
+            r = rx.recv().fuse() => {
+                match r {
+                    Ok(item)=>{
+                        println!("recv {}", item);
+                    }
+                    Err(e)=>{
+                        println!("tx dropped {:?}", e);
+                        break 'LOOP;
+                    }
+                }
+            }
+        }
+    }
+    drop(rx);
+    let _ = th.await;
+}
 
 #[rstest]
 #[case(spsc::bounded_async::<usize>(100))]
@@ -162,7 +244,7 @@ async fn test_basic_unbounded_idle_select<T: BlockingTxTrait<i32>, R: AsyncRxTra
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
 
-    let mut c = rx.make_recv_future().fuse();
+    let mut c = rx.recv().fuse();
     for _ in 0..1000 {
         {
             let f = loop_fn().fuse();

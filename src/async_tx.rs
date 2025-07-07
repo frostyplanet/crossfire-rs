@@ -2,8 +2,10 @@ use crate::channel::*;
 use async_trait::async_trait;
 use crossbeam::channel::Sender;
 pub use crossbeam::channel::{SendError, TrySendError};
+use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -11,12 +13,48 @@ use std::task::{Context, Poll};
 
 /// Sender that works in async context
 ///
-/// **NOTE: this is not cloneable.**
+/// **NOTE: AsyncTx is not Clone, nor Sync.**
 /// If you need concurrent access, use [MAsyncTx](crate::MAsyncTx) instead.
+///
+///
+/// AsyncTx has Send marker, can be moved to other coroutine.
+/// The following code is OK :
+///
+/// ``` rust
+/// use crossfire::*;
+/// async fn foo() {
+///     let (tx, rx) = spsc::bounded_async::<usize>(100);
+///     tokio::spawn(async move {
+///          let _ = tx.send(2).await;
+///     });
+///     drop(rx);
+/// }
+/// ```
+///
+/// Because AsyncTx does not have Sync marker, using `Arc<AsyncTx>` will lost Send marker.
+///
+/// For your safety, the following code should not compile:
+///
+/// ``` compile_fail
+/// use crossfire::*;
+/// use std::sync::Arc;
+/// async fn foo() {
+///     let (tx, rx) = spsc::bounded_async::<usize>(100);
+///     let tx = Arc::new(tx);
+///     tokio::spawn(async move {
+///          let _ = tx.send(2).await;
+///     });
+///     drop(rx);
+/// }
+/// ```
 pub struct AsyncTx<T> {
     pub(crate) sender: Sender<T>,
     pub(crate) shared: Arc<ChannelShared>,
+    // Remove the Sync marker to prevent being put in Arc
+    _phan: PhantomData<Cell<()>>,
 }
+
+unsafe impl<T: Send> Send for AsyncTx<T> {}
 
 impl<T> fmt::Debug for AsyncTx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -40,14 +78,8 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     ///
     /// Returns Err([SendError]) when all Rx is dropped.
     #[inline(always)]
-    pub async fn send(&self, item: T) -> Result<(), SendError<T>> {
-        match self.try_send(item) {
-            Ok(()) => return Ok(()),
-            Err(TrySendError::Full(t)) => {
-                return SendFuture { tx: &self, item: Some(t), waker: None }.await;
-            }
-            Err(TrySendError::Disconnected(t)) => return Err(SendError(t)),
-        }
+    pub fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
+        return SendFuture { tx: &self, item: Some(item), waker: None };
     }
 
     /// Generate a fixed Sized future object that send a message
@@ -121,7 +153,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
 impl<T> AsyncTx<T> {
     #[inline]
     pub(crate) fn new(sender: Sender<T>, shared: Arc<ChannelShared>) -> Self {
-        Self { sender, shared }
+        Self { sender, shared, _phan: Default::default() }
     }
 
     /// Try to send message, non-blocking
@@ -180,6 +212,8 @@ pub struct SendFuture<'a, T: Unpin> {
     waker: Option<LockedWaker>,
 }
 
+unsafe impl<T: Unpin + Send> Send for SendFuture<'_, T> {}
+
 impl<T: Unpin> Drop for SendFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
@@ -219,14 +253,7 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
 
 /// For writing generic code with MAsyncTx & AsyncTx
 #[async_trait]
-pub trait AsyncTxTrait<T: Unpin + Send + 'static>: Send + Sync + 'static {
-    /// Send message. Will await when channel is full.
-    ///
-    /// Returns `Ok(())` on successful.
-    ///
-    /// Returns Err([SendError]) when all Rx is dropped.
-    async fn send(&self, item: T) -> Result<(), SendError<T>>;
-
+pub trait AsyncTxTrait<T: Unpin + Send + 'static>: Send + 'static {
     /// Just for debugging purpose, to monitor queue size
     #[cfg(test)]
     fn get_waker_size(&self) -> (usize, usize);
@@ -246,17 +273,16 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>: Send + Sync + 'static {
     /// Whether there's message in the channel (not accurate)
     fn is_empty(&self) -> bool;
 
-    /// Generate a fixed Sized future object that send a message
-    fn make_send_future<'a>(&'a self, item: T) -> SendFuture<'a, T>;
+    /// Send message. Will await when channel is full.
+    ///
+    /// Returns `Ok(())` on successful.
+    ///
+    /// Returns Err([SendError]) when all Rx is dropped.
+    fn send<'a>(&'a self, item: T) -> SendFuture<'a, T>;
 }
 
 #[async_trait]
 impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for AsyncTx<T> {
-    #[inline(always)]
-    async fn send(&self, item: T) -> Result<(), SendError<T>> {
-        AsyncTx::send(self, item).await
-    }
-
     #[inline(always)]
     #[cfg(test)]
     fn get_waker_size(&self) -> (usize, usize) {
@@ -279,7 +305,7 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for AsyncTx<T> {
     }
 
     #[inline(always)]
-    fn make_send_future<'a>(&'a self, item: T) -> SendFuture<'a, T> {
+    fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
         AsyncTx::make_send_future(self, item)
     }
 }
@@ -288,6 +314,8 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for AsyncTx<T> {
 ///
 /// You can use `into()` to convert it to `AsyncTx<T>`.
 pub struct MAsyncTx<T>(pub(crate) AsyncTx<T>);
+
+unsafe impl<T: Send> Sync for MAsyncTx<T> {}
 
 impl<T: Unpin> Clone for MAsyncTx<T> {
     #[inline]
@@ -324,11 +352,6 @@ impl<T> DerefMut for MAsyncTx<T> {
 #[async_trait]
 impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for MAsyncTx<T> {
     #[inline(always)]
-    async fn send(&self, item: T) -> Result<(), SendError<T>> {
-        self.0.send(item).await
-    }
-
-    #[inline(always)]
     fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
         self.0.try_send(item)
     }
@@ -345,7 +368,7 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for MAsyncTx<T> {
         self.0.is_empty()
     }
 
-    fn make_send_future<'a>(&'a self, item: T) -> SendFuture<'a, T> {
+    fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
         self.0.make_send_future(item)
     }
 

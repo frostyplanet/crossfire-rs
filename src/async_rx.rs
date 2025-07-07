@@ -3,8 +3,10 @@ use crate::stream::AsyncStream;
 use async_trait::async_trait;
 use crossbeam::channel::Receiver;
 pub use crossbeam::channel::{RecvError, TryRecvError};
+use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -12,12 +14,47 @@ use std::task::{Context, Poll};
 
 /// Receiver that works in async context
 ///
-/// **NOTE: this is not cloneable.**
+/// **NOTE: AsyncRx is not Clone, nor Sync.**
 /// If you need concurrent access, use [MAsyncRx](crate::MAsyncRx) instead.
+///
+/// AsyncRx has Send marker, can be moved to other coroutine.
+/// The following code is OK :
+///
+/// ``` rust
+/// use crossfire::*;
+/// async fn foo() {
+///     let (tx, rx) = mpsc::bounded_async::<usize>(100);
+///     tokio::spawn(async move {
+///         let _ = rx.recv().await;
+///     });
+///     drop(tx);
+/// }
+/// ```
+///
+/// Because AsyncRx does not have Sync marker, using `Arc<AsyncRx>` will lost Send marker.
+///
+/// For your safety, the following code should not compile:
+///
+/// ``` compile_fail
+/// use crossfire::*;
+/// use std::sync::Arc;
+/// async fn foo() {
+///     let (tx, rx) = mpsc::bounded_async::<usize>(100);
+///     let rx = Arc::new(rx);
+///     tokio::spawn(async move {
+///         let _ = rx.recv().await;
+///     });
+///     drop(tx);
+/// }
+/// ```
 pub struct AsyncRx<T> {
     pub(crate) recv: Receiver<T>,
     pub(crate) shared: Arc<ChannelShared>,
+    // Remove the Sync marker to prevent being put in Arc
+    _phan: PhantomData<Cell<()>>,
 }
+
+unsafe impl<T: Send> Send for AsyncRx<T> {}
 
 impl<T> fmt::Debug for AsyncRx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -34,7 +71,7 @@ impl<T> Drop for AsyncRx<T> {
 impl<T> AsyncRx<T> {
     #[inline]
     pub(crate) fn new(recv: Receiver<T>, shared: Arc<ChannelShared>) -> Self {
-        Self { recv, shared }
+        Self { recv, shared, _phan: Default::default() }
     }
 
     /// Receive message, will await when channel is empty.
@@ -46,16 +83,8 @@ impl<T> AsyncRx<T> {
     ///
     /// returns Err([RecvError]) when all Tx dropped.
     #[inline(always)]
-    pub async fn recv(&self) -> Result<T, RecvError> {
-        match self.try_recv() {
-            Err(TryRecvError::Disconnected) => {
-                return Err(RecvError {});
-            }
-            Ok(item) => return Ok(item),
-            _ => {
-                return ReceiveFuture { rx: &self, waker: None }.await;
-            }
-        }
+    pub fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
+        return ReceiveFuture { rx: &self, waker: None };
     }
 
     /// Try to receive message, non-blocking.
@@ -147,7 +176,7 @@ impl<T> AsyncRx<T> {
 
     pub fn into_stream(self) -> AsyncStream<T>
     where
-        T: Sync + Send + Unpin + 'static,
+        T: Send + Unpin + 'static,
     {
         AsyncStream::new(self)
     }
@@ -183,6 +212,8 @@ pub struct ReceiveFuture<'a, T> {
     rx: &'a AsyncRx<T>,
     waker: Option<LockedWaker>,
 }
+
+unsafe impl<T: Send> Send for ReceiveFuture<'_, T> {}
 
 impl<T> Drop for ReceiveFuture<'_, T> {
     fn drop(&mut self) {
@@ -220,13 +251,13 @@ impl<T> Future for ReceiveFuture<'_, T> {
 
 /// For writing generic code with MAsyncRx & AsyncRx
 #[async_trait]
-pub trait AsyncRxTrait<T: Unpin + Send + 'static>: Send + Sync + 'static {
+pub trait AsyncRxTrait<T: Unpin + Send + 'static>: Send + 'static {
     /// Receive message, will await when channel is empty.
     ///
     /// Returns `Ok(T)` when successful.
     ///
     /// returns Err([RecvError]) when all Tx dropped.
-    async fn recv(&self) -> Result<T, RecvError>;
+    fn recv<'a>(&'a self) -> ReceiveFuture<'a, T>;
 
     /// Try to receive message, non-blocking.
     ///
@@ -236,9 +267,6 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>: Send + Sync + 'static {
     ///
     /// Returns Err([TryRecvError::Disconnected]) when all Tx dropped.
     fn try_recv(&self) -> Result<T, TryRecvError>;
-
-    /// Generate a fixed Sized future object that receive a message
-    fn make_recv_future<'a>(&'a self) -> ReceiveFuture<'a, T>;
 
     /// Probe possible messages in the channel (not accurate)
     fn len(&self) -> usize;
@@ -254,18 +282,13 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>: Send + Sync + 'static {
 #[async_trait]
 impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for AsyncRx<T> {
     #[inline(always)]
-    async fn recv(&self) -> Result<T, RecvError> {
-        AsyncRx::recv(self).await
+    fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
+        AsyncRx::recv(self)
     }
 
     #[inline(always)]
     fn try_recv(&self) -> Result<T, TryRecvError> {
         AsyncRx::try_recv(self)
-    }
-
-    #[inline(always)]
-    fn make_recv_future<'a>(&'a self) -> ReceiveFuture<'a, T> {
-        AsyncRx::make_recv_future(self)
     }
 
     #[inline(always)]
@@ -289,6 +312,8 @@ impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for AsyncRx<T> {
 ///
 /// You can use `into()` to convert it to `AsyncRx<T>`.
 pub struct MAsyncRx<T>(pub(crate) AsyncRx<T>);
+
+unsafe impl<T: Send> Sync for MAsyncRx<T> {}
 
 impl<T> Clone for MAsyncRx<T> {
     #[inline]
@@ -314,7 +339,7 @@ impl<T> MAsyncRx<T> {
     #[inline]
     pub fn into_stream(self) -> AsyncStream<T>
     where
-        T: Sync + Send + Unpin + 'static,
+        T: Send + Unpin + 'static,
     {
         AsyncStream::new(self.0)
     }
@@ -339,18 +364,12 @@ impl<T> DerefMut for MAsyncRx<T> {
 #[async_trait]
 impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for MAsyncRx<T> {
     #[inline(always)]
-    async fn recv(&self) -> Result<T, RecvError> {
-        self.0.recv().await
-    }
-
-    #[inline(always)]
     fn try_recv(&self) -> Result<T, TryRecvError> {
         self.0.try_recv()
     }
 
-    /// Generate a fixed Sized future object that receive a message
     #[inline(always)]
-    fn make_recv_future<'a>(&'a self) -> ReceiveFuture<'a, T> {
+    fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
         self.0.make_recv_future()
     }
 

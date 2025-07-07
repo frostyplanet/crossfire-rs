@@ -1,16 +1,52 @@
 use crate::channel::*;
 use crossbeam::channel::Sender;
 pub use crossbeam::channel::{SendError, SendTimeoutError, TrySendError};
+use std::cell::Cell;
 use std::fmt;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Duration;
 
 /// Sender that works in blocking context
+///
+/// **NOTE: Tx is not Clone, nor Sync.**
+/// If you need concurrent access, use [MTx](crate::MTx) instead.
+///
+/// Tx has Send marker, can be moved to other thread.
+/// The following code is OK:
+///
+/// ``` rust
+/// use crossfire::*;
+/// let (tx, rx) = spsc::bounded_blocking::<usize>(100);
+/// std::thread::spawn(move || {
+///     let _ = tx.send(1);
+/// });
+/// drop(rx);
+/// ```
+///
+/// Because Tx does not have Sync marker, using `Arc<Tx>` will lost Send marker.
+///
+/// For your safety, the following code should not compile:
+///
+/// ``` compile_fail
+/// use crossfire::*;
+/// use std::sync::Arc;
+/// let (tx, rx) = spsc::bounded_blocking::<usize>(100);
+/// let tx = Arc::new(tx);
+/// std::thread::spawn(move || {
+///     let _ = tx.send(1);
+/// });
+/// drop(rx);
+/// ```
 pub struct Tx<T> {
     pub(crate) sender: Sender<T>,
     pub(crate) shared: Arc<ChannelShared>,
+    // Remove the Sync marker to prevent being put in Arc
+    _phan: PhantomData<Cell<()>>,
 }
+
+unsafe impl<T: Send> Send for Tx<T> {}
 
 impl<T> fmt::Debug for Tx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -27,7 +63,7 @@ impl<T> Drop for Tx<T> {
 impl<T> Tx<T> {
     #[inline]
     pub(crate) fn new(sender: Sender<T>, shared: Arc<ChannelShared>) -> Self {
-        Self { sender, shared }
+        Self { sender, shared, _phan: Default::default() }
     }
 
     /// Send message. Will block when channel is full.
@@ -101,6 +137,8 @@ impl<T> Tx<T> {
 ///
 /// You can use `into()` to convert it to `Tx<T>`.
 pub struct MTx<T>(pub(crate) Tx<T>);
+
+unsafe impl<T: Send> Sync for MTx<T> {}
 
 impl<T> MTx<T> {
     #[inline]

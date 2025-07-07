@@ -9,7 +9,7 @@ use std::task::*;
 /// Implemented futures::stream::Stream;
 pub struct AsyncStream<T>
 where
-    T: Unpin + Send + Sync + 'static,
+    T: Unpin + Send + 'static,
 {
     rx: AsyncRx<T>,
     waker: Option<LockedWaker>,
@@ -19,7 +19,7 @@ where
 
 impl<T> AsyncStream<T>
 where
-    T: Unpin + Send + Sync + 'static,
+    T: Unpin + Send + 'static,
 {
     pub fn new(rx: AsyncRx<T>) -> Self {
         Self { rx, waker: None, phan: Default::default(), ended: false }
@@ -28,7 +28,7 @@ where
 
 impl<T> stream::Stream for AsyncStream<T>
 where
-    T: Unpin + Send + Sync + 'static,
+    T: Unpin + Send + 'static,
 {
     type Item = T;
 
@@ -49,7 +49,7 @@ where
 
 impl<T> stream::FusedStream for AsyncStream<T>
 where
-    T: Unpin + Send + Sync + 'static,
+    T: Unpin + Send + 'static,
 {
     fn is_terminated(&self) -> bool {
         self.ended
@@ -58,7 +58,7 @@ where
 
 impl<T> Drop for AsyncStream<T>
 where
-    T: Unpin + Send + Sync + 'static,
+    T: Unpin + Send + 'static,
 {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {

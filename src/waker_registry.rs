@@ -83,9 +83,9 @@ impl RegistryTrait for RegistrySingle {
             Err(_weak) => {
                 if let Some(old_waker) = self.queue.pop() {
                     _weak.check_eq(old_waker);
-                    self.queue.push(_weak).expect("Do not mis-use mpsc as mpmc");
+                    self.queue.push(_weak).expect("Do not misuse mpsc as mpmc");
                 } else {
-                    self.queue.push(_weak).expect("Do not mis-use mpsc as mpmc");
+                    self.queue.push(_weak).expect("Do not misuse mpsc as mpmc");
                 }
             }
         }
