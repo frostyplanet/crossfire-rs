@@ -1,11 +1,12 @@
 use crate::{channel::*, AsyncTx, MAsyncTx};
+use crossbeam_utils::Backoff;
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Single producer (sender) that works in blocking context.
 ///
@@ -89,34 +90,68 @@ impl<T: Send + 'static> Tx<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn _send_blocking(shared: &ChannelShared<T>, item: T) -> Result<(), SendError<T>> {
+    pub(crate) fn _send_blocking(
+        shared: &ChannelShared<T>, item: T, deadline: Option<Instant>,
+    ) -> Result<(), SendTimeoutError<T>> {
         if shared.is_disconnected() {
-            return Err(SendError(item));
+            return Err(SendTimeoutError::Disconnected(item));
         }
-        if shared.bound_size == 0 {
-            match Self::_try_send(shared, item) {
-                Ok(_) => return Ok(()),
-                Err(t) => return Err(SendError(t)),
-            }
-        } else {
-            let waker = LockedWaker::new_blocking();
-            let mut init = true;
-            let _item = MaybeUninit::new(item);
-            loop {
-                if let Err(()) = shared.try_send(&_item) {
-                    if waker.is_waked() || init {
-                        init = false;
-                        shared.reg_send_blocking(&waker);
-                    } else {
-                        if shared.is_disconnected() {
-                            return Err(SendError(unsafe { _item.assume_init_read() }));
-                        }
-                        std::thread::park();
-                    }
-                } else {
+        if let Some(bound_size) = shared.bound_size {
+            if bound_size == 0 {
+                todo!();
+            } else {
+                let mut _i = 0;
+                let _item = MaybeUninit::new(item);
+                if shared.try_send(&_item).is_ok() {
                     shared.on_send();
                     return Ok(());
                 }
+                let waker = LockedWaker::new_blocking();
+                debug_assert!(waker.is_waked());
+                let backoff = Backoff::new();
+                let retry_limit = 3;
+                backoff.snooze();
+                loop {
+                    _i += 1;
+                    if shared.try_send(&_item).is_ok() {
+                        shared.on_send();
+                        return Ok(());
+                    }
+                    if _i < retry_limit {
+                        backoff.snooze();
+                        continue;
+                    }
+                    if waker.is_waked() {
+                        shared.reg_send_blocking(&waker);
+                        continue;
+                    } else {
+                        if shared.is_disconnected() {
+                            waker.cancel();
+                            return Err(SendTimeoutError::Disconnected(unsafe {
+                                _item.assume_init_read()
+                            }));
+                        }
+                        _i = 0;
+                        backoff.reset();
+                        if !wait_timeout(deadline) {
+                            if waker.abandon() {
+                                // We are waked, but give up sending, should notify another sender for safety
+                                shared.on_recv();
+                            } else {
+                                shared.clear_send_wakers(waker.get_seq());
+                            }
+                            return Err(SendTimeoutError::Timeout(unsafe {
+                                _item.assume_init_read()
+                            }));
+                        }
+                    }
+                }
+            }
+        } else {
+            // unbounded
+            match Self::_try_send(shared, item) {
+                Ok(_) => return Ok(()),
+                Err(_) => unreachable!(),
             }
         }
     }
@@ -129,7 +164,10 @@ impl<T: Send + 'static> Tx<T> {
     ///
     #[inline]
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
-        Self::_send_blocking(&self.shared, item)
+        Self::_send_blocking(&self.shared, item, None).map_err(|err| match err {
+            SendTimeoutError::Disconnected(msg) => SendError(msg),
+            SendTimeoutError::Timeout(_) => unreachable!(),
+        })
     }
 
     /// Try to send message, non-blocking
@@ -141,21 +179,18 @@ impl<T: Send + 'static> Tx<T> {
     /// Returns Err([TrySendError::Disconnected]) when all Rx dropped.
     #[inline]
     pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        if let Err(t) = Self::_try_send(&self.shared, item) {
-            if self.shared.is_disconnected() {
-                return Err(TrySendError::Disconnected(t));
-            }
+        let shared = &self.shared;
+        if shared.is_disconnected() {
+            return Err(TrySendError::Disconnected(item));
+        }
+        if shared.bound_size == Some(0) {
+            todo!();
+        }
+        if let Err(t) = Self::_try_send(shared, item) {
             return Err(TrySendError::Full(t));
         } else {
             Ok(())
         }
-    }
-}
-
-impl<T> Tx<T> {
-    #[inline]
-    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
     }
 
     /// Waits for a message to be sent into the channel, but only for a limited time.
@@ -170,7 +205,20 @@ impl<T> Tx<T> {
     /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped.
     #[inline]
     pub fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
-        todo!();
+        match Instant::now().checked_add(timeout) {
+            Some(deadline) => Self::_send_blocking(&self.shared, item, Some(deadline)),
+            None => self.try_send(item).map_err(|e| match e {
+                TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),
+                TrySendError::Full(t) => SendTimeoutError::Timeout(t),
+            }),
+        }
+    }
+}
+
+impl<T> Tx<T> {
+    #[inline]
+    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+        Self { shared, _phan: Default::default() }
     }
 }
 

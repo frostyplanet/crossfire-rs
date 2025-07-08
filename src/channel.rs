@@ -8,6 +8,7 @@ use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::Context;
+use std::time::Instant;
 
 pub(crate) enum Channel<T> {
     List(SegQueue<T>),
@@ -26,10 +27,10 @@ impl<T> Channel<T> {
     }
 
     #[inline(always)]
-    fn get_bound(&self) -> usize {
+    fn get_bound(&self) -> Option<usize> {
         match self {
-            Self::List(_) => 0,
-            Self::Array(s) => s.capacity(),
+            Self::List(_) => None,
+            Self::Array(s) => Some(s.capacity()),
         }
     }
 
@@ -52,8 +53,8 @@ impl<T> Channel<T> {
     #[inline(always)]
     fn is_full(&self) -> bool {
         match self {
-            Self::List(_) => false,
             Self::Array(s) => s.is_full(),
+            Self::List(_) => false,
         }
     }
 }
@@ -65,7 +66,7 @@ pub struct ChannelShared<T> {
     tx_count: AtomicU64,
     rx_count: AtomicU64,
     inner: Channel<T>,
-    pub(crate) bound_size: usize,
+    pub(crate) bound_size: Option<usize>,
 }
 
 impl<T: Send + 'static> ChannelShared<T> {
@@ -237,6 +238,24 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn clear_recv_wakers(&self, seq: u64) {
         self.recvs.clear_wakers(seq);
+    }
+}
+
+/// If timed out, returns false
+#[inline]
+pub fn wait_timeout(deadline: Option<Instant>) -> bool {
+    if let Some(end) = deadline {
+        let now = Instant::now();
+        if now < end {
+            let dur = end - now;
+            std::thread::park_timeout(dur);
+            true
+        } else {
+            false
+        }
+    } else {
+        std::thread::park();
+        true
     }
 }
 

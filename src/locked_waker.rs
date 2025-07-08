@@ -24,7 +24,7 @@ impl LockedWaker {
     pub(crate) fn new_blocking() -> Self {
         Self(Arc::new(LockedWakerInner {
             seq: AtomicU64::new(0),
-            waked: AtomicBool::new(false),
+            waked: AtomicBool::new(true),
             waker: WakerType::Blocking(thread::current()),
         }))
     }
