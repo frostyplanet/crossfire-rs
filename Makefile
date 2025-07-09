@@ -32,6 +32,10 @@ init: git-hooks
 fmt: init
 	cargo fmt
 
+.PHONY: doc
+doc:
+	RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features
+
 .PHONY: test
 test: init
 	@echo "Run test"

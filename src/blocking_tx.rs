@@ -102,11 +102,13 @@ impl<T> Tx<T> {
     }
 
     /// Waits for a message to be sent into the channel, but only for a limited time.
-    /// Will block when channel is empty.
+    /// Will block when channel is full.
+    ///
+    /// The behavior is atomic, either message sent successfully or returned on error.
     ///
     /// Returns `Ok(())` when successful.
     ///
-    /// Returns Err([SendTimeoutError::Timeout]) when the message could not be sent because the channel is full and the operation timed out.
+    /// Returns Err([SendTimeoutError::Timeout]) when the the operation timed out.
     ///
     /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped.
     #[inline]

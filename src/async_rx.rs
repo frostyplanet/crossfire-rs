@@ -2,6 +2,8 @@ use crate::channel::*;
 use crate::stream::AsyncStream;
 use async_trait::async_trait;
 use crossbeam::channel::Receiver;
+#[cfg(feature = "tokio")]
+pub use crossbeam::channel::RecvTimeoutError;
 pub use crossbeam::channel::{RecvError, TryRecvError};
 use std::cell::Cell;
 use std::fmt;
@@ -82,6 +84,30 @@ impl<T> AsyncRx<T> {
     #[inline(always)]
     pub fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
         return ReceiveFuture { rx: &self, waker: None };
+    }
+
+    /// Waits for a message to be received from the channel, but only for a limited time.
+    /// Will await when channel is empty.
+    ///
+    /// The behavior is atomic, either successfully polls a message,
+    /// or operation cancelled due to timeout.
+    ///
+    /// Returns Ok(T) when successful.
+    ///
+    /// Returns Err([RecvTimeoutError::Timeout]) when a message could not be received because the channel is empty and the operation timed out.
+    ///
+    /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped.
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+    #[inline]
+    pub fn recv_timeout<'a>(
+        &'a self, duration: std::time::Duration,
+    ) -> ReceiveTimeoutFuture<'a, T> {
+        return ReceiveTimeoutFuture {
+            rx: &self,
+            waker: None,
+            sleep: Box::pin(tokio::time::sleep(duration)),
+        };
     }
 
     /// Try to receive message, non-blocking.
@@ -211,7 +237,7 @@ impl<T> AsyncRx<T> {
     }
 }
 
-/// A fixed-sized future object constructed by [AsyncRx::make_recv_future()]
+/// A fixed-sized future object constructed by [AsyncRx::recv()]
 pub struct ReceiveFuture<'a, T> {
     rx: &'a AsyncRx<T>,
     waker: Option<LockedWaker>,
@@ -253,6 +279,57 @@ impl<T> Future for ReceiveFuture<'_, T> {
     }
 }
 
+/// A fixed-sized future object constructed by [AsyncRx::recv_timeout()]
+#[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+pub struct ReceiveTimeoutFuture<'a, T> {
+    rx: &'a AsyncRx<T>,
+    waker: Option<LockedWaker>,
+    sleep: Pin<Box<tokio::time::Sleep>>,
+}
+
+#[cfg(feature = "tokio")]
+unsafe impl<T: Unpin + Send> Send for ReceiveTimeoutFuture<'_, T> {}
+
+#[cfg(feature = "tokio")]
+impl<T> Drop for ReceiveTimeoutFuture<'_, T> {
+    fn drop(&mut self) {
+        if let Some(waker) = self.waker.take() {
+            // Cancelling the future, poll is not ready
+            if waker.abandon() {
+                // We are waked, but giving up to recv, should notify another receiver for safety
+                self.rx.shared.on_send();
+            } else {
+                self.rx.shared.clear_recv_wakers(waker.get_seq());
+            }
+        }
+    }
+}
+
+#[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+impl<T> Future for ReceiveTimeoutFuture<'_, T> {
+    type Output = Result<T, RecvTimeoutError>;
+
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
+        let mut _self = self.get_mut();
+        match _self.rx.poll_item(ctx, &mut _self.waker) {
+            Err(TryRecvError::Empty) => {
+                if let Poll::Ready(()) = _self.sleep.as_mut().poll(ctx) {
+                    return Poll::Ready(Err(RecvTimeoutError::Timeout));
+                }
+                return Poll::Pending;
+            }
+            Err(TryRecvError::Disconnected) => {
+                return Poll::Ready(Err(RecvTimeoutError::Disconnected));
+            }
+            Ok(item) => {
+                return Poll::Ready(Ok(item));
+            }
+        }
+    }
+}
+
 /// For writing generic code with MAsyncRx & AsyncRx
 #[async_trait]
 pub trait AsyncRxTrait<T: Unpin + Send + 'static>: Send + 'static {
@@ -262,6 +339,21 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>: Send + 'static {
     ///
     /// returns Err([RecvError]) when all Tx dropped.
     fn recv<'a>(&'a self) -> ReceiveFuture<'a, T>;
+
+    /// Waits for a message to be received from the channel, but only for a limited time.
+    /// Will await when channel is empty.
+    ///
+    /// The behavior is atomic, either successfully polls a message,
+    /// or operation cancelled due to timeout.
+    ///
+    /// Returns Ok(T) when successful.
+    ///
+    /// Returns Err([RecvTimeoutError::Timeout]) when a message could not be received because the channel is empty and the operation timed out.
+    ///
+    /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped.
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+    fn recv_timeout<'a>(&'a self, timeout: std::time::Duration) -> ReceiveTimeoutFuture<'a, T>;
 
     /// Try to receive message, non-blocking.
     ///
@@ -288,6 +380,13 @@ impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for AsyncRx<T> {
     #[inline(always)]
     fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
         AsyncRx::recv(self)
+    }
+
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+    #[inline(always)]
+    fn recv_timeout<'a>(&'a self, duration: std::time::Duration) -> ReceiveTimeoutFuture<'a, T> {
+        AsyncRx::recv_timeout(self, duration)
     }
 
     #[inline(always)]
@@ -376,7 +475,14 @@ impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for MAsyncRx<T> {
 
     #[inline(always)]
     fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
-        self.0.make_recv_future()
+        self.0.recv()
+    }
+
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+    #[inline(always)]
+    fn recv_timeout<'a>(&'a self, duration: std::time::Duration) -> ReceiveTimeoutFuture<'a, T> {
+        self.0.recv_timeout(duration)
     }
 
     /// Probe possible messages in the channel (not accurate)

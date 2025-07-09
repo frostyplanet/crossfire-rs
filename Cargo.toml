@@ -22,6 +22,7 @@ futures = "0.3"
 enum_dispatch = "0.3"
 async-trait = "0"
 parking_lot = "0"
+tokio = { version = "1", features = ["time"], optional=true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
@@ -34,6 +35,18 @@ criterion = { version="0.6", features = ["async_tokio", "csv_output"] }
 
 flume = {version="0.11", features= ["async"] }
 kanal = {version="0.1"}
+
+[features]
+default = []
+tokio = ["dep:tokio"]
+
+[package.metadata.docs.rs]
+all-features = true
+# enable features in the documentation
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.playground]
+features = ["tokio"]
 
 [[bench]]
 name = "crossfire"

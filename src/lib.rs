@@ -1,3 +1,6 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, allow(unused_attributes))]
+
 //! # Crossfire
 //!
 //! High-performance spsc/mpsc/mpmc channels.
@@ -87,14 +90,22 @@
 //!
 //! ### Error types
 //!
-//! Error types are re-exported from crossbeam-channel:  [TrySendError], [SendError], [TryRecvError], [RecvError],
+//! Error types are re-exported from crossbeam-channel:
+//!
+//! [TrySendError], [SendError], [SendTimeoutError], [TryRecvError], [RecvError], [RecvTimeoutError]
+//!
+//! ### Feature flags
+//!
+//! - `tokio`: Enable send_timeout, recv_timeout API for async context, implement base on tokio
 //!
 //! ### Async compatibility
 //!
-//! Mainly tested on tokio-1.x.
+//! Mainly tested on tokio-1.x. But default we do not depend on any async runtime.
 //!
-//! In async context, future-select! can be used.  Cancelling is supported. You can combine
-//! send() or recv() future with tokio::time::timeout.
+//! In async context, tokio-select! or future-select! can be used.  Cancelling is supported. You can combine
+//! recv() future with tokio::time::timeout. When feature "tokio" enable, we also provide
+//! [send_timeout](crate::AsyncTx::send_timeout()) and
+//! [recv_timeout](crate::AsyncRx::recv_timeout())
 //!
 //! While using MAsyncTx or MAsyncRx, there's memory overhead to pass along small size wakers
 //! for pending async producer or consumer. Because we aim to be lockless,

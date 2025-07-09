@@ -1,5 +1,7 @@
 use crate::channel::*;
 use async_trait::async_trait;
+#[cfg(feature = "tokio")]
+pub use crossbeam::channel::SendTimeoutError;
 use crossbeam::channel::Sender;
 pub use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
@@ -82,6 +84,30 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     #[inline(always)]
     pub fn make_send_future<'a>(&'a self, item: T) -> SendFuture<'a, T> {
         return SendFuture { tx: &self, item: Some(item), waker: None };
+    }
+
+    /// Waits for a message to be sent into the channel, but only for a limited time.
+    /// Will await when channel is full.
+    ///
+    /// The behavior is atomic, either message sent successfully or returned on error.
+    ///
+    /// Returns `Ok(())` when successful.
+    ///
+    /// Returns Err([SendTimeoutError::Timeout]) when the operation timed out.
+    ///
+    /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped.
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+    #[inline]
+    pub fn send_timeout<'a>(
+        &'a self, item: T, duration: std::time::Duration,
+    ) -> SendTimeoutFuture<'a, T> {
+        return SendTimeoutFuture {
+            tx: &self,
+            item: Some(item),
+            waker: None,
+            sleep: Box::pin(tokio::time::sleep(duration)),
+        };
     }
 
     /// This is only useful when you're writing your own future.
@@ -247,6 +273,62 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
     }
 }
 
+/// A fixed-sized future object constructed by [AsyncTx::send_timeout()]
+#[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+pub struct SendTimeoutFuture<'a, T: Unpin> {
+    tx: &'a AsyncTx<T>,
+    item: Option<T>,
+    waker: Option<LockedWaker>,
+    sleep: Pin<Box<tokio::time::Sleep>>,
+}
+
+#[cfg(feature = "tokio")]
+unsafe impl<T: Unpin + Send> Send for SendTimeoutFuture<'_, T> {}
+
+#[cfg(feature = "tokio")]
+impl<T: Unpin> Drop for SendTimeoutFuture<'_, T> {
+    fn drop(&mut self) {
+        if let Some(waker) = self.waker.take() {
+            // Cancelling the future, poll is not ready
+            if waker.abandon() {
+                // We are waked, but give up sending, should notify another sender for safety
+                self.tx.shared.on_recv();
+            } else {
+                self.tx.shared.clear_send_wakers(waker.get_seq());
+            }
+        }
+    }
+}
+
+#[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+impl<T: Unpin + Send + 'static> Future for SendTimeoutFuture<'_, T> {
+    type Output = Result<(), SendTimeoutError<T>>;
+
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
+        let mut _self = self.get_mut();
+        let item = _self.item.take().unwrap();
+        let tx = _self.tx;
+        let r = tx.poll_send(ctx, item, &mut _self.waker);
+        match r {
+            Ok(()) => {
+                return Poll::Ready(Ok(()));
+            }
+            Err(TrySendError::Disconnected(t)) => {
+                return Poll::Ready(Err(SendTimeoutError::Disconnected(t)));
+            }
+            Err(TrySendError::Full(t)) => {
+                if let Poll::Ready(()) = _self.sleep.as_mut().poll(ctx) {
+                    return Poll::Ready(Err(SendTimeoutError::Timeout(t)));
+                }
+                _self.item.replace(t);
+                return Poll::Pending;
+            }
+        }
+    }
+}
+
 /// For writing generic code with MAsyncTx & AsyncTx
 #[async_trait]
 pub trait AsyncTxTrait<T: Unpin + Send + 'static>: Send + 'static {
@@ -275,6 +357,22 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>: Send + 'static {
     ///
     /// Returns Err([SendError]) when all Rx is dropped.
     fn send<'a>(&'a self, item: T) -> SendFuture<'a, T>;
+
+    /// Waits for a message to be sent into the channel, but only for a limited time.
+    /// Will await when channel is full.
+    ///
+    /// The behavior is atomic, either message sent successfully or returned on error.
+    ///
+    /// Returns `Ok(())` when successful.
+    ///
+    /// Returns Err([SendTimeoutError::Timeout]) when the operation timed out.
+    ///
+    /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped.
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+    fn send_timeout<'a>(
+        &'a self, item: T, duration: std::time::Duration,
+    ) -> SendTimeoutFuture<'a, T>;
 }
 
 #[async_trait]
@@ -302,7 +400,16 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for AsyncTx<T> {
 
     #[inline(always)]
     fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
-        AsyncTx::make_send_future(self, item)
+        AsyncTx::send(self, item)
+    }
+
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+    #[inline(always)]
+    fn send_timeout<'a>(
+        &'a self, item: T, duration: std::time::Duration,
+    ) -> SendTimeoutFuture<'a, T> {
+        AsyncTx::send_timeout(self, item, duration)
     }
 }
 
@@ -366,8 +473,18 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for MAsyncTx<T> {
         self.0.is_empty()
     }
 
+    #[inline(always)]
     fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
-        self.0.make_send_future(item)
+        self.0.send(item)
+    }
+
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+    #[inline(always)]
+    fn send_timeout<'a>(
+        &'a self, item: T, duration: std::time::Duration,
+    ) -> SendTimeoutFuture<'a, T> {
+        self.0.send_timeout(item, duration)
     }
 
     /// Just for debugging purpose, to monitor queue size

@@ -103,14 +103,17 @@ impl<T> Rx<T> {
     /// Waits for a message to be received from the channel, but only for a limited time.
     /// Will block when channel is empty.
     ///
+    /// The behavior is atomic, either successfully polls a message,
+    /// or operation cancelled due to timeout.
+    ///
     /// Returns Ok(T) when successful.
     ///
     /// Returns Err([RecvTimeoutError::Timeout]) when a message could not be received because the channel is empty and the operation timed out.
     ///
     /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped.
     #[inline]
-    pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
-        match self.recv.recv_timeout(timeout) {
+    pub fn recv_timeout(&self, duration: Duration) -> Result<T, RecvTimeoutError> {
+        match self.recv.recv_timeout(duration) {
             Err(e) => return Err(e),
             Ok(i) => {
                 self.shared.on_recv();
