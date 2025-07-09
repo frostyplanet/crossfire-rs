@@ -2,9 +2,11 @@ use super::common::*;
 use crate::*;
 use futures::{select, FutureExt};
 use log::*;
+use parking_lot::Mutex;
 use rstest::*;
+use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicI32, AtomicUsize, Ordering},
     Arc,
 };
 use tokio::time::*;
@@ -332,7 +334,7 @@ async fn test_basic_unbounded_recv_after_sender_close<
 #[case(mpsc::bounded_async::<i32>(100))]
 #[case(mpmc::bounded_async::<i32>(100))]
 #[tokio::test]
-async fn test_timeout_recv_async<T: AsyncTxTrait<i32>, R: AsyncRxTrait<i32>>(
+async fn test_basic_timeout_recv_async_waker<T: AsyncTxTrait<i32>, R: AsyncRxTrait<i32>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     let _ = setup_log; // Disable unused var warning
@@ -351,6 +353,192 @@ async fn test_timeout_recv_async<T: AsyncTxTrait<i32>, R: AsyncRxTrait<i32>>(
     println!("wakers: {}, {}", tx_wakers, rx_wakers);
     assert!(tx_wakers <= 1);
     assert!(rx_wakers <= 1);
+}
+
+#[cfg(feature = "tokio")]
+#[rstest]
+#[case(spsc::unbounded_async::<i32>())]
+#[case(mpsc::unbounded_async::<i32>())]
+#[case(mpmc::unbounded_async::<i32>())]
+#[tokio::test]
+async fn test_basic_unbounded_recv_timeout_async<T: BlockingTxTrait<i32>, R: AsyncRxTrait<i32>>(
+    setup_log: (), #[case] channel: (T, R),
+) {
+    let _ = setup_log; // Disable unused var warning
+    let (tx, rx) = channel;
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        let _ = tx.send(1);
+    });
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(1)).await.unwrap_err(),
+        RecvTimeoutError::Timeout
+    );
+    let (tx_wakers, rx_wakers) = rx.get_waker_size();
+    println!("wakers: {}, {}", tx_wakers, rx_wakers);
+    assert_eq!(tx_wakers, 0);
+    assert_eq!(rx_wakers, 0);
+    assert_eq!(rx.recv_timeout(Duration::from_millis(2)).await.unwrap(), 1);
+}
+
+#[cfg(feature = "tokio")]
+#[rstest]
+#[case(spsc::bounded_async::<i32>(10))]
+#[case(mpsc::bounded_async::<i32>(10))]
+#[case(mpmc::bounded_async::<i32>(10))]
+#[tokio::test]
+async fn test_basic_send_timeout_async<T: AsyncTxTrait<i32>, R: AsyncRxTrait<i32>>(
+    setup_log: (), #[case] channel: (T, R),
+) {
+    let _ = setup_log; // Disable unused var warning
+    let (tx, rx) = channel;
+    for i in 0..10 {
+        assert!(tx.try_send(i).is_ok());
+    }
+    assert_eq!(
+        tx.send_timeout(11, Duration::from_millis(1)).await.unwrap_err(),
+        SendTimeoutError::Timeout(11)
+    );
+    let th = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            if let Err(_) = rx.recv().await {
+                println!("tx dropped");
+                break;
+            }
+        }
+    });
+    let mut try_times = 0;
+    loop {
+        try_times += 1;
+        match tx.send_timeout(11, Duration::from_millis(1)).await {
+            Ok(_) => {
+                println!("send ok after {} tries", try_times);
+                break;
+            }
+            Err(SendTimeoutError::Timeout(msg)) => {
+                println!("timeout");
+                assert_eq!(msg, 11);
+            }
+            Err(SendTimeoutError::Disconnected(_)) => {
+                unreachable!();
+            }
+        }
+    }
+    let (tx_wakers, rx_wakers) = tx.get_waker_size();
+    println!("wakers: {}, {}", tx_wakers, rx_wakers);
+    assert_eq!(tx_wakers, 0);
+    assert_eq!(rx_wakers, 0);
+    drop(tx);
+    let _ = th.await;
+}
+
+#[cfg(feature = "tokio")]
+#[rstest]
+#[case(mpmc::bounded_async::<i32>(1))]
+#[tokio::test]
+async fn test_pressure_bounded_timeout_async(
+    setup_log: (), #[case] channel: (MAsyncTx<i32>, MAsyncRx<i32>),
+) {
+    let _ = setup_log; // Disable unused var warning
+    let (tx, rx) = channel;
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(1)).await.unwrap_err(),
+        RecvTimeoutError::Timeout
+    );
+    let (tx_wakers, rx_wakers) = rx.get_waker_size();
+    println!("wakers: {}, {}", tx_wakers, rx_wakers);
+    assert_eq!(tx_wakers, 0);
+    assert_eq!(rx_wakers, 0);
+    const ROUND: i32 = 50000;
+
+    let send_counter = Arc::new(AtomicI32::new(0));
+    let recv_counter = Arc::new(AtomicI32::new(0));
+    let send_timeout_counter = Arc::new(AtomicUsize::new(0));
+    let recv_timeout_counter = Arc::new(AtomicUsize::new(0));
+    let recv_map = Arc::new(Mutex::new(HashMap::new()));
+
+    let mut th_s = Vec::new();
+    for thread_id in 0..3 {
+        let _send_counter = send_counter.clone();
+        let _send_timeout_counter = send_timeout_counter.clone();
+        let _recv_map = recv_map.clone();
+        let _tx = tx.clone();
+        th_s.push(tokio::spawn(async move {
+            // randomize start up
+            tokio::time::sleep(Duration::from_millis(thread_id & 3)).await;
+            loop {
+                let i = _send_counter.fetch_add(1, Ordering::SeqCst);
+                if i >= ROUND {
+                    return;
+                }
+                {
+                    let mut guard = _recv_map.lock();
+                    guard.insert(i, ());
+                }
+                if i & 2 == 0 {
+                    tokio::time::sleep(Duration::from_millis(3)).await;
+                } else {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                loop {
+                    match _tx.send_timeout(i, Duration::from_millis(1)).await {
+                        Ok(_) => break,
+                        Err(SendTimeoutError::Timeout(_i)) => {
+                            _send_timeout_counter.fetch_add(1, Ordering::SeqCst);
+                            assert_eq!(_i, i);
+                        }
+                        Err(SendTimeoutError::Disconnected(_)) => {
+                            unreachable!();
+                        }
+                    }
+                }
+            }
+        }));
+    }
+    for _thread_id in 0..2 {
+        let _rx = rx.clone();
+        let _recv_map = recv_map.clone();
+        let _recv_counter = recv_counter.clone();
+        let _recv_timeout_counter = recv_timeout_counter.clone();
+        th_s.push(tokio::spawn(async move {
+            let mut step: usize = 0;
+            loop {
+                step += 1;
+                let timeout = if step & 2 == 0 { 1 } else { 2 };
+                if step & 2 > 0 {
+                    sleep(Duration::from_millis(1)).await;
+                }
+                match _rx.recv_timeout(Duration::from_millis(timeout)).await {
+                    Ok(item) => {
+                        _recv_counter.fetch_add(1, Ordering::SeqCst);
+                        {
+                            let mut guard = _recv_map.lock();
+                            guard.remove(&item);
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        _recv_timeout_counter.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        return;
+                    }
+                }
+            }
+        }));
+    }
+    drop(tx);
+    drop(rx);
+    for th in th_s {
+        let _ = th.await;
+    }
+    {
+        let guard = recv_map.lock();
+        assert!(guard.is_empty());
+    }
+    assert_eq!(ROUND, recv_counter.load(Ordering::Acquire));
+    println!("send timeout count: {}", send_timeout_counter.load(Ordering::Acquire));
+    println!("recv timeout count: {}", recv_timeout_counter.load(Ordering::Acquire));
 }
 
 #[rstest]

@@ -1,18 +1,18 @@
 RUNTESTCASE = _run_test_case() {                                                  \
     case="$(filter-out $@,$(MAKECMDGOALS))";                                      \
     if [ -n "$${case}" ]; then                                                    \
-        RUST_BACKTRACE=full cargo test $${case} -- --nocapture --test-threads=1;  \
+        RUST_BACKTRACE=full cargo test $${case} -F=tokio -- --nocapture --test-threads=1;  \
     else                                                                          \
-        RUST_BACKTRACE=full cargo test -- --nocapture --test-threads=1;           \
+        RUST_BACKTRACE=full cargo test -F=tokio -- --nocapture --test-threads=1;           \
     fi  \
 }
 
 RUNRELEASECASE = _run_test_release_case() {                                                  \
     case="$(filter-out $@,$(MAKECMDGOALS))";                                      \
     if [ -n "$${case}" ]; then                                                    \
-        RUST_BACKTRACE=full cargo test $${case} --release -- --nocapture --test-threads=1;  \
+        RUST_BACKTRACE=full cargo test $${case} -F=tokio --release -- --nocapture --test-threads=1;  \
     else                                                                          \
-        RUST_BACKTRACE=full cargo test --release -- --nocapture --test-threads=1;                                            \
+        RUST_BACKTRACE=full cargo test --release -F=tokio -- --nocapture --test-threads=1;                                            \
     fi  \
 }
 
