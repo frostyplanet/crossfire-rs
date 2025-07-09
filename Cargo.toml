@@ -72,3 +72,7 @@ harness = false
 [[bench]]
 name = "tokio"
 harness = false
+
+[[bench]]
+name = "inner"
+harness = false
