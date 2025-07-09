@@ -88,7 +88,7 @@ impl<T> Rx<T> {
     ///
     /// Returns Err([TryRecvError::Empty]) when channel is empty.
     ///
-    /// returns Err([TryRecvError::Disconnected]) when all Tx dropped.
+    /// returns Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         match self.recv.try_recv() {
@@ -110,7 +110,7 @@ impl<T> Rx<T> {
     ///
     /// Returns Err([RecvTimeoutError::Timeout]) when a message could not be received because the channel is empty and the operation timed out.
     ///
-    /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped.
+    /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline]
     pub fn recv_timeout(&self, duration: Duration) -> Result<T, RecvTimeoutError> {
         match self.recv.recv_timeout(duration) {
@@ -197,7 +197,7 @@ pub trait BlockingRxTrait<T: Send + 'static>: Send + 'static {
     ///
     /// Returns Err([TryRecvError::Empty]) when channel is empty.
     ///
-    /// Returns Err([TryRecvError::Disconnected]) when all Tx dropped.
+    /// Returns Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     fn try_recv(&self) -> Result<T, TryRecvError>;
 
     /// Waits for a message to be received from the channel, but only for a limited time.
@@ -207,7 +207,7 @@ pub trait BlockingRxTrait<T: Send + 'static>: Send + 'static {
     ///
     /// Returns Err([RecvTimeoutError::Timeout]) when a message could not be received because the channel is empty and the operation timed out.
     ///
-    /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped.
+    /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped and channel is empty.
     fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError>;
 
     /// Probe possible messages in the channel (not accurate)

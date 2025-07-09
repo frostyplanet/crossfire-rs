@@ -96,7 +96,7 @@ impl<T> AsyncRx<T> {
     ///
     /// Returns Err([RecvTimeoutError::Timeout]) when a message could not be received because the channel is empty and the operation timed out.
     ///
-    /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped.
+    /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped and channel is empty.
     #[cfg(feature = "tokio")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
     #[inline]
@@ -116,7 +116,7 @@ impl<T> AsyncRx<T> {
     ///
     /// Returns Err([TryRecvError::Empty]) when channel is empty.
     ///
-    /// Returns Err([TryRecvError::Disconnected]) when all Tx dropped.
+    /// Returns Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline(always)]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         match self.recv.try_recv() {
@@ -152,7 +152,7 @@ impl<T> AsyncRx<T> {
     ///
     /// Return Err([TryRecvError::Empty]) for Poll::Pending case.
     ///
-    /// Return Err([TryRecvError::Disconnected]) when all Tx dropped.
+    /// Return Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline(always)]
     pub fn poll_item(
         &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>,
@@ -350,7 +350,7 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>: Send + 'static {
     ///
     /// Returns Err([RecvTimeoutError::Timeout]) when a message could not be received because the channel is empty and the operation timed out.
     ///
-    /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped.
+    /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped and channel is empty.
     #[cfg(feature = "tokio")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
     fn recv_timeout<'a>(&'a self, timeout: std::time::Duration) -> ReceiveTimeoutFuture<'a, T>;
@@ -361,7 +361,7 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>: Send + 'static {
     ///
     /// Returns Err([TryRecvError::Empty]) when channel is empty.
     ///
-    /// Returns Err([TryRecvError::Disconnected]) when all Tx dropped.
+    /// Returns Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     fn try_recv(&self) -> Result<T, TryRecvError>;
 
     /// Probe possible messages in the channel (not accurate)
