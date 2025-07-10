@@ -3,6 +3,7 @@ pub use crate::locked_waker::*;
 pub use crossbeam::channel::{RecvError, RecvTimeoutError, TryRecvError};
 pub use crossbeam::channel::{SendError, SendTimeoutError, TrySendError};
 use crossbeam::queue::{ArrayQueue, SegQueue};
+use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::Context;
@@ -232,4 +233,113 @@ impl<T> ChannelShared<T> {
     pub(crate) fn clear_recv_wakers(&self, seq: u64) {
         self.recvs.clear_wakers(seq);
     }
+}
+
+#[allow(dead_code)]
+#[derive(Default)]
+pub struct ChannelStats {
+    tx_try: AtomicU64,
+    tx_poll: AtomicU64,
+    tx_done: AtomicU64,
+    rx_try: AtomicU64,
+    rx_poll: AtomicU64,
+    rx_done: AtomicU64,
+}
+
+lazy_static! {
+    static ref STATS: ChannelStats = Default::default();
+}
+
+#[cfg(feature = "profile")]
+impl ChannelStats {
+    pub fn to_string() -> String {
+        let mut tx_try = STATS.tx_try.load(Ordering::Acquire) as f64;
+        let mut tx_poll = STATS.tx_poll.load(Ordering::Acquire) as f64;
+        let tx_done = STATS.tx_done.load(Ordering::Acquire);
+        let mut rx_try = STATS.rx_try.load(Ordering::Acquire) as f64;
+        let mut rx_poll = STATS.rx_poll.load(Ordering::Acquire) as f64;
+        let rx_done = STATS.rx_done.load(Ordering::Acquire);
+        if tx_done > 0 {
+            tx_try /= tx_poll;
+            tx_poll /= tx_done as f64;
+        }
+        if rx_done > 0 {
+            rx_try /= rx_poll;
+            rx_poll /= rx_done as f64;
+        }
+        format!(
+            "tx:[avg(try={}, poll={}) op={}], rx[avg(try={}, poll={}), op={}]",
+            tx_try, tx_poll, tx_done, rx_try, rx_poll, rx_done,
+        )
+        .to_string()
+    }
+
+    pub fn clear() {
+        STATS.tx_try.store(0, Ordering::Release);
+        STATS.rx_try.store(0, Ordering::Release);
+        STATS.tx_poll.store(0, Ordering::Release);
+        STATS.rx_poll.store(0, Ordering::Release);
+        STATS.tx_done.store(0, Ordering::Release);
+        STATS.rx_done.store(0, Ordering::Release);
+    }
+
+    #[inline(always)]
+    pub(crate) fn tx_poll(retry: usize) {
+        STATS.tx_try.fetch_add(retry as u64, Ordering::SeqCst);
+        STATS.tx_poll.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    pub(crate) fn rx_poll(retry: usize) {
+        STATS.rx_try.fetch_add(retry as u64, Ordering::SeqCst);
+        STATS.rx_poll.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    pub(crate) fn tx_done() {
+        STATS.tx_done.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    pub(crate) fn rx_done() {
+        STATS.rx_done.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[macro_export(local_inner_macros)]
+macro_rules! rx_stats {
+    ($try: expr, $done: expr) => {
+        #[cfg(feature = "profile")]
+        {
+            ChannelStats::rx_poll($try);
+            if $done {
+                ChannelStats::rx_done();
+            }
+        }
+    };
+    ($try: expr) => {
+        #[cfg(feature = "profile")]
+        {
+            ChannelStats::rx_poll($try);
+        }
+    };
+}
+
+#[macro_export(local_inner_macros)]
+macro_rules! tx_stats {
+    ($try: expr, $done: expr) => {
+        #[cfg(feature = "profile")]
+        {
+            ChannelStats::tx_poll($try);
+            if $done {
+                ChannelStats::tx_done();
+            }
+        }
+    };
+    ($try: expr) => {
+        #[cfg(feature = "profile")]
+        {
+            ChannelStats::tx_poll($try);
+        }
+    };
 }

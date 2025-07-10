@@ -202,6 +202,9 @@ mod collections;
 mod locked_waker;
 mod waker_registry;
 
+#[cfg(feature = "profile")]
+pub use channel::ChannelStats;
+
 pub mod mpmc;
 pub mod mpsc;
 pub mod spsc;
