@@ -1,5 +1,5 @@
 use crate::{channel::*, AsyncRx, MAsyncRx};
-use crossbeam_utils::Backoff;
+use crate::backoff::Backoff;
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -87,51 +87,48 @@ impl<T> Rx<T> {
         if shared.bound_size == Some(0) {
             todo!();
         } else {
-            let mut _i = 0;
             if let Some(item) = shared.try_recv() {
                 shared.on_recv();
                 return Ok(item);
             }
             let waker = cache.new_blocking();
             debug_assert!(waker.is_waked());
-            let backoff = Backoff::new();
-            let retry_limit = 3;
+            let mut backoff = Backoff::new(4);
             backoff.snooze();
             loop {
-                _i += 1;
-                if let Some(item) = shared.try_recv() {
-                    shared.on_recv();
-                    cache.push(waker);
-                    return Ok(item);
-                }
-                if _i < retry_limit {
+                loop {
+                    if let Some(item) = shared.try_recv() {
+                        shared.on_recv();
+                        cache.push(waker);
+                        return Ok(item);
+                    }
+                    if backoff.is_completed() {
+                        break;
+                    }
                     backoff.snooze();
+                }
+                shared.reg_recv_blocking(&waker);
+                if shared.is_disconnected() {
+                    if shared.is_empty() {
+                        waker.cancel();
+                        return Err(RecvTimeoutError::Disconnected);
+                    } else {
+                        // make sure all msgs received, since we have soonze
+                        continue;
+                    }
+                }
+                if !shared.is_empty() {
                     continue;
                 }
-                if waker.is_waked() {
-                    shared.reg_recv_blocking(&waker);
-                    continue;
-                } else {
-                    if shared.is_disconnected() {
-                        if shared.is_empty() {
-                            waker.cancel();
-                            return Err(RecvTimeoutError::Disconnected);
-                        } else {
-                            // make sure all msgs received, since we have soonze
-                            continue;
-                        }
+                backoff.reset();
+                if !wait_timeout(deadline) {
+                    if waker.abandon() {
+                        // We are waked, but giving up to recv, should notify another receiver for safety
+                        shared.on_send();
+                    } else {
+                        shared.clear_recv_wakers(waker.get_seq());
                     }
-                    backoff.reset();
-                    _i = 0;
-                    if !wait_timeout(deadline) {
-                        if waker.abandon() {
-                            // We are waked, but giving up to recv, should notify another receiver for safety
-                            shared.on_send();
-                        } else {
-                            shared.clear_recv_wakers(waker.get_seq());
-                        }
-                        return Err(RecvTimeoutError::Timeout);
-                    }
+                    return Err(RecvTimeoutError::Timeout);
                 }
             }
         }
