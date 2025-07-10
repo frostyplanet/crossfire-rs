@@ -191,9 +191,14 @@ extern crate enum_dispatch;
 
 mod channel;
 pub use channel::ChannelShared;
-mod collections;
+/// collections that can be re-used
+pub mod collections;
+
 mod locked_waker;
 mod waker_registry;
+
+#[allow(dead_code)]
+mod backoff;
 
 #[cfg(feature = "profile")]
 pub use channel::ChannelStats;
