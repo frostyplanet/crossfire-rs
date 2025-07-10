@@ -23,6 +23,7 @@ enum_dispatch = "0.3"
 parking_lot = "0"
 tokio = { version = "1", features = ["time"], optional=true }
 async-std = {version = "1", optional=true}
+lazy_static = "1.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
@@ -40,6 +41,7 @@ kanal = {version="0.1"}
 default = []
 tokio = ["dep:tokio"]
 async_std = ["dep:async-std"]
+profile = []
 
 [package.metadata.docs.rs]
 all-features = true
