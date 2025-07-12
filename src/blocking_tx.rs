@@ -276,19 +276,31 @@ impl<T: Send + 'static> MTx<T> {
                 todo!();
             } else {
                 let _item = MaybeUninit::new(item);
-                if shared.try_send(&_item).is_ok() {
-                    shared.on_send();
-                    tx_stats!(1, true);
-                    return Ok(());
+                let mut backoff;
+                if shared.senders.is_empty() {
+                    if shared.try_send(&_item).is_ok() {
+                        shared.on_send();
+                        tx_stats!(1, true);
+                        return Ok(());
+                    }
+                    backoff = Backoff::new(6);
+                    backoff.snooze();
+                } else {
+                    backoff = Backoff::new(6);
                 }
                 let waker = cache.new_blocking();
                 debug_assert!(waker.is_waked());
-                let mut backoff = Backoff::new(6);
-                backoff.snooze();
                 loop {
                     loop {
                         if shared.try_send(&_item).is_ok() {
                             shared.on_send();
+                            if !shared.senders.is_empty() {
+                                if shared.is_full() {
+                                    // When sender is too fast, give consumer and other thread a
+                                    // chance, otherwise lead to channel congestion.
+                                    std::thread::yield_now();
+                                }
+                            }
                             cache.push(waker);
                             tx_stats!(_i, true);
                             return Ok(());
