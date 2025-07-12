@@ -61,11 +61,11 @@ impl<T> Channel<T> {
 
 pub struct ChannelShared<T> {
     closed: AtomicBool,
-    recvs: Registry,
-    senders: Registry,
     tx_count: AtomicU64,
     rx_count: AtomicU64,
     inner: Channel<T>,
+    pub(crate) recvs: Registry,
+    pub(crate) senders: Registry,
     pub(crate) bound_size: Option<usize>,
 }
 
