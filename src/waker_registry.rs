@@ -285,3 +285,61 @@ impl RegistryTrait for RegistryMulti {
         guard.queue.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::locked_waker::LockedWaker;
+    #[test]
+    fn test_registry_multi() {
+        let reg = RegistryMulti::new();
+
+        // test push
+        let waker1 = LockedWaker::new_blocking();
+        assert_eq!(reg.is_empty(), true);
+        reg.reg_blocking(&waker1);
+        assert!(waker1.get_seq() > 0);
+        assert_eq!(reg.is_empty(), false);
+        assert_eq!(reg.len(), 1);
+        assert_eq!(waker1.is_waked(), false);
+
+        let waker2 = LockedWaker::new_blocking();
+        reg.reg_blocking(&waker2);
+        assert_eq!(reg.len(), 2);
+        assert_eq!(waker2.get_seq(), waker1.get_seq() + 1);
+        assert_eq!(waker2.is_waked(), false);
+
+        // test fire
+        reg.fire();
+        assert_eq!(waker1.is_waked(), true);
+        assert_eq!(reg.len(), 1);
+        assert_eq!(reg.is_empty(), false);
+        reg.fire();
+        assert_eq!(waker2.is_waked(), true);
+        assert_eq!(reg.len(), 0);
+        assert_eq!(reg.is_empty(), true);
+
+        // test seq
+
+        let waker3 = LockedWaker::new_blocking();
+        reg.reg_blocking(&waker3);
+        let waker4 = LockedWaker::new_blocking();
+        reg.reg_blocking(&waker4);
+        for _ in 0..10 {
+            let _waker = LockedWaker::new_blocking();
+            reg.reg_blocking(&_waker);
+        }
+        assert_eq!(reg.len(), 12);
+        assert_eq!(waker4.abandon(), false);
+        reg.clear_wakers(waker4.get_seq());
+        assert_eq!(reg.len(), 10);
+        assert!(waker3.is_waked());
+        assert!(waker4.is_waked());
+
+        // test close
+        assert_eq!(reg.is_empty(), false);
+        reg.close();
+        assert_eq!(reg.len(), 0);
+    }
+}
