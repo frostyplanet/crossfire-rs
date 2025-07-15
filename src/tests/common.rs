@@ -1,13 +1,3 @@
-use rstest::*;
-
-#[fixture]
-pub fn setup_log() {
-    captains_log::recipe::raw_file_logger("/tmp", "test_crossfire", log::Level::Debug)
-        .test()
-        .build()
-        .expect("log setup");
-}
-
 #[allow(dead_code)]
 macro_rules! runtime_block_on {
     ($f: expr) => {{

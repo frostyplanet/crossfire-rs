@@ -1,12 +1,16 @@
 use super::common::*;
 use crate::*;
-use captains_log::logfn;
-use log::*;
+use captains_log::{logfn, *};
 use rstest::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+
+#[fixture]
+fn setup_log() {
+    let _ = recipe::env_logger("LOG_FILE", "LOG_LEVEL").build().expect("log setup");
+}
 
 #[logfn]
 #[rstest]
@@ -16,7 +20,6 @@ use std::time::Duration;
 fn test_basic_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
     let rx_res = rx.try_recv();
     assert!(rx_res.is_err());
@@ -59,7 +62,6 @@ fn test_basic_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxTrai
 fn test_timeout_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
     let rx_res = rx.try_recv();
     assert!(rx_res.is_err());
@@ -112,7 +114,6 @@ fn test_timeout_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxTr
 fn test_basic_multi_tx_async_1_rx_blocking<R: BlockingRxTrait<usize>>(
     setup_log: (), #[case] channel: (MAsyncTx<usize>, R), #[case] tx_count: usize,
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
 
     let rx_res = rx.try_recv();
@@ -184,7 +185,6 @@ fn test_basic_multi_tx_async_1_rx_blocking<R: BlockingRxTrait<usize>>(
 fn test_pressure_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
 
     let counter = Arc::new(AtomicUsize::new(0));
@@ -194,9 +194,9 @@ fn test_pressure_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxT
     let th = thread::spawn(move || {
         'A: loop {
             match rx.recv() {
-                Ok(_) => {
+                Ok(i) => {
                     _counter.as_ref().fetch_add(1, Ordering::SeqCst);
-                    //debug!("{} {}\r", _rx_i, i);
+                    debug!("recv {}", i);
                 }
                 Err(_) => break 'A,
             }
@@ -229,7 +229,6 @@ fn test_pressure_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxT
 fn test_pressure_multi_tx_async_1_rx_blocking<R: BlockingRxTrait<usize>>(
     setup_log: (), #[case] channel: (MAsyncTx<usize>, R), #[case] tx_count: usize,
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
 
     let counter = Arc::new(AtomicUsize::new(0));
@@ -239,9 +238,9 @@ fn test_pressure_multi_tx_async_1_rx_blocking<R: BlockingRxTrait<usize>>(
     let th = thread::spawn(move || {
         'A: loop {
             match rx.recv() {
-                Ok(_) => {
+                Ok(_i) => {
                     _counter.as_ref().fetch_add(1, Ordering::SeqCst);
-                    //debug!("{} {}\r", _rx_i, i);
+                    debug!("recv {}", _i);
                 }
                 Err(_) => break 'A,
             }
@@ -286,7 +285,6 @@ fn test_pressure_multi_tx_async_multi_rx_blocking(
     setup_log: (), #[case] channel: (MAsyncTx<usize>, MRx<usize>), #[case] tx_count: usize,
     #[case] rx_count: usize,
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
 
     let counter = Arc::new(AtomicUsize::new(0));
@@ -299,9 +297,9 @@ fn test_pressure_multi_tx_async_multi_rx_blocking(
         rx_th_s.push(thread::spawn(move || {
             'A: loop {
                 match _rx.recv() {
-                    Ok(_) => {
+                    Ok(i) => {
                         _counter.as_ref().fetch_add(1, Ordering::SeqCst);
-                        //debug!("{} {}\r", _rx_i, i);
+                        debug!("recv {} {}", _rx_i, i);
                     }
                     Err(_) => break 'A,
                 }

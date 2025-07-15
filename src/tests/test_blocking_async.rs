@@ -1,7 +1,6 @@
 use super::common::*;
 use crate::*;
-use captains_log::logfn;
-use log::*;
+use captains_log::{logfn, *};
 use rstest::*;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -9,6 +8,11 @@ use std::sync::{
 };
 use std::thread;
 use std::time::*;
+
+#[fixture]
+fn setup_log() {
+    let _ = recipe::env_logger("LOG_FILE", "LOG_LEVEL").build().expect("log setup");
+}
 
 #[logfn]
 #[rstest]
@@ -18,7 +22,6 @@ use std::time::*;
 fn test_basic_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
     let rx_res = rx.try_recv();
     assert!(rx_res.is_err());
@@ -63,7 +66,6 @@ fn test_basic_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxTrai
 fn test_timeout_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
     let rx_res = rx.try_recv();
     assert!(rx_res.is_err());
@@ -116,7 +118,6 @@ fn test_timeout_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxTr
 fn test_pressure_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
     let round: usize = 100000;
     let th = thread::spawn(move || {
@@ -128,7 +129,7 @@ fn test_pressure_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxT
         for i in 0..round {
             match rx.recv().await {
                 Ok(msg) => {
-                    //debug!("recv {}", msg);
+                    debug!("recv {}", msg);
                     assert_eq!(msg, i);
                 }
                 Err(_e) => {
@@ -164,7 +165,6 @@ fn test_pressure_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxT
 fn test_pressure_tx_multi_blocking_1_rx_async<R: AsyncRxTrait<usize>>(
     setup_log: (), #[case] channel: (MTx<usize>, R), #[case] tx_count: usize,
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
     let counter = Arc::new(AtomicUsize::new(0));
     let round = 1000000;
@@ -183,11 +183,11 @@ fn test_pressure_tx_multi_blocking_1_rx_async<R: AsyncRxTrait<usize>>(
                 match _tx.send(i) {
                     Err(e) => panic!("{}", e),
                     _ => {
-                        //debug!("tx {} {}", _tx_i, i);
+                        debug!("tx {} {}", _tx_i, i);
                     }
                 }
             }
-            info!("tx {} exit", _tx_i);
+            debug!("tx {} exit", _tx_i);
         }));
     }
     drop(tx);
@@ -197,7 +197,7 @@ fn test_pressure_tx_multi_blocking_1_rx_async<R: AsyncRxTrait<usize>>(
             match rx.recv().await {
                 Ok(_i) => {
                     _counter.as_ref().fetch_add(1, Ordering::SeqCst);
-                    //debug!("rx {} {}\r", _rx_i, _i);
+                    debug!("rx {}r", _i);
                 }
                 Err(_) => break 'A,
             }
@@ -232,7 +232,6 @@ fn test_pressure_tx_multi_blocking_multi_rx_async(
     setup_log: (), #[case] channel: (MTx<usize>, MAsyncRx<usize>), #[case] tx_count: usize,
     #[case] rx_count: usize,
 ) {
-    let _ = setup_log; // Disable unused var warning
     let (tx, rx) = channel;
 
     let counter = Arc::new(AtomicUsize::new(0));
@@ -252,7 +251,7 @@ fn test_pressure_tx_multi_blocking_multi_rx_async(
                 match _tx.send(i) {
                     Err(e) => panic!("{}", e),
                     _ => {
-                        //debug!("tx {} {}", _tx_i, i);
+                        debug!("tx {} {}", _tx_i, i);
                     }
                 }
             }
@@ -271,7 +270,7 @@ fn test_pressure_tx_multi_blocking_multi_rx_async(
                     match _rx.recv().await {
                         Ok(_i) => {
                             _counter.as_ref().fetch_add(1, Ordering::SeqCst);
-                            //debug!("rx {} {}\r", _rx_i, _i);
+                            debug!("rx {} {}", _rx_i, _i);
                         }
                         Err(_) => break 'A,
                     }

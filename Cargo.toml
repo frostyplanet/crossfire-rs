@@ -28,8 +28,8 @@ async-std = {version = "1", optional=true}
 tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
 rand = "0.9"
 rstest = "0"
+captains-log = "0.5"
 log = "0"
-captains-log = "0"
 atomic-waitgroup = "0"
 criterion = { version="0.6", features = ["async_tokio", "csv_output"] }
 
