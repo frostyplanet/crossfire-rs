@@ -15,7 +15,7 @@ RUNTESTCASE = _run_test_case() {                                                
 
 RUNRELEASECASE = _run_test_release_case() {                                                  \
     case="$(filter-out $@,$(MAKECMDGOALS))";                                      \
-    if [ -n "$${WORKFLOW}"]; then \
+    if [ -n "$${WORKFLOW}" ]; then \
         export TEST_FLAG=" --release -- -q --test-threads=1"; \
     else  \
         export LOG_FILE="/tmp/test_crossfire.log"; \

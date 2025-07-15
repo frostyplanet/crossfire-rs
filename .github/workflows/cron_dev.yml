@@ -20,44 +20,13 @@ jobs:
       run: cargo build --verbose
 
     - name: Run tests with tokio
-      run: make test
-
-    - name: Archive test log
-      if: ${{ failure() }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: test log
-        path: /tmp/test_crossfire.log
-
-    - name: cleanup logs
-      run: /bin/rm /tmp/test_crossfire.log
+      run: env WORKFLOW=1 make test
 
     - name: Run tests with --release
-      run: make test_release
-
-    - name: Archive test log
-      if: ${{ failure() }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: test log release
-        path: /tmp/test_crossfire.log
+      run: env WORKFLOW=1 make test_release
 
     - name: Run tests with async_std
-      run: make test_async_std
-
-    - name: Archive test log
-      if: ${{ failure() }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: test log async_std
-        path: /tmp/test_crossfire.log
+      run: env WORKFLOW=1 make test_async_std
 
     - name: Run tests with async_std --releaes
-      run: make test_async_std_release
-
-    - name: Archive test log
-      if: ${{ failure() }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: test log async_std release
-        path: /tmp/test_crossfire.log
+      run: env WORKFLOW=1 make test_async_std_release
