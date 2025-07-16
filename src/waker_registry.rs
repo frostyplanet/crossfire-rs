@@ -98,20 +98,22 @@ impl RegistryTrait for RegistrySingle {
     /// return is_skip
     #[inline(always)]
     fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
-        let waker = {
-            if o_waker.is_none() {
-                o_waker.replace(LockedWaker::new_async(ctx));
-                o_waker.as_ref().unwrap()
-            } else {
-                let _waker = o_waker.as_ref().unwrap();
-                if !_waker.is_waked() {
-                    // No need to reg again, since waker is not consumed
-                    return true;
-                }
-                _waker
+        if let Some(_waker) = o_waker.as_ref() {
+            // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
+            // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
+            // There might be situation like spurious wakeup, poll() again under no fire() ever
+            // happend, waker still exists but cannot be used to wake the current future.
+            // Since there's no lock inside fire(), to avoid race, can not update the content but to put a new one.
+            if _waker.will_wake(ctx) {
+                // Normally only selection or multiplex future will get here.
+                // No need to reg again, since waker is not consumed nor changed
+                return true;
             }
-        };
-        self.cell.put(waker.weak());
+        }
+        let waker = LockedWaker::new_async(ctx);
+        let weak = waker.weak();
+        o_waker.replace(waker);
+        self.cell.put(weak);
         false
     }
 
@@ -202,20 +204,21 @@ impl RegistryTrait for RegistryMulti {
 
     #[inline(always)]
     fn reg_async(&self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>) -> bool {
-        let waker = {
-            if o_waker.is_none() {
-                o_waker.replace(LockedWaker::new_async(ctx));
-                o_waker.as_ref().unwrap()
-            } else {
-                let _waker = o_waker.as_ref().unwrap();
-                if !_waker.is_waked() {
-                    // No need to reg again, since waker is not consumed
-                    return true;
-                }
-                _waker
+        if let Some(_waker) = o_waker.as_ref() {
+            // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
+            // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
+            // There might be situation like spurious wakeup, poll() again under no fire() ever
+            // happend, waker still exists but cannot be used to wake the current future.
+            // Since there's no lock inside fire(), to avoid race, can not update the content but to put a new one.
+            if _waker.will_wake(ctx) {
+                // Normally only selection or multiplex future will get here.
+                // No need to reg again, since waker is not consumed nor changed
+                return true;
             }
-        };
-        self.push(waker);
+        }
+        let waker = LockedWaker::new_async(ctx);
+        self.push(&waker);
+        o_waker.replace(waker);
         false
     }
 
