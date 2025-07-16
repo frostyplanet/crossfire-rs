@@ -163,13 +163,6 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         }
         return r;
     }
-
-    /// Just for debugging purpose, to monitor queue size
-    #[inline]
-    #[cfg(test)]
-    pub fn get_waker_size(&self) -> (usize, usize) {
-        return self.shared.get_waker_size();
-    }
 }
 
 impl<T> AsyncTx<T> {
@@ -208,9 +201,22 @@ impl<T> AsyncTx<T> {
         self.sender.is_empty()
     }
 
+    /// Return true if the other side has closed
+    #[inline]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.get_rx_count() == 0
+    }
+
     #[inline]
     pub fn into_sink(self) -> AsyncSink<T> {
         AsyncSink::new(self)
+    }
+
+    /// Just for debugging purpose, to monitor queue size
+    #[inline]
+    #[cfg(test)]
+    pub fn get_waker_size(&self) -> (usize, usize) {
+        return self.shared.get_waker_size();
     }
 }
 
@@ -343,6 +349,9 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
     /// Whether there's message in the channel (not accurate)
     fn is_empty(&self) -> bool;
 
+    /// Return true if the other side has closed
+    fn is_disconnected(&self) -> bool;
+
     /// Send message. Will await when channel is full.
     ///
     /// Returns `Ok(())` on successful.
@@ -387,6 +396,11 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for AsyncTx<T> {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         AsyncTx::is_empty(self)
+    }
+
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        AsyncTx::is_disconnected(self)
     }
 
     #[inline(always)]
@@ -473,6 +487,11 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for MAsyncTx<T> {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.0.is_disconnected()
     }
 
     #[inline(always)]

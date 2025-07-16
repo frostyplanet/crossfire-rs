@@ -138,6 +138,12 @@ impl<T> Tx<T> {
     pub fn is_empty(&self) -> bool {
         self.sender.is_empty()
     }
+
+    /// Return true if the other side has closed
+    #[inline]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.get_rx_count() == 0
+    }
 }
 
 /// Multi-producer (sender) that works in blocking context.
@@ -226,6 +232,9 @@ pub trait BlockingTxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt:
 
     /// Whether there's message in the channel (not accurate)
     fn is_empty(&self) -> bool;
+
+    /// Return true if the other side has closed
+    fn is_disconnected(&self) -> bool;
 }
 
 impl<T: Send + 'static> BlockingTxTrait<T> for Tx<T> {
@@ -253,6 +262,11 @@ impl<T: Send + 'static> BlockingTxTrait<T> for Tx<T> {
     fn is_empty(&self) -> bool {
         Tx::is_empty(self)
     }
+
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        Tx::is_disconnected(self)
+    }
 }
 
 impl<T: Send + 'static> BlockingTxTrait<T> for MTx<T> {
@@ -279,5 +293,10 @@ impl<T: Send + 'static> BlockingTxTrait<T> for MTx<T> {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.0.is_disconnected()
     }
 }

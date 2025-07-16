@@ -155,6 +155,12 @@ impl<T> AsyncRx<T> {
         self.recv.is_empty()
     }
 
+    /// Return true if the other side has closed
+    #[inline]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.get_tx_count() == 0
+    }
+
     /// Internal function might change in the future. For public version, use AsyncStream::poll_item() instead
     ///
     /// Returns `Ok(T)` on successful.
@@ -353,6 +359,9 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
     /// Whether there's message in the channel (not accurate)
     fn is_empty(&self) -> bool;
 
+    /// Return true if the other side has closed
+    fn is_disconnected(&self) -> bool;
+
     /// Returns count of tx / rx wakers stored in channel for debug purpose
     #[cfg(test)]
     fn get_waker_size(&self) -> (usize, usize);
@@ -384,6 +393,11 @@ impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for AsyncRx<T> {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         AsyncRx::is_empty(self)
+    }
+
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        AsyncRx::is_disconnected(self)
     }
 
     #[inline(always)]
@@ -478,16 +492,19 @@ impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for MAsyncRx<T> {
         self.0.recv_timeout(duration)
     }
 
-    /// Probe possible messages in the channel (not accurate)
     #[inline(always)]
     fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// Whether there's message in the channel (not accurate)
     #[inline(always)]
     fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.0.is_disconnected()
     }
 
     /// Returns count of tx / rx wakers stored in channel for debug purpose

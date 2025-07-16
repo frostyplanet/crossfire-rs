@@ -138,6 +138,12 @@ impl<T> Rx<T> {
     pub fn is_empty(&self) -> bool {
         self.recv.is_empty()
     }
+
+    /// Return true if the other side has closed
+    #[inline]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.get_tx_count() == 0
+    }
 }
 
 /// Multi-consumer (receiver) that works in blocking context.
@@ -232,6 +238,9 @@ pub trait BlockingRxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt:
 
     /// Whether there's message in the channel (not accurate)
     fn is_empty(&self) -> bool;
+
+    /// Return true if the other side has closed
+    fn is_disconnected(&self) -> bool;
 }
 
 impl<T: Send + 'static> BlockingRxTrait<T> for Rx<T> {
@@ -258,6 +267,11 @@ impl<T: Send + 'static> BlockingRxTrait<T> for Rx<T> {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         Rx::is_empty(self)
+    }
+
+    #[inline]
+    fn is_disconnected(&self) -> bool {
+        Rx::is_disconnected(self)
     }
 }
 
@@ -287,5 +301,10 @@ impl<T: Send + 'static> BlockingRxTrait<T> for MRx<T> {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.0.is_disconnected()
     }
 }
