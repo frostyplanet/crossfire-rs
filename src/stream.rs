@@ -1,7 +1,8 @@
 use crate::locked_waker::LockedWaker;
-use crate::{AsyncRx, TryRecvError};
+use crate::AsyncRx;
 use futures::stream;
 use std::fmt;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::task::*;
 
@@ -35,30 +36,6 @@ where
         Self { rx, waker: None, ended: false }
     }
 
-    /// Try to receive message, non-blocking.
-    ///
-    /// Returns `Ok(T)` on successful.
-    ///
-    /// Returns Err([TryRecvError::Empty]) when channel is empty.
-    ///
-    /// Returns Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
-    #[inline]
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        self.rx.try_recv()
-    }
-
-    /// Probe possible messages in the channel (not accurate)
-    #[inline(always)]
-    pub fn len(&self) -> usize {
-        self.rx.len()
-    }
-
-    /// Whether there's message in the channel (not accurate)
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.rx.is_empty()
-    }
-
     /// poll_item() will try to receive message, if not successful, will register notification for
     /// the next poll.
     ///
@@ -82,6 +59,15 @@ where
                 return Poll::Ready(None);
             }
         }
+    }
+}
+
+impl<T> Deref for AsyncStream<T> {
+    type Target = AsyncRx<T>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.rx
     }
 }
 

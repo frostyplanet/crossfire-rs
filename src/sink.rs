@@ -2,6 +2,7 @@ use crate::async_tx::AsyncTx;
 use crate::locked_waker::LockedWaker;
 use crate::TrySendError;
 use std::fmt;
+use std::ops::Deref;
 use std::task::Context;
 
 /// This is for you to write custom future with poll_send(ctx)
@@ -26,6 +27,15 @@ impl<T> AsyncSink<T> {
     #[inline]
     pub fn new(tx: AsyncTx<T>) -> Self {
         Self { tx, waker: None }
+    }
+}
+
+impl<T> Deref for AsyncSink<T> {
+    type Target = AsyncTx<T>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.tx
     }
 }
 
