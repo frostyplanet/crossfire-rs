@@ -3,12 +3,20 @@ macro_rules! runtime_block_on {
     ($f: expr) => {{
         #[cfg(feature = "async_std")]
         {
+            log::info!("run with async_std");
             async_std::task::block_on($f);
         }
         #[cfg(not(feature = "async_std"))]
         {
-            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
-            rt.block_on($f);
+            let runtime_flag = std::env::var("SINGLE_THREAD_RUNTIME").unwrap_or("".to_string());
+            let mut rt = if runtime_flag.len() > 0 {
+                log::info!("run with tokio current thread");
+                tokio::runtime::Builder::new_current_thread()
+            } else {
+                log::info!("run with tokio multi thread");
+                tokio::runtime::Builder::new_multi_thread()
+            };
+            rt.enable_all().build().unwrap().block_on($f);
         }
     }};
 }

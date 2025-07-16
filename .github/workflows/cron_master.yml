@@ -17,14 +17,14 @@ jobs:
     - name: Build
       run: cargo build --verbose
 
-    - name: Run tests with tokio
+    - name: Run tests with tokio multi-thread
       run: env WORKFLOW=1 make test
+
+    - name: Run tests with tokio single-thread
+      run: env WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 make test
 
     - name: Run tests with --release
       run: env WORKFLOW=1 make test_release
 
     - name: Run tests with async_std
       run: env WORKFLOW=1 make test_async_std
-
-    - name: Run tests with async_std --releaes
-      run: env WORKFLOW=1 make test_async_std_release
