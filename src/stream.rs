@@ -77,19 +77,10 @@ where
 {
     type Item = T;
 
-    #[inline]
+    #[inline(always)]
     fn poll_next(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Option<Self::Item>> {
         let mut _self = self.get_mut();
-        match _self.rx.poll_item(ctx, &mut _self.waker) {
-            Err(e) => {
-                if e.is_empty() {
-                    return Poll::Pending;
-                }
-                _self.ended = true;
-                return Poll::Ready(None);
-            }
-            Ok(item) => Poll::Ready(Some(item)),
-        }
+        return _self.poll_item(ctx);
     }
 }
 
