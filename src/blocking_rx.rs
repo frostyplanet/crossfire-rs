@@ -1,5 +1,5 @@
-use crate::{channel::*, AsyncRx, MAsyncRx};
 use crate::backoff::Backoff;
+use crate::{channel::*, AsyncRx, MAsyncRx};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;

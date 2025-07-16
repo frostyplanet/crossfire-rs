@@ -1,5 +1,5 @@
-use crate::{channel::*, AsyncTx, MAsyncTx};
 use crate::backoff::Backoff;
+use crate::{channel::*, AsyncTx, MAsyncTx};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -280,7 +280,6 @@ impl<T: Send + 'static> MTx<T> {
                 if shared.senders.is_empty() {
                     if shared.try_send(&_item).is_ok() {
                         shared.on_send();
-                        tx_stats!(1, true);
                         return Ok(());
                     }
                     backoff = Backoff::new(6);
@@ -302,7 +301,6 @@ impl<T: Send + 'static> MTx<T> {
                                 }
                             }
                             cache.push(waker);
-                            tx_stats!(_i, true);
                             return Ok(());
                         }
                         if backoff.is_completed() {
@@ -320,7 +318,6 @@ impl<T: Send + 'static> MTx<T> {
                     if !shared.is_full() {
                         continue;
                     }
-                    tx_stats!(backoff.step());
                     backoff.reset();
                     if !wait_timeout(deadline) {
                         if waker.abandon() {
