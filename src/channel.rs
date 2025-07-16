@@ -239,6 +239,44 @@ impl<T> ChannelShared<T> {
     pub(crate) fn clear_recv_wakers(&self, seq: usize) {
         self.recvs.clear_wakers(seq);
     }
+
+    #[inline]
+    pub fn detect_async_backoff_tx(&self) -> i8 {
+        // Async parameter is determine by runtime,
+        // like tokio you might have multiple runtime. So the result should stored in
+        // sender and receivers, not in the ChannelShared
+        #[cfg(feature = "tokio")]
+        {
+            use tokio::runtime::Handle;
+            if Handle::current().metrics().num_workers() <= 1 {
+                return 0;
+            }
+        }
+        if self.bound_size > Some(0) && self.bound_size <= Some(2) {
+            return 5;
+        } else {
+            return 0;
+        }
+    }
+
+    #[inline]
+    pub fn detect_async_backoff_rx(&self) -> i8 {
+        // Async parameter is determine by runtime,
+        // like tokio you might have multiple runtime. So the result should stored in
+        // sender and receivers, not in the ChannelShared
+        #[cfg(feature = "tokio")]
+        {
+            use tokio::runtime::Handle;
+            if Handle::current().metrics().num_workers() <= 1 {
+                return 0;
+            }
+        }
+        if self.bound_size > Some(0) && self.bound_size <= Some(2) {
+            return 5;
+        } else {
+            return 1;
+        }
+    }
 }
 
 /// On timed out, returns Err(())
