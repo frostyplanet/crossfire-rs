@@ -170,26 +170,12 @@ impl<T> AsyncRx<T> {
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
         let r = self.try_recv();
+        if let Some(old_waker) = o_waker.take() {
+            // https://github.com/frostyplanet/crossfire-rs/issues/14
+            old_waker.cancel();
+        }
         if let Err(TryRecvError::Empty) = &r {
-            if let Some(old_waker) = o_waker.as_ref() {
-                if old_waker.is_waked() {
-                    let _ = o_waker.take(); // should reg again
-                } else {
-                    if self.shared.get_tx_count() == 0 {
-                        if self.recv.is_empty() {
-                            // Check channel close before sleep
-                            return Err(TryRecvError::Disconnected);
-                        }
-                    } else {
-                        // False wake up, sleep again
-                        return Err(TryRecvError::Empty);
-                    }
-                }
-            }
         } else {
-            if let Some(old_waker) = o_waker.take() {
-                self.shared.cancel_recv_waker(old_waker);
-            }
             return r;
         }
         let waker = self.shared.reg_recv_async(ctx);

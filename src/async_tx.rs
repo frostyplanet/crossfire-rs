@@ -133,25 +133,16 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
+        //
+        // crossbeam-channel will check disconnected for us (if not raced)
         let r = self.try_send(item);
+        if let Some(old_waker) = o_waker.take() {
+            // https://github.com/frostyplanet/crossfire-rs/issues/14
+            old_waker.cancel();
+        }
         if let Err(TrySendError::Full(t)) = r {
-            if self.shared.get_rx_count() == 0 {
-                // Check channel close before sleep
-                return Err(TrySendError::Disconnected(t));
-            }
-            if let Some(old_waker) = o_waker.as_ref() {
-                if old_waker.is_waked() {
-                    let _ = o_waker.take(); // reg again
-                } else {
-                    // False wakeup
-                    return Err(TrySendError::Full(t));
-                }
-            }
             item = t;
         } else {
-            if let Some(old_waker) = o_waker.take() {
-                self.shared.cancel_send_waker(old_waker);
-            }
             return r;
         }
         let waker = self.shared.reg_send_async(ctx);
