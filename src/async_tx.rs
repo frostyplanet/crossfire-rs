@@ -8,7 +8,10 @@ use std::marker::PhantomData;
 use std::mem::{needs_drop, MaybeUninit};
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicI8, Ordering},
+    Arc,
+};
 use std::task::{Context, Poll};
 
 /// Single producer (sender) that works in async context.
@@ -56,6 +59,7 @@ pub struct AsyncTx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    backoff: AtomicI8,
 }
 
 impl<T> fmt::Debug for AsyncTx<T> {
@@ -88,7 +92,17 @@ impl<T> From<Tx<T>> for AsyncTx<T> {
 impl<T> AsyncTx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self { shared, _phan: Default::default(), backoff: AtomicI8::new(-1) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn _detect_runtime(&self) -> u32 {
+        let mut backoff = self.backoff.load(Ordering::Relaxed);
+        if backoff < 0 {
+            backoff = self.shared.detect_async_backoff_tx();
+            self.backoff.store(backoff, Ordering::Release);
+        }
+        return backoff as u32;
     }
 
     #[inline]
@@ -110,7 +124,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Returns Err([SendError]) when all Rx is dropped.
     #[inline(always)]
     pub fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
-        return SendFuture { shared: &self.shared, item: MaybeUninit::new(item), waker: None };
+        return SendFuture { tx: &self, item: MaybeUninit::new(item), waker: None };
     }
 
     /// Try to send message, non-blocking
@@ -163,12 +177,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 Box::pin(async_std::task::sleep(duration))
             }
         };
-        return SendTimeoutFuture {
-            shared: &self.shared,
-            item: MaybeUninit::new(item),
-            waker: None,
-            sleep,
-        };
+        return SendTimeoutFuture { tx: &self, item: MaybeUninit::new(item), waker: None, sleep };
     }
 
     /// Internal function might change in the future. For public version, use AsyncSink::poll_send() instead
@@ -180,17 +189,16 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Returns `Poll::Ready(Err(())` when all Rx dropped.
     #[inline(always)]
     pub(crate) fn poll_send<'a>(
-        shared: &'a ChannelShared<T>, ctx: &'a mut Context, item: &MaybeUninit<T>,
-        o_waker: &'a mut Option<LockedWaker>,
+        &self, ctx: &'a mut Context, item: &MaybeUninit<T>, o_waker: &'a mut Option<LockedWaker>,
     ) -> Poll<Result<(), ()>> {
+        let shared = &self.shared;
         if shared.is_disconnected() {
             return Poll::Ready(Err(()));
         }
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        let try_times = if shared.bound_size <= Some(2) { 5 } else { 1 };
-        let mut backoff = Backoff::new(try_times);
+        let mut backoff = Backoff::new(self._detect_runtime());
         loop {
             if shared.try_send(item).is_ok() {
                 shared.on_send();
@@ -222,7 +230,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
 
 /// A fixed-sized future object constructed by [AsyncTx::make_send_future()]
 pub struct SendFuture<'a, T: Unpin> {
-    shared: &'a ChannelShared<T>,
+    tx: &'a AsyncTx<T>,
     item: MaybeUninit<T>,
     waker: Option<LockedWaker>,
 }
@@ -235,9 +243,9 @@ impl<T: Unpin> Drop for SendFuture<'_, T> {
             // Cancelling the future, poll is not ready
             if waker.abandon() {
                 // We are waked, but give up sending, should notify another sender for safety
-                self.shared.on_recv();
+                self.tx.shared.on_recv();
             } else {
-                self.shared.clear_send_wakers(waker.get_seq());
+                self.tx.shared.clear_send_wakers(waker.get_seq());
             }
             if needs_drop::<T>() {
                 if size_of::<T>() > size_of::<*mut T>() {
@@ -253,7 +261,7 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match AsyncTx::poll_send(&_self.shared, ctx, &_self.item, &mut _self.waker) {
+        match _self.tx.poll_send(ctx, &_self.item, &mut _self.waker) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
                 return Poll::Ready(Ok(()));
@@ -269,7 +277,7 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
 
 /// A fixed-sized future object constructed by [AsyncTx::send_timeout()]
 pub struct SendTimeoutFuture<'a, T: Unpin> {
-    shared: &'a ChannelShared<T>,
+    tx: &'a AsyncTx<T>,
     item: MaybeUninit<T>,
     waker: Option<LockedWaker>,
     sleep: Pin<Box<dyn Future<Output = ()>>>,
@@ -283,9 +291,9 @@ impl<T: Unpin> Drop for SendTimeoutFuture<'_, T> {
             // Cancelling the future, poll is not ready
             if waker.abandon() {
                 // We are waked, but give up sending, should notify another sender for safety
-                self.shared.on_recv();
+                self.tx.shared.on_recv();
             } else {
-                self.shared.clear_send_wakers(waker.get_seq());
+                self.tx.shared.clear_send_wakers(waker.get_seq());
             }
         }
     }
@@ -296,7 +304,7 @@ impl<T: Unpin + Send + 'static> Future for SendTimeoutFuture<'_, T> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        let r = AsyncTx::poll_send(&_self.shared, ctx, &_self.item, &mut _self.waker);
+        let r = _self.tx.poll_send(ctx, &_self.item, &mut _self.waker);
         match r {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());

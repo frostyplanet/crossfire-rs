@@ -7,7 +7,10 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicI8, Ordering},
+    Arc,
+};
 use std::task::{Context, Poll};
 
 /// Single consumer (receiver) that works in async context.
@@ -56,6 +59,7 @@ pub struct AsyncRx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    backoff: AtomicI8,
 }
 
 unsafe impl<T: Send> Send for AsyncRx<T> {}
@@ -88,7 +92,17 @@ impl<T> From<Rx<T>> for AsyncRx<T> {
 impl<T> AsyncRx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self { shared, _phan: Default::default(), backoff: AtomicI8::new(-1) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn _detect_runtime(&self) -> u32 {
+        let mut backoff = self.backoff.load(Ordering::Relaxed);
+        if backoff < 0 {
+            backoff = self.shared.detect_async_backoff_rx();
+            self.backoff.store(backoff, Ordering::Release);
+        }
+        return backoff as u32;
     }
 
     /// Receive message, will await when channel is empty.
@@ -98,7 +112,7 @@ impl<T> AsyncRx<T> {
     /// returns Err([RecvError]) when all Tx dropped.
     #[inline(always)]
     pub fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
-        return ReceiveFuture { shared: &self.shared, waker: None };
+        return ReceiveFuture { rx: self, waker: None };
     }
 
     /// Waits for a message to be received from the channel, but only for a limited time.
@@ -128,7 +142,7 @@ impl<T> AsyncRx<T> {
                 Box::pin(async_std::task::sleep(duration))
             }
         };
-        return ReceiveTimeoutFuture { shared: &self.shared, waker: None, sleep };
+        return ReceiveTimeoutFuture { rx: sef, waker: None, sleep };
     }
 
     /// Try to receive message, non-blocking.
@@ -160,13 +174,13 @@ impl<T> AsyncRx<T> {
     /// Return Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline(always)]
     pub(crate) fn poll_item(
-        shared: &ChannelShared<T>, ctx: &mut Context, o_waker: &mut Option<LockedWaker>,
+        &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>,
     ) -> Result<T, TryRecvError> {
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        let try_times = if shared.bound_size <= Some(2) { 5 } else { 1 };
-        let mut backoff = Backoff::new(try_times);
+        let shared = &self.shared;
+        let mut backoff = Backoff::new(self._detect_runtime());
         loop {
             if let Some(item) = shared.try_recv() {
                 shared.on_recv();
@@ -216,7 +230,7 @@ impl<T> AsyncRx<T> {
 
 /// A fixed-sized future object constructed by [AsyncRx::recv()]
 pub struct ReceiveFuture<'a, T> {
-    shared: &'a ChannelShared<T>,
+    rx: &'a AsyncRx<T>,
     waker: Option<LockedWaker>,
 }
 
@@ -228,9 +242,9 @@ impl<T> Drop for ReceiveFuture<'_, T> {
             // Cancelling the future, poll is not ready
             if waker.abandon() {
                 // We are waked, but giving up to recv, should notify another receiver for safety
-                self.shared.on_send();
+                self.rx.shared.on_send();
             } else {
-                self.shared.clear_recv_wakers(waker.get_seq());
+                self.rx.shared.clear_recv_wakers(waker.get_seq());
             }
         }
     }
@@ -241,7 +255,7 @@ impl<T> Future for ReceiveFuture<'_, T> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match AsyncRx::poll_item(&_self.shared, ctx, &mut _self.waker) {
+        match _self.rx.poll_item(ctx, &mut _self.waker) {
             Err(e) => {
                 if !e.is_empty() {
                     let _ = _self.waker.take();
@@ -260,7 +274,7 @@ impl<T> Future for ReceiveFuture<'_, T> {
 
 /// A fixed-sized future object constructed by [AsyncRx::recv_timeout()]
 pub struct ReceiveTimeoutFuture<'a, T> {
-    shared: &'a ChannelShared<T>,
+    rx: &'a AsyncRx<T>,
     waker: Option<LockedWaker>,
     sleep: Pin<Box<dyn Future<Output = ()>>>,
 }
@@ -273,9 +287,9 @@ impl<T> Drop for ReceiveTimeoutFuture<'_, T> {
             // Cancelling the future, poll is not ready
             if waker.abandon() {
                 // We are waked, but giving up to recv, should notify another receiver for safety
-                self.shared.on_send();
+                self.rx.shared.on_send();
             } else {
-                self.shared.clear_recv_wakers(waker.get_seq());
+                self.rx.shared.clear_recv_wakers(waker.get_seq());
             }
         }
     }
@@ -286,7 +300,7 @@ impl<T> Future for ReceiveTimeoutFuture<'_, T> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match AsyncRx::poll_item(&_self.shared, ctx, &mut _self.waker) {
+        match _self.rx.poll_item(ctx, &mut _self.waker) {
             Err(TryRecvError::Empty) => {
                 if let Poll::Ready(()) = _self.sleep.as_mut().poll(ctx) {
                     return Poll::Ready(Err(RecvTimeoutError::Timeout));
