@@ -107,21 +107,31 @@ impl<T> Rx<T> {
                     }
                     backoff.snooze();
                 }
-                shared.reg_recv_blocking(&waker);
-                if shared.is_disconnected() {
-                    if shared.is_empty() {
-                        waker.cancel();
-                        return Err(RecvTimeoutError::Disconnected);
-                    } else {
-                        // make sure all msgs received, since we have soonze
+                if let Ok(time_left) = check_timeout(deadline) {
+                    if waker.is_waked() {
+                        // defensive code for not precise timed out, it happens.
+                        // we cannot have multiple code of the same waker in registry
+                        shared.reg_recv_blocking(&waker);
+                    }
+                    if shared.is_disconnected() {
+                        if shared.is_empty() {
+                            waker.cancel();
+                            return Err(RecvTimeoutError::Disconnected);
+                        } else {
+                            // make sure all msgs received, since we have soonze
+                            continue;
+                        }
+                    }
+                    if !shared.is_empty() {
                         continue;
                     }
-                }
-                if !shared.is_empty() {
-                    continue;
-                }
-                backoff.reset();
-                if !wait_timeout(deadline) {
+                    backoff.reset();
+                    if let Some(dur) = time_left {
+                        std::thread::park_timeout(dur);
+                    } else {
+                        std::thread::park();
+                    }
+                } else {
                     if waker.abandon() {
                         // We are waked, but giving up to recv, should notify another receiver for safety
                         shared.on_send();

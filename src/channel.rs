@@ -8,7 +8,7 @@ use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::Context;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(crate) enum Channel<T> {
     List(SegQueue<T>),
@@ -241,22 +241,18 @@ impl<T> ChannelShared<T> {
     }
 }
 
-/// If timed out, returns false
-#[inline]
-pub fn wait_timeout(deadline: Option<Instant>) -> bool {
+/// On timed out, returns Err(())
+#[inline(always)]
+pub fn check_timeout(deadline: Option<Instant>) -> Result<Option<Duration>, ()> {
     if let Some(end) = deadline {
         let now = Instant::now();
         if now < end {
-            let dur = end - now;
-            std::thread::park_timeout(dur);
-            true
+            return Ok(Some(end - now));
         } else {
-            false
+            return Err(());
         }
-    } else {
-        std::thread::park();
-        true
     }
+    Ok(None)
 }
 
 #[allow(dead_code)]
