@@ -248,7 +248,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             } else {
                 SendWaker::new_async(ctx)
             };
-            (state, _waker) = shared.sender_reg_and_try(waker, &mut backoff);
+            (state, _waker) = shared.sender_reg_and_try(item, waker, &mut backoff);
             *o_waker = _waker;
             if state == WakerState::WAITING as u8 {
                 return Poll::Pending;
