@@ -60,7 +60,7 @@ impl<T> fmt::Debug for SendWaker<T> {
 impl<T> SendWaker<T> {
     #[inline(always)]
     pub fn cancel(&self) -> u8 {
-        match self.try_change_state(WakerState::INIT, WakerState::WAKED) {
+        match self.try_change_state(WakerState::WAITING, WakerState::WAKED) {
             Ok(_) => return WakerState::WAKED as u8,
             Err(s) => return s,
         }

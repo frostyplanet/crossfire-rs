@@ -26,7 +26,7 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn reg_waker(&self, waker: &SendWaker<T>) {
         debug_assert_eq!(waker.get_state(), WakerState::WAKED as u8);
-        waker.set_state(WakerState::INIT);
+        waker.set_state(WakerState::WAITING);
         // Clear the ptr in waker if it want to re-register
         waker.set_ptr(ptr::null_mut());
         match self {

@@ -148,7 +148,7 @@ impl<T: Send + 'static> Tx<T> {
                 // to allow more yield to receivers.
                 // For nxn (the backoff is already complete), wait a little bit.
                 backoff.reset();
-                (state, o_waker) = shared.sender_reg_and_try(waker, &mut backoff);
+                (state, o_waker) = shared.sender_reg_and_try(&mut _item, waker, &mut backoff);
                 while state == WakerState::WAITING as u8 {
                     match check_timeout(deadline) {
                         Ok(None) => {

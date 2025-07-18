@@ -7,6 +7,7 @@ use crossbeam_queue::SegQueue;
 use lazy_static::lazy_static;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::ptr;
 use std::sync::Arc;
 use std::task::Context;
 use std::time::{Duration, Instant};
@@ -241,6 +242,8 @@ impl<T> ChannelShared<T> {
                     }
                     self.on_send();
                     return WakerState::DONE as u8;
+                } else {
+                    assert!(waker.load_ptr() != ptr::null_mut());
                 }
                 waker._check_waker_nolock(ctx);
                 return state; // might be WAITING or WAKED
@@ -253,16 +256,25 @@ impl<T> ChannelShared<T> {
     /// when need_wake == false, will always return Some(state).
     #[inline]
     pub(crate) fn sender_reg_and_try(
-        &self, waker: SendWaker<T>, backoff: &mut Backoff,
+        &self, item: &mut MaybeUninit<T>, waker: SendWaker<T>, backoff: &mut Backoff,
     ) -> (u8, Option<SendWaker<T>>) {
         self.senders.reg_waker(&waker);
         let mut state: u8;
         // Not allow Spurious wake and enter this function again;
-        if self.is_disconnected() {
-            return (waker.active_close(), None);
-        }
-        if self.is_full() {
-            state = waker.commit_waiting();
+        debug_assert_eq!(waker.load_ptr(), ptr::null_mut());
+        if let Some(res) = self.try_send_oneshot(item) {
+            if res {
+                waker.set_state(WakerState::DONE);
+                self.senders.cancel_waker();
+                self.on_send();
+                return (WakerState::DONE as u8, Some(waker));
+            } else {
+                if self.is_disconnected() {
+                    return (waker.active_close(), None);
+                }
+                waker.set_ptr(item.as_mut_ptr());
+                state = waker.get_state();
+            }
         } else {
             // other's changing, omit close check and return
             return (waker.cancel(), None);
@@ -289,13 +301,32 @@ impl<T> ChannelShared<T> {
             // the receiver no need to check disconnect,
             // its impossible if there's live waker
             // Check the state again, during locked, no one allowed to change the status
-            match waker.change_state_smaller_eq(WakerState::WAITING, WakerState::WAKED) {
-                Ok(state) => {
+            let p = waker.load_ptr();
+            if p == ptr::null_mut() {
+                // Let the sender to re-register
+                // Might contend with sender_try_again_blocking
+                if waker.change_state_smaller_eq(WakerState::WAITING, WakerState::WAKED).is_ok() {
                     waker._wake_nolock();
-                    return state == WakerState::WAITING as u8;
                 }
-                Err(_) => return false,
+                drop(_guard);
+                return self.is_full();
             }
+            if let Channel::Array(inner) = &self.inner {
+                if unsafe { inner.push_with_ptr(p) } {
+                    waker.set_state(WakerState::DONE);
+                    waker._wake_nolock();
+                    drop(_guard);
+                    self.on_send();
+                    return true;
+                }
+            } else {
+                unreachable!();
+            }
+            // still full
+            // Let the sender to re-register
+            waker.set_state(WakerState::WAKED);
+            waker._wake_nolock();
+            return true; // Do not try another
         } else {
             if let Ok(_) = waker.wake_simple() {
                 return self.is_full();
