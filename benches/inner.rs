@@ -2,6 +2,7 @@ use criterion::*;
 use crossbeam_queue::{ArrayQueue, SegQueue};
 use crossbeam_utils::Backoff;
 use crossfire::collections::*;
+use parking_lot::Mutex;
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::sync::{
@@ -15,6 +16,55 @@ const ONE_MILLION: usize = 1000000;
 
 struct Foo {
     _inner: usize,
+}
+
+pub struct LockedQueue<T> {
+    empty: AtomicBool,
+    queue: Mutex<VecDeque<T>>,
+}
+
+impl<T> LockedQueue<T> {
+    #[inline]
+    pub fn new(cap: usize) -> Self {
+        Self { empty: AtomicBool::new(true), queue: Mutex::new(VecDeque::with_capacity(cap)) }
+    }
+
+    #[inline(always)]
+    pub fn push(&self, msg: T) {
+        let mut guard = self.queue.lock();
+        if guard.is_empty() {
+            self.empty.store(false, Ordering::Release);
+        }
+        guard.push_back(msg);
+    }
+
+    #[inline(always)]
+    pub fn pop(&self) -> Option<T> {
+        if self.empty.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut guard = self.queue.lock();
+        if let Some(item) = guard.pop_front() {
+            if guard.len() == 0 {
+                self.empty.store(true, Ordering::Release);
+            }
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        let guard = self.queue.lock();
+        guard.len()
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub fn exists(&self) -> bool {
+        !self.empty.load(Ordering::Acquire)
+    }
 }
 
 pub struct SpinQueue<T> {
