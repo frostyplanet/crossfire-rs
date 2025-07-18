@@ -35,6 +35,7 @@ use core::cell::UnsafeCell;
 use core::fmt;
 use core::mem::{self, MaybeUninit};
 use core::panic::{RefUnwindSafe, UnwindSafe};
+use core::ptr;
 use core::sync::atomic::{self, AtomicUsize, Ordering};
 
 use crossbeam_utils::{Backoff, CachePadded};
@@ -147,7 +148,7 @@ impl<T> ArrayQueue<T> {
     }
 
     #[inline(always)]
-    fn push_or_else<F, R>(&self, value: &MaybeUninit<T>, f: F) -> Result<(), R>
+    fn push_or_else<F, R>(&self, value: *const T, f: F) -> Result<(), R>
     where
         F: Fn(usize, usize, &Slot<T>) -> Result<(), R>,
     {
@@ -187,7 +188,7 @@ impl<T> ArrayQueue<T> {
                         // Write the value into the slot and update the stamp.
                         unsafe {
                             let item: &mut MaybeUninit<T> = mem::transmute(slot.value.get());
-                            item.write(value.assume_init_read());
+                            item.write(ptr::read(value));
                         }
                         slot.stamp.store(tail + 1, Ordering::Release);
                         return Ok(());
@@ -231,8 +232,8 @@ impl<T> ArrayQueue<T> {
     ///     // Value is in the queue, just forget it.
     /// }
     /// ```
-    pub unsafe fn push_uninit_ref(&self, value: &MaybeUninit<T>) -> Result<(), ()> {
-        self.push_or_else(&value, |tail, _, _| {
+    pub unsafe fn push_with_ptr(&self, value: *const T) -> Result<(), ()> {
+        self.push_or_else(value, |tail, _, _| {
             let head = self.head.load(Ordering::Relaxed);
 
             // If the head lags one lap behind the tail as well...
@@ -261,7 +262,7 @@ impl<T> ArrayQueue<T> {
     /// ```
     pub fn push(&self, value: T) -> Result<(), T> {
         let value = MaybeUninit::new(value);
-        self.push_or_else(&value, |tail, _, _| {
+        self.push_or_else(value.as_ptr(), |tail, _, _| {
             let head = self.head.load(Ordering::Relaxed);
 
             // If the head lags one lap behind the tail as well...
@@ -293,7 +294,7 @@ impl<T> ArrayQueue<T> {
     /// ```
     pub fn force_push(&self, value: T) -> Option<T> {
         let value = MaybeUninit::new(value);
-        self.push_or_else(&value, |tail, new_tail, slot| {
+        self.push_or_else(value.as_ptr(), |tail, new_tail, slot| {
             let head = tail.wrapping_sub(self.one_lap);
             let new_head = new_tail.wrapping_sub(self.one_lap);
 
