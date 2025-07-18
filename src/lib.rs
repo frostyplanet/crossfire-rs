@@ -186,8 +186,6 @@
 //! [AsyncSink::poll_send()](crate::sink::AsyncSink::poll_send()) or [AsyncStream::poll_item()](crate::stream::AsyncStream::poll_item()) with Context.
 
 extern crate futures;
-#[macro_use]
-extern crate enum_dispatch;
 
 mod channel;
 pub use channel::ChannelShared;
