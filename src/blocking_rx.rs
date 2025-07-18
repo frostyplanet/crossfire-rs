@@ -44,7 +44,7 @@ pub struct Rx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
-    waker_cache: WakerCache,
+    waker_cache: WakerCache<RecvWaker>,
 }
 
 unsafe impl<T: Send> Send for Rx<T> {}
@@ -81,66 +81,86 @@ impl<T> Rx<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn _recv_blocking(
-        shared: &ChannelShared<T>, deadline: Option<Instant>, cache: &WakerCache,
-    ) -> Result<T, RecvTimeoutError> {
-        if shared.bound_size == Some(0) {
+    pub(crate) fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<T, RecvTimeoutError> {
+        let shared = &self.shared;
+        if shared.is_zero() {
             todo!();
         } else {
-            if let Some(item) = shared.try_recv() {
-                shared.on_recv();
-                return Ok(item);
-            }
-            let waker = cache.new_blocking();
-            debug_assert!(waker.is_waked());
-            let mut backoff = Backoff::new(BackoffConfig::default());
-            backoff.snooze();
-            loop {
-                loop {
+            macro_rules! try_recv {
+                () => {
                     if let Some(item) = shared.try_recv() {
                         shared.on_recv();
-                        cache.push(waker);
                         return Ok(item);
                     }
+                };
+                ($waker: expr) => {
+                    if let Some(item) = shared.try_recv() {
+                        shared.on_recv();
+                        shared.recv_waker_done(&$waker);
+                        self.waker_cache.push($waker);
+                        return Ok(item);
+                    }
+                };
+            }
+            try_recv!();
+            let mut backoff = Backoff::new(BackoffConfig::default());
+            loop {
+                backoff.snooze();
+                try_recv!();
+                if backoff.is_completed() {
+                    break;
+                }
+            }
+            let waker = self.waker_cache.new_blocking();
+            debug_assert!(waker.is_waked());
+            let mut state;
+            'MAIN: loop {
+                match shared.reg_recv(&waker) {
+                    Ok(_) => {
+                        if shared.is_empty() {
+                            if shared.is_disconnected() {
+                                break 'MAIN;
+                            }
+                            state = waker.commit_waiting();
+                        } else {
+                            state = waker.cancel();
+                        }
+                    }
+                    Err(s) => {
+                        state = s;
+                    }
+                }
+                while state == WakerState::WAITING as u8 {
+                    match check_timeout(deadline) {
+                        Ok(None) => {
+                            std::thread::park();
+                        }
+                        Ok(Some(dur)) => {
+                            std::thread::park_timeout(dur);
+                        }
+                        Err(_) => {
+                            let _ = shared.abandon_recv_waker(waker);
+                            return Err(RecvTimeoutError::Timeout);
+                        }
+                    }
+                    state = waker.get_state();
+                }
+                if state == WakerState::CLOSED as u8 {
+                    break 'MAIN;
+                }
+                backoff.reset();
+                // Waited due to park_timeout or spurious waked
+                loop {
+                    try_recv!(waker);
                     if backoff.is_completed() {
                         break;
                     }
                     backoff.snooze();
                 }
-                if let Ok(time_left) = check_timeout(deadline) {
-                    if waker.is_waked() {
-                        // defensive code for not precise timed out, it happens.
-                        // we cannot have multiple code of the same waker in registry
-                        shared.reg_recv_blocking(&waker);
-                    }
-                    if shared.is_disconnected() {
-                        if shared.is_empty() {
-                            waker.cancel();
-                            return Err(RecvTimeoutError::Disconnected);
-                        } else {
-                            // make sure all msgs received, since we have soonze
-                            continue;
-                        }
-                    }
-                    if !shared.is_empty() {
-                        continue;
-                    }
-                    backoff.reset();
-                    if let Some(dur) = time_left {
-                        std::thread::park_timeout(dur);
-                    } else {
-                        std::thread::park();
-                    }
-                } else {
-                    if waker.abandon() {
-                        // We are waked, but giving up to recv, should notify another receiver for safety
-                        shared.on_send();
-                    } else {
-                        shared.clear_recv_wakers(waker.get_seq());
-                    }
-                    return Err(RecvTimeoutError::Timeout);
-                }
             }
+            try_recv!(waker);
+            // make sure all msgs received, since we have soonze
+            return Err(RecvTimeoutError::Disconnected);
         }
     }
 
@@ -151,7 +171,7 @@ impl<T> Rx<T> {
     /// Returns Err([RecvError]) when all Tx dropped.
     #[inline]
     pub fn recv<'a>(&'a self) -> Result<T, RecvError> {
-        Self::_recv_blocking(&self.shared, None, &self.waker_cache).map_err(|err| match err {
+        self._recv_blocking(None).map_err(|err| match err {
             RecvTimeoutError::Disconnected => RecvError,
             RecvTimeoutError::Timeout => unreachable!(),
         })
@@ -166,7 +186,7 @@ impl<T> Rx<T> {
     /// returns Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        if self.shared.bound_size == Some(0) {
+        if self.shared.is_zero() {
             todo!();
         } else {
             if let Some(item) = self.shared.try_recv() {
@@ -195,7 +215,7 @@ impl<T> Rx<T> {
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
-            Some(deadline) => Self::_recv_blocking(&self.shared, Some(deadline), &self.waker_cache),
+            Some(deadline) => self._recv_blocking(Some(deadline)),
             None => self.try_recv().map_err(|e| match e {
                 TryRecvError::Disconnected => RecvTimeoutError::Disconnected,
                 TryRecvError::Empty => RecvTimeoutError::Timeout,
