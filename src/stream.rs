@@ -1,4 +1,4 @@
-use crate::locked_waker::LockedWaker;
+use crate::channel::*;
 use crate::{AsyncRx, MAsyncRx};
 use futures::stream;
 use std::fmt;
@@ -11,7 +11,7 @@ use std::task::*;
 /// Implemented futures::stream::Stream;
 pub struct AsyncStream<T> {
     rx: AsyncRx<T>,
-    waker: Option<LockedWaker>,
+    waker: Option<RecvWaker>,
     ended: bool,
 }
 

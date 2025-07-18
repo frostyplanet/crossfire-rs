@@ -172,31 +172,49 @@ impl<T> AsyncRx<T> {
     /// Return Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline(always)]
     pub(crate) fn poll_item(
-        &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>,
+        &self, ctx: &mut Context, o_waker: &mut Option<RecvWaker>,
     ) -> Result<T, TryRecvError> {
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
         let shared = &self.shared;
-        let mut backoff =
-            Backoff::new(BackoffConfig::default().async_limit(self._detect_runtime()));
+        let config = BackoffConfig::default().async_limit(self._detect_runtime());
+        let mut backoff = Backoff::new(config);
         loop {
             if let Some(item) = shared.try_recv() {
                 shared.on_recv();
-                if let Some(old_waker) = o_waker.take() {
-                    shared.cancel_recv_waker(old_waker);
+                if let Some(waker) = o_waker.take() {
+                    shared.recv_waker_done(&waker);
                 }
                 return Ok(item);
             }
             if backoff.is_completed() {
-                if shared.reg_recv_async(ctx, o_waker) {
-                    // waker is not consumed
-                    break;
+                let _waker;
+                if let Some(waker) = o_waker.as_ref() {
+                    if waker.get_state() == WakerState::WAKED as u8 {
+                        waker._check_waker_nolock(ctx);
+                    } else {
+                        waker.check_waker(ctx);
+                    }
+                    _waker = waker;
+                } else {
+                    let waker = RecvWaker::new_async(ctx);
+                    o_waker.replace(waker);
+                    _waker = o_waker.as_ref().unwrap();
                 }
-                // NOTE: The other side put something whie reg_send and did not see the waker,
-                // should check the channel again, otherwise might incur a dead lock.
-                if !shared.is_empty() {
-                    continue;
+                if shared.reg_recv(_waker).is_ok() {
+                    // NOTE: The other side put something whie reg_send and did not see the waker,
+                    // should check the channel again, otherwise might incur a dead lock.
+                    if !shared.is_empty() {
+                        if let Some(item) = shared.try_recv() {
+                            shared.on_recv();
+                            if let Some(waker) = o_waker.take() {
+                                shared.recv_waker_done(&waker);
+                            }
+                            return Ok(item);
+                        }
+                    }
+                    _waker.commit_waiting();
                 }
                 break;
             }
@@ -230,7 +248,7 @@ impl<T> AsyncRx<T> {
 /// A fixed-sized future object constructed by [AsyncRx::recv()]
 pub struct RecvFuture<'a, T> {
     rx: &'a AsyncRx<T>,
-    waker: Option<LockedWaker>,
+    waker: Option<RecvWaker>,
 }
 
 unsafe impl<T: Send> Send for RecvFuture<'_, T> {}
@@ -238,13 +256,8 @@ unsafe impl<T: Send> Send for RecvFuture<'_, T> {}
 impl<T> Drop for RecvFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
-            // Cancelling the future, poll is not ready
-            if waker.abandon() {
-                // We are waked, but giving up to recv, should notify another receiver for safety
-                self.rx.shared.on_send();
-            } else {
-                self.rx.shared.clear_recv_wakers(waker.get_seq());
-            }
+            // cancelled
+            self.rx.shared.abandon_recv_waker(waker);
         }
     }
 }
@@ -274,7 +287,7 @@ impl<T> Future for RecvFuture<'_, T> {
 /// A fixed-sized future object constructed by [AsyncRx::recv_timeout()]
 pub struct RecvTimeoutFuture<'a, T> {
     rx: &'a AsyncRx<T>,
-    waker: Option<LockedWaker>,
+    waker: Option<RecvWaker>,
     sleep: Pin<Box<dyn Future<Output = ()>>>,
 }
 
@@ -283,13 +296,8 @@ unsafe impl<T: Unpin + Send> Send for RecvTimeoutFuture<'_, T> {}
 impl<T> Drop for RecvTimeoutFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
-            // Cancelling the future, poll is not ready
-            if waker.abandon() {
-                // We are waked, but giving up to recv, should notify another receiver for safety
-                self.rx.shared.on_send();
-            } else {
-                self.rx.shared.clear_recv_wakers(waker.get_seq());
-            }
+            // cancelled
+            self.rx.shared.abandon_recv_waker(waker);
         }
     }
 }

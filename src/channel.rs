@@ -1,11 +1,12 @@
 pub use super::waker_registry::*;
+use crate::backoff::*;
 use crate::crossbeam::array_queue::ArrayQueue;
 pub use crate::crossbeam::err::*;
 pub use crate::locked_waker::*;
 use crossbeam_queue::SegQueue;
 use lazy_static::lazy_static;
-use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::mem::MaybeUninit;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Context;
 use std::time::{Duration, Instant};
@@ -23,6 +24,8 @@ impl<T> Channel<T> {
 
     #[inline(always)]
     pub fn new_array(bound: usize) -> Self {
+        assert!(bound <= u32::MAX as usize);
+        assert!(bound > 0);
         Self::Array(ArrayQueue::new(bound))
     }
 
@@ -64,38 +67,24 @@ pub struct ChannelShared<T> {
     tx_count: AtomicUsize,
     rx_count: AtomicUsize,
     inner: Channel<T>,
-    pub(crate) recvs: Registry,
-    pub(crate) senders: Registry,
-    pub(crate) bound_size: Option<usize>,
-}
-
-impl<T: Send + 'static> ChannelShared<T> {
-    pub fn try_send(&self, item: &mem::MaybeUninit<T>) -> Result<(), ()> {
-        match &self.inner {
-            Channel::List(inner) => {
-                inner.push(unsafe { item.assume_init_read() });
-                return Ok(());
-            }
-            Channel::Array(inner) => {
-                if unsafe { inner.push_with_ptr(item.as_ptr()) } {
-                    return Ok(());
-                } else {
-                    return Err(());
-                }
-            }
-        }
-    }
+    pub(crate) senders: RegistrySender<T>,
+    pub(crate) recvs: RegistryRecv,
+    bound_size: Option<u32>,
+    version: AtomicU32,
 }
 
 impl<T> ChannelShared<T> {
-    pub(crate) fn new(inner: Channel<T>, senders: Registry, recvs: Registry) -> Arc<Self> {
+    pub(crate) fn new(
+        inner: Channel<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
+    ) -> Arc<Self> {
         Arc::new(Self {
             closed: AtomicBool::new(false),
             tx_count: AtomicUsize::new(1),
             rx_count: AtomicUsize::new(1),
             senders,
             recvs,
-            bound_size: inner.get_bound(),
+            bound_size: if let Some(bound) = inner.get_bound() { Some(bound as u32) } else { None },
+            version: AtomicU32::new(0),
             inner,
         })
     }
@@ -110,6 +99,11 @@ impl<T> ChannelShared<T> {
                 return inner.pop();
             }
         }
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_zero(&self) -> bool {
+        self.bound_size == Some(0)
     }
 
     /// The number of messages in the channel at the moment.
@@ -167,7 +161,9 @@ impl<T> ChannelShared<T> {
     pub(crate) fn close_tx(&self) {
         if self.tx_count.fetch_sub(1, Ordering::SeqCst) <= 1 {
             self.closed.store(true, Ordering::Release);
-            self.recvs.close();
+            self._close_all();
+        } else {
+            self.version.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -176,62 +172,210 @@ impl<T> ChannelShared<T> {
     pub(crate) fn close_rx(&self) {
         if self.rx_count.fetch_sub(1, Ordering::SeqCst) <= 1 {
             self.closed.store(true, Ordering::Release);
-            self.senders.close();
+            self._close_all();
+        } else {
+            self.version.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[inline(always)]
+    fn _close_all(&self) {
+        while let Some(waker) = self.recvs.pop() {
+            waker.close_wake();
+        }
+        while let Some(waker) = self.senders.pop() {
+            waker.close_wake();
         }
     }
 
     /// Register waker for current rx
     #[inline(always)]
-    pub(crate) fn reg_recv_async(
-        &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>,
-    ) -> bool {
-        self.recvs.reg_async(ctx, o_waker)
-    }
-
-    /// Register waker for current tx
-    #[inline(always)]
-    pub(crate) fn reg_send_async(
-        &self, ctx: &mut Context, o_waker: &mut Option<LockedWaker>,
-    ) -> bool {
-        self.senders.reg_async(ctx, o_waker)
+    pub(crate) fn reg_recv(&self, o_waker: &RecvWaker) -> Result<(), u8> {
+        self.recvs.reg_waker(o_waker)
     }
 
     #[inline(always)]
-    pub(crate) fn reg_send_blocking(&self, waker: &LockedWaker) {
-        self.senders.reg_blocking(waker);
+    pub(crate) fn send(&self, item: &MaybeUninit<T>) -> bool {
+        match &self.inner {
+            Channel::Array(inner) => {
+                return unsafe { inner.push_with_ptr(item.as_ptr()) };
+            }
+            Channel::List(inner) => {
+                inner.push(unsafe { item.assume_init_read() });
+                return true;
+            }
+        }
     }
 
-    #[inline(always)]
-    pub(crate) fn reg_recv_blocking(&self, waker: &LockedWaker) {
-        self.recvs.reg_blocking(waker);
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn try_send_oneshot(&self, item: &MaybeUninit<T>) -> Option<bool> {
+        match &self.inner {
+            Channel::Array(inner) => {
+                return unsafe { inner.try_push_oneshot(item.as_ptr()) };
+            }
+            Channel::List(_inner) => {
+                unreachable!();
+            }
+        }
+    }
+
+    /// When waker exists and reused for async_tx, might need to check_waker every poll(),
+    /// in case of spurious waked up by runtime.
+    #[inline]
+    pub(crate) fn sender_try_again_async(
+        &self, item: &mut MaybeUninit<T>, waker: &SendWaker<T>, ctx: &mut Context,
+        backoff_conf: BackoffConfig,
+    ) -> u8 {
+        let mut backoff = Backoff::new(backoff_conf);
+        if self.is_disconnected() {
+            return waker.active_close();
+        }
+        // Assume WAITING, must check_waker
+        loop {
+            if let Some(guard) = waker.try_lock_weak() {
+                let state = waker.get_state();
+                if state >= WakerState::WAKED as u8 {
+                    // Return if WAKED, waker should re-register anyway
+                    return state;
+                }
+                if self.send(item) {
+                    waker.set_state(WakerState::DONE);
+                    drop(guard);
+                    if state <= WakerState::WAITING as u8 {
+                        self.senders.cancel_waker();
+                    }
+                    self.on_send();
+                    return WakerState::DONE as u8;
+                }
+                waker._check_waker_nolock(ctx);
+                return state; // might be WAITING or WAKED
+            }
+            backoff.snooze();
+        }
+    }
+
+    /// if need_wake == true, called from on_recv(), when return None indicates try to wake up next.
+    /// when need_wake == false, will always return Some(state).
+    #[inline]
+    pub(crate) fn sender_reg_and_try(
+        &self, waker: SendWaker<T>, backoff: &mut Backoff,
+    ) -> (u8, Option<SendWaker<T>>) {
+        self.senders.reg_waker(&waker);
+        let mut state: u8;
+        // Not allow Spurious wake and enter this function again;
+        if self.is_disconnected() {
+            return (waker.active_close(), None);
+        }
+        if self.is_full() {
+            state = waker.commit_waiting();
+        } else {
+            // other's changing, omit close check and return
+            return (waker.cancel(), None);
+        }
+        while state < WakerState::WAKED as u8 {
+            if backoff.is_completed() {
+                break;
+            }
+            backoff.yield_now();
+            state = waker.get_state();
+        }
+        return (state, Some(waker));
+    }
+
+    /// Return is_waked
+    #[inline]
+    pub(crate) fn on_recv_try_send(&self, waker: &SendWaker<T>) -> bool {
+        if let Some(_guard) = waker.try_lock() {
+            let state = waker.get_state();
+            if state >= WakerState::WAKED as u8 {
+                // It's not possible to be WAKED
+                return false;
+            }
+            // the receiver no need to check disconnect,
+            // its impossible if there's live waker
+            // Check the state again, during locked, no one allowed to change the status
+            match waker.change_state_smaller_eq(WakerState::WAITING, WakerState::WAKED) {
+                Ok(state) => {
+                    waker._wake_nolock();
+                    return state == WakerState::WAITING as u8;
+                }
+                Err(_) => return false,
+            }
+        } else {
+            if let Ok(_) = waker.wake_simple() {
+                return self.is_full();
+            } else {
+                return false;
+            }
+        }
     }
 
     /// Wake up one rx
     #[inline(always)]
     pub(crate) fn on_send(&self) {
-        self.recvs.fire()
+        while let Some(waker) = self.recvs.pop() {
+            if let Ok(state) = waker.wake_simple() {
+                if state != WakerState::INIT as u8 {
+                    return;
+                }
+            }
+        }
     }
 
     /// Wake up one tx
     #[inline(always)]
     pub(crate) fn on_recv(&self) {
-        self.senders.fire()
+        while let Some(waker) = self.senders.pop() {
+            if self.on_recv_try_send(&waker) {
+                return;
+            }
+        }
     }
 
     #[inline(always)]
-    pub(crate) fn cancel_recv_waker(&self, waker: LockedWaker) {
-        self.recvs.cancel_waker(waker);
+    pub(crate) fn recv_waker_done(&self, waker: &RecvWaker) {
+        let state = waker.get_state();
+        if state <= WakerState::WAITING as u8 {
+            // including WakerState::INIT
+            waker.set_state(WakerState::DONE);
+            self.recvs.cancel_waker();
+        }
     }
 
+    /// Call on cancellation, return true to indicate drop temporary message
+    /// return false to indicate already DONE.
     #[inline(always)]
-    pub(crate) fn cancel_send_waker(&self, waker: LockedWaker) {
-        self.senders.cancel_waker(waker);
+    pub(crate) fn abandon_send_waker(&self, waker: SendWaker<T>) -> bool {
+        let state = waker.abandon();
+        if state == WakerState::CLOSED as u8 {
+            self.senders.clear_wakers(waker.get_seq());
+            return true;
+        } else if state == WakerState::DONE as u8 {
+            return false;
+        } else {
+            debug_assert_eq!(state, WakerState::WAKED as u8);
+            // We are waked, but give up sending, should notify another sender for safety
+            self.on_recv();
+            return true;
+        }
     }
 
-    /// On timeout, clear dead wakers on sender queue
+    /// Call on cancellation, return true to indicate drop temporary message
     #[inline(always)]
-    pub(crate) fn clear_send_wakers(&self, seq: usize) {
-        self.senders.clear_wakers(seq);
+    pub(crate) fn abandon_recv_waker(&self, waker: RecvWaker) -> bool {
+        let state = waker.abandon();
+        if state == WakerState::CLOSED as u8 {
+            self.recvs.clear_wakers(waker.get_seq());
+            return true;
+        } else if state == WakerState::DONE as u8 {
+            return false;
+        } else {
+            debug_assert_eq!(state, WakerState::WAKED as u8);
+            // We are waked, but give up receiving, should notify another receiver for safety
+            self.on_send();
+            return true;
+        }
     }
 
     /// On timeout, clear dead wakers on receiver queue
@@ -253,9 +397,9 @@ impl<T> ChannelShared<T> {
             }
         }
         if self.bound_size > Some(0) && self.bound_size <= Some(2) {
-            return 5;
+            return 6;
         } else {
-            return 0;
+            return 1;
         }
     }
 
