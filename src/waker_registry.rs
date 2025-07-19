@@ -102,7 +102,7 @@ impl RegistryTrait for RegistrySingle {
             // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
             // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
             // There might be situation like spurious wakeup, poll() again under no fire() ever
-            // happend, waker still exists but cannot be used to wake the current future.
+            // happened, waker still exists but cannot be used to wake the current future.
             // Since there's no lock inside fire(), to avoid race, can not update the content but to put a new one.
             if _waker.will_wake(ctx) {
                 // Normally only selection or multiplex future will get here.
@@ -208,7 +208,7 @@ impl RegistryTrait for RegistryMulti {
             // ref: https://github.com/frostyplanet/crossfire-rs/issues/14
             // https://docs.rs/tokio/latest/tokio/runtime/index.html#:~:text=Normally%2C%20tasks%20are%20scheduled%20only,is%20called%20a%20spurious%20wakeup
             // There might be situation like spurious wakeup, poll() again under no fire() ever
-            // happend, waker still exists but cannot be used to wake the current future.
+            // happened, waker still exists but cannot be used to wake the current future.
             // Since there's no lock inside fire(), to avoid race, can not update the content but to put a new one.
             if _waker.will_wake(ctx) {
                 // Normally only selection or multiplex future will get here.
