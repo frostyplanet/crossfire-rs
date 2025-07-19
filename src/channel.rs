@@ -5,7 +5,7 @@ pub use crate::locked_waker::*;
 use crossbeam_queue::SegQueue;
 use lazy_static::lazy_static;
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Context;
 use std::time::{Duration, Instant};
@@ -61,8 +61,8 @@ impl<T> Channel<T> {
 
 pub struct ChannelShared<T> {
     closed: AtomicBool,
-    tx_count: AtomicU64,
-    rx_count: AtomicU64,
+    tx_count: AtomicUsize,
+    rx_count: AtomicUsize,
     inner: Channel<T>,
     pub(crate) recvs: Registry,
     pub(crate) senders: Registry,
@@ -91,8 +91,8 @@ impl<T> ChannelShared<T> {
     pub(crate) fn new(inner: Channel<T>, senders: Registry, recvs: Registry) -> Arc<Self> {
         Arc::new(Self {
             closed: AtomicBool::new(false),
-            tx_count: AtomicU64::new(1),
-            rx_count: AtomicU64::new(1),
+            tx_count: AtomicUsize::new(1),
+            rx_count: AtomicUsize::new(1),
             senders,
             recvs,
             bound_size: inner.get_bound(),
@@ -258,12 +258,12 @@ pub fn check_timeout(deadline: Option<Instant>) -> Result<Option<Duration>, ()> 
 #[allow(dead_code)]
 #[derive(Default)]
 pub struct ChannelStats {
-    tx_try: AtomicU64,
-    tx_poll: AtomicU64,
-    tx_done: AtomicU64,
-    rx_try: AtomicU64,
-    rx_poll: AtomicU64,
-    rx_done: AtomicU64,
+    tx_try: AtomicUsize,
+    tx_poll: AtomicUsize,
+    tx_done: AtomicUsize,
+    rx_try: AtomicUsize,
+    rx_poll: AtomicUsize,
+    rx_done: AtomicUsize,
 }
 
 lazy_static! {
@@ -305,13 +305,13 @@ impl ChannelStats {
 
     #[inline(always)]
     pub(crate) fn tx_poll(retry: usize) {
-        STATS.tx_try.fetch_add(retry as u64, Ordering::SeqCst);
+        STATS.tx_try.fetch_add(retry, Ordering::SeqCst);
         STATS.tx_poll.fetch_add(1, Ordering::SeqCst);
     }
 
     #[inline(always)]
     pub(crate) fn rx_poll(retry: usize) {
-        STATS.rx_try.fetch_add(retry as u64, Ordering::SeqCst);
+        STATS.rx_try.fetch_add(retry, Ordering::SeqCst);
         STATS.rx_poll.fetch_add(1, Ordering::SeqCst);
     }
 
