@@ -8,6 +8,12 @@ pub struct ArcCell<T> {
     ptr: AtomicPtr<T>,
 }
 
+impl<T> Drop for ArcCell<T> {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 unsafe impl<T> Send for ArcCell<T> {}
 unsafe impl<T> Sync for ArcCell<T> {}
 
