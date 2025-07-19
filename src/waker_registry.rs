@@ -162,7 +162,6 @@ struct RegistryMultiInner {
 
 pub struct RegistryMulti {
     checking: AtomicBool,
-    // 0 is invalid for seq
     is_empty: AtomicBool,
     inner: Mutex<RegistryMultiInner>,
 }
@@ -181,10 +180,7 @@ impl RegistryMulti {
     fn push(&self, waker: &LockedWaker) {
         let weak = waker.weak();
         let mut guard = self.inner.lock();
-        let mut seq = guard.seq.wrapping_add(1);
-        if seq == 0 {
-            seq = seq.wrapping_add(1);
-        }
+        let seq = guard.seq.wrapping_add(1);
         guard.seq = seq;
         waker.set_seq(seq);
         if guard.queue.is_empty() {
