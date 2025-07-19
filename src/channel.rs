@@ -230,13 +230,13 @@ impl<T> ChannelShared<T> {
 
     /// On timeout, clear dead wakers on sender queue
     #[inline(always)]
-    pub(crate) fn clear_send_wakers(&self, seq: u64) {
+    pub(crate) fn clear_send_wakers(&self, seq: usize) {
         self.senders.clear_wakers(seq);
     }
 
     /// On timeout, clear dead wakers on receiver queue
     #[inline(always)]
-    pub(crate) fn clear_recv_wakers(&self, seq: u64) {
+    pub(crate) fn clear_recv_wakers(&self, seq: usize) {
         self.recvs.clear_wakers(seq);
     }
 }

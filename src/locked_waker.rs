@@ -3,7 +3,7 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::transmute;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Weak,
 };
 use std::task::*;
@@ -16,7 +16,7 @@ impl LockedWaker {
     #[inline(always)]
     pub(crate) fn new_async(ctx: &Context) -> Self {
         Self(Arc::new(LockedWakerInner {
-            seq: AtomicU64::new(0),
+            seq: AtomicUsize::new(0),
             waked: AtomicBool::new(false),
             waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
         }))
@@ -33,7 +33,7 @@ impl LockedWaker {
     #[inline(always)]
     pub(crate) fn new_blocking() -> Self {
         Self(Arc::new(LockedWakerInner {
-            seq: AtomicU64::new(0),
+            seq: AtomicUsize::new(0),
             waked: AtomicBool::new(true),
             waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
         }))
@@ -51,12 +51,12 @@ impl LockedWaker {
     }
 
     #[inline(always)]
-    pub(crate) fn get_seq(&self) -> u64 {
+    pub(crate) fn get_seq(&self) -> usize {
         self.0.seq.load(Ordering::Acquire)
     }
 
     #[inline(always)]
-    pub(crate) fn set_seq(&self, seq: u64) {
+    pub(crate) fn set_seq(&self, seq: usize) {
         self.0.seq.store(seq, Ordering::Release);
     }
 
@@ -91,7 +91,7 @@ enum WakerType {
 
 struct LockedWakerInner {
     waked: AtomicBool,
-    seq: AtomicU64,
+    seq: AtomicUsize,
     waker: UnsafeCell<WakerType>,
 }
 
@@ -152,7 +152,7 @@ impl LockedWakerRef {
     }
 
     /// return true to stop; return false to continue the search.
-    pub(crate) fn try_to_clear(&self, seq: u64) -> bool {
+    pub(crate) fn try_to_clear(&self, seq: usize) -> bool {
         if let Some(waker) = self.0.upgrade() {
             let _seq = waker.seq.load(Ordering::Acquire);
             if _seq == seq {
