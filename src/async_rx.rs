@@ -78,6 +78,13 @@ impl<T> Drop for AsyncRx<T> {
     }
 }
 
+impl<T> From<Rx<T>> for AsyncRx<T> {
+    fn from(value: Rx<T>) -> Self {
+        value.add_rx();
+        Self::new(value.shared.clone())
+    }
+}
+
 impl<T> AsyncRx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
@@ -444,6 +451,13 @@ impl<T> Deref for MAsyncRx<T> {
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<T> From<MRx<T>> for MAsyncRx<T> {
+    fn from(value: MRx<T>) -> Self {
+        value.add_rx();
+        Self::new(value.shared.clone())
     }
 }
 
