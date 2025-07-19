@@ -212,7 +212,7 @@ impl<T> ArrayQueue<T> {
 
     /// Attempts to push an element put in MaybeUninit into the queue.
     ///
-    /// If successful, the ownership is transfered to the queue.
+    /// If successful, the ownership is transferred to the queue.
     ///
     /// If the queue is full, the element is not moved,
     /// and you have to perform drop or recovery by yourselfs.
