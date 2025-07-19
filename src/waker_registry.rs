@@ -21,7 +21,7 @@ pub trait RegistryTrait {
     /// For thread context
     fn reg_blocking(&self, _waker: &LockedWaker);
 
-    fn clear_wakers(&self, _seq: u64);
+    fn clear_wakers(&self, _seq: usize);
 
     fn cancel_waker(&self, _waker: LockedWaker);
 
@@ -60,7 +60,7 @@ impl RegistryTrait for RegistryDummy {
     }
 
     #[inline(always)]
-    fn clear_wakers(&self, _seq: u64) {}
+    fn clear_wakers(&self, _seq: usize) {}
 
     #[inline(always)]
     fn cancel_waker(&self, _waker: LockedWaker) {}
@@ -129,7 +129,7 @@ impl RegistryTrait for RegistrySingle {
     }
 
     #[inline(always)]
-    fn clear_wakers(&self, _seq: u64) {
+    fn clear_wakers(&self, _seq: usize) {
         // Got to be it, because only one single thread.
         self.cell.clear();
     }
@@ -157,7 +157,7 @@ impl RegistryTrait for RegistrySingle {
 
 struct RegistryMultiInner {
     queue: VecDeque<LockedWakerRef>,
-    seq: u64,
+    seq: usize,
 }
 
 pub struct RegistryMulti {
@@ -232,7 +232,7 @@ impl RegistryTrait for RegistryMulti {
     /// Call when ReceiveFuture is cancelled.
     /// to clear the LockedWakerRef which has been sent to the other side.
     #[inline(always)]
-    fn clear_wakers(&self, seq: u64) {
+    fn clear_wakers(&self, seq: usize) {
         if self.checking.swap(true, Ordering::SeqCst) {
             // Other thread is cleaning
             return;
