@@ -1,4 +1,4 @@
-use crate::backoff::Backoff;
+use crate::backoff::*;
 use crate::{channel::*, AsyncTx, MAsyncTx};
 use std::cell::Cell;
 use std::fmt;
@@ -109,7 +109,7 @@ impl<T: Send + 'static> Tx<T> {
                 #[allow(unused_mut)]
                 let mut waker = WakerCache::new_blocking(waker_cache);
                 debug_assert!(waker.is_waked());
-                let mut backoff = Backoff::new(6);
+                let mut backoff = Backoff::new(BackoffConfig::default());
                 backoff.snooze();
                 loop {
                     loop {
@@ -293,10 +293,10 @@ impl<T: Send + 'static> MTx<T> {
                         shared.on_send();
                         return Ok(());
                     }
-                    backoff = Backoff::new(6);
+                    backoff = Backoff::new(BackoffConfig::default());
                     backoff.snooze();
                 } else {
-                    backoff = Backoff::new(6);
+                    backoff = Backoff::new(BackoffConfig::default());
                 }
                 #[allow(unused_mut)]
                 let mut waker = cache.new_blocking();
