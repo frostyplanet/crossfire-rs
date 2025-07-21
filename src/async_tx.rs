@@ -1,4 +1,4 @@
-use crate::backoff::Backoff;
+use crate::backoff::*;
 use crate::sink::AsyncSink;
 use crate::{channel::*, MTx, Tx};
 use std::cell::Cell;
@@ -96,13 +96,13 @@ impl<T> AsyncTx<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn _detect_runtime(&self) -> u32 {
+    pub(crate) fn _detect_runtime(&self) -> u16 {
         let mut backoff = self.backoff.load(Ordering::Relaxed);
         if backoff < 0 {
             backoff = self.shared.detect_async_backoff_tx();
             self.backoff.store(backoff, Ordering::Release);
         }
-        return backoff as u32;
+        return backoff as u16;
     }
 
     #[inline]
@@ -198,7 +198,8 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        let mut backoff = Backoff::new(self._detect_runtime());
+        let mut backoff =
+            Backoff::new(BackoffConfig::default().async_limit(self._detect_runtime()));
         loop {
             if shared.try_send(item).is_ok() {
                 shared.on_send();
