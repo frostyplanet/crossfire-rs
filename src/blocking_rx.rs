@@ -1,4 +1,4 @@
-use crate::backoff::Backoff;
+use crate::backoff::*;
 use crate::{channel::*, AsyncRx, MAsyncRx};
 use std::cell::Cell;
 use std::fmt;
@@ -93,7 +93,7 @@ impl<T> Rx<T> {
             }
             let waker = cache.new_blocking();
             debug_assert!(waker.is_waked());
-            let mut backoff = Backoff::new(4);
+            let mut backoff = Backoff::new(BackoffConfig::default());
             backoff.snooze();
             loop {
                 loop {
