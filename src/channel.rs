@@ -95,16 +95,6 @@ impl ChannelShared {
         self.senders.fire()
     }
 
-    #[inline(always)]
-    pub(crate) fn cancel_recv_waker(&self, waker: LockedWaker) {
-        self.recvs.cancel_waker(waker);
-    }
-
-    #[inline(always)]
-    pub(crate) fn cancel_send_waker(&self, waker: LockedWaker) {
-        self.senders.cancel_waker(waker);
-    }
-
     /// On timeout, clear dead wakers on sender queue
     #[inline(always)]
     pub(crate) fn clear_send_wakers(&self, seq: u64) {

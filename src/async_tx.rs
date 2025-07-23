@@ -200,16 +200,14 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // should check the channel again, otherwise might incur a dead lock.
         let r = self.try_send(item);
         if let Err(TrySendError::Full(t)) = r {
-            if self.shared.get_rx_count() == 0 {
+            if self.shared.is_disconnected() {
                 // Check channel close before sleep, otherwise might block forever
                 // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
                 return Err(TrySendError::Disconnected(t));
             }
+            waker.commit();
             o_waker.replace(waker);
             return Err(TrySendError::Full(t));
-        } else {
-            // Ok or Disconnected
-            self.shared.cancel_send_waker(waker);
         }
         return r;
     }
@@ -246,10 +244,12 @@ impl<T: Unpin> Drop for SendFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
-            if waker.abandon() {
+            let state = waker.abandon();
+            if state == WakerState::WAKED as u8 {
                 // We are waked, but give up sending, should notify another sender for safety
                 self.tx.shared.on_recv();
             } else {
+                debug_assert_eq!(state, WakerState::WAITING as u8);
                 self.tx.shared.clear_send_wakers(waker.get_seq());
             }
         }
@@ -301,10 +301,12 @@ impl<T: Unpin> Drop for SendTimeoutFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
-            if waker.abandon() {
+            let state = waker.abandon();
+            if state == WakerState::WAKED as u8 {
                 // We are waked, but give up sending, should notify another sender for safety
                 self.tx.shared.on_recv();
             } else {
+                debug_assert_eq!(state, WakerState::WAITING as u8);
                 self.tx.shared.clear_send_wakers(waker.get_seq());
             }
         }

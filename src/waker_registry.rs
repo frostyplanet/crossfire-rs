@@ -96,7 +96,11 @@ impl RegistryTrait for RegistrySingle {
 
     #[inline(always)]
     fn fire(&self) {
-        self.cell.wake();
+        while let Some(waker) = self.cell.pop() {
+            if waker.wake() {
+                return;
+            }
+        }
     }
 
     #[inline(always)]

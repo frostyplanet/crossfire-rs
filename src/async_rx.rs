@@ -191,9 +191,10 @@ impl<T> AsyncRx<T> {
         // should check the channel again, otherwise might incur a dead lock.
         let r = self.try_recv();
         if let Err(TryRecvError::Empty) = &r {
+            waker.commit();
             // Check channel close before sleep, otherwise might block forever
             // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
-            if self.shared.get_tx_count() == 0 {
+            if self.shared.is_disconnected() {
                 // Ensure all message is received.
                 if let Ok(msg) = self.try_recv() {
                     return Ok(msg);
@@ -201,8 +202,6 @@ impl<T> AsyncRx<T> {
                 return Err(TryRecvError::Disconnected);
             }
             o_waker.replace(waker);
-        } else {
-            self.shared.cancel_recv_waker(waker);
         }
         return r;
     }
@@ -245,10 +244,12 @@ impl<T> Drop for ReceiveFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
-            if waker.abandon() {
+            let state = waker.abandon();
+            if state == WakerState::WAKED as u8 {
                 // We are waked, but giving up to recv, should notify another receiver for safety
                 self.rx.shared.on_send();
             } else {
+                debug_assert_eq!(state, WakerState::WAITING as u8);
                 self.rx.shared.clear_recv_wakers(waker.get_seq());
             }
         }
@@ -297,10 +298,12 @@ impl<T> Drop for ReceiveTimeoutFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
-            if waker.abandon() {
+            let state = waker.abandon();
+            if state == WakerState::WAKED as u8 {
                 // We are waked, but giving up to recv, should notify another receiver for safety
                 self.rx.shared.on_send();
             } else {
+                debug_assert_eq!(state, WakerState::WAITING as u8);
                 self.rx.shared.clear_recv_wakers(waker.get_seq());
             }
         }
