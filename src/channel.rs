@@ -77,10 +77,10 @@ impl<T: Send + 'static> ChannelShared<T> {
                 return Ok(());
             }
             Channel::Array(inner) => {
-                if let Err(()) = unsafe { inner.push_with_ptr(item.as_ptr()) } {
-                    return Err(());
-                } else {
+                if unsafe { inner.push_with_ptr(item.as_ptr()) } {
                     return Ok(());
+                } else {
+                    return Err(());
                 }
             }
         }
