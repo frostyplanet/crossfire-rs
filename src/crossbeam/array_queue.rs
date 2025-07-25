@@ -149,18 +149,40 @@ impl<T> ArrayQueue<T> {
 
     #[allow(dead_code)]
     #[inline(always)]
+    /// This function is optimise for channel suspected to be full,
+    /// Try only oneshot, return Ok(true) when push ok, Ok(false) when channel is full.
+    /// None when uncertain (normally needs a loop)
     pub unsafe fn try_push_oneshot(&self, value: *const T) -> Option<bool> {
-        let mut tail = self.tail.load(Ordering::Relaxed);
-        if let Ok(res) = self._try_push(&mut tail, value) {
-            Some(res)
-        } else {
-            None
+        let tail = self.tail.load(Ordering::Acquire);
+        macro_rules! check_full {
+            ($tail: expr) => {
+                //atomic::fence(Ordering::SeqCst);
+                let head = self.head.load(Ordering::SeqCst);
+                // If the head lags one lap behind the tail as well...
+                if head.wrapping_add(self.one_lap) == $tail {
+                    // ...then the queue is full.
+                    return Some(false);
+                }
+            };
+        }
+        check_full!(tail);
+        match self._try_push(tail, value) {
+            Ok(_) => return Some(true),
+            Err((_stamp, new_tail)) => {
+                if let Some(_tail) = new_tail {
+                    check_full!(_tail); // when there's pop/push
+                } else {
+                    // after the first check_full, this is unlikely full, but also a hot path
+                }
+                return None;
+            }
         }
     }
 
-    fn _try_push(&self, _tail: &mut usize, value: *const T) -> Result<bool, bool> {
+    /// return stamp, new_tail
+    #[inline]
+    fn _try_push(&self, tail: usize, value: *const T) -> Result<bool, (usize, Option<usize>)> {
         let cap = self.capacity();
-        let tail = *_tail;
         // Deconstruct the tail.
         let index = tail & (self.one_lap - 1);
         let lap = tail & !(self.one_lap - 1);
@@ -198,23 +220,11 @@ impl<T> ArrayQueue<T> {
                     return Ok(true);
                 }
                 Err(t) => {
-                    *_tail = t;
-                    return Err(true);
+                    return Err((stamp, Some(t)));
                 }
             }
-        } else if stamp.wrapping_add(self.one_lap) == tail + 1 {
-            atomic::fence(Ordering::SeqCst);
-            let head = self.head.load(Ordering::Relaxed);
-            // If the head lags one lap behind the tail as well...
-            if head.wrapping_add(self.one_lap) == tail {
-                // ...then the queue is full.
-                return Ok(false);
-            }
-            // Should have spin, but I don't update the tail
-            return Err(false);
         } else {
-            // Snooze because we need to wait for the stamp to get updated.
-            return Err(false);
+            return Err((stamp, None));
         }
     }
 
@@ -222,13 +232,29 @@ impl<T> ArrayQueue<T> {
     pub unsafe fn push_with_ptr(&self, value: *const T) -> bool {
         let backoff = Backoff::new();
         let mut tail = self.tail.load(Ordering::Relaxed);
-        loop {
-            match self._try_push(&mut tail, value) {
-                Ok(res) => return res,
-                Err(true) => {
-                    backoff.spin();
+        macro_rules! check_full {
+            ($tail: expr) => {
+                atomic::fence(Ordering::SeqCst);
+                let head = self.head.load(Ordering::Relaxed);
+                // If the head lags one lap behind the tail as well...
+                if head.wrapping_add(self.one_lap) == $tail {
+                    // ...then the queue is full.
+                    return false;
                 }
-                Err(false) => {
+            };
+        }
+        loop {
+            match self._try_push(tail, value) {
+                Ok(res) => return res,
+                Err((stamp, new_tail)) => {
+                    if let Some(_tail) = new_tail {
+                        tail = _tail;
+                        backoff.spin();
+                        continue;
+                    }
+                    if stamp.wrapping_add(self.one_lap) == tail + 1 {
+                        check_full!(tail);
+                    }
                     backoff.snooze();
                     tail = self.tail.load(Ordering::Relaxed);
                 }
