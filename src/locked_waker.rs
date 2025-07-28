@@ -490,7 +490,8 @@ impl<P> WakerInner<P> {
 
     #[inline(always)]
     fn unlock(&self) {
-        self.locked.store(false, Ordering::Release);
+        // NOTE: refer to issue #24
+        self.locked.store(false, Ordering::SeqCst);
     }
 
     /// no lock version
