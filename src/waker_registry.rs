@@ -1,6 +1,7 @@
+use crate::backoff::BackoffConfig;
 use crate::collections::WeakCell;
 use crate::locked_waker::*;
-use parking_lot::Mutex;
+use crate::spinlock::Spinlock;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ptr;
@@ -207,16 +208,18 @@ struct RegistryMultiInner<W: WakerTrait> {
 pub struct RegistryMulti<W: WakerTrait> {
     checking: AtomicBool,
     is_empty: AtomicBool,
-    inner: Mutex<RegistryMultiInner<W>>,
+    inner: Spinlock<RegistryMultiInner<W>>,
+    backoff: BackoffConfig,
 }
 
 impl<W: WakerTrait> RegistryMulti<W> {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
+            inner: Spinlock::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
             checking: AtomicBool::new(false),
             is_empty: AtomicBool::new(true),
+            backoff: BackoffConfig::default(),
         }
     }
 
@@ -228,7 +231,7 @@ impl<W: WakerTrait> RegistryMulti<W> {
     #[inline(always)]
     fn reg_waker(&self, waker: &W) {
         let weak = waker.weak();
-        let mut guard = self.inner.lock();
+        let mut guard = self.inner.lock(self.backoff);
         let seq = guard.seq.wrapping_add(1);
         guard.seq = seq;
         waker.set_seq(seq);
@@ -260,15 +263,11 @@ impl<W: WakerTrait> RegistryMulti<W> {
         if self.is_empty.load(Ordering::Acquire) {
             return None;
         }
-        let mut guard = self.inner.lock();
         let mut waker: Option<W> = None;
-        loop {
-            if let Some(weak) = guard.queue.pop_front() {
-                if let Some(_waker) = weak.upgrade() {
-                    waker = Some(W::from_arc(_waker));
-                    break;
-                }
-            } else {
+        let mut guard = self.inner.lock(self.backoff);
+        while let Some(weak) = guard.queue.pop_front() {
+            if let Some(_waker) = weak.upgrade() {
+                waker = Some(W::from_arc(_waker));
                 break;
             }
         }
@@ -281,7 +280,7 @@ impl<W: WakerTrait> RegistryMulti<W> {
     /// return waker queue size
     #[inline(always)]
     fn len(&self) -> usize {
-        let guard = self.inner.lock();
+        let guard = self.inner.lock(self.backoff);
         guard.queue.len()
     }
 }

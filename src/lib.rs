@@ -191,6 +191,7 @@ mod channel;
 pub use channel::ChannelShared;
 /// collections that can be re-used
 pub mod collections;
+mod spinlock;
 
 mod locked_waker;
 mod waker_registry;
