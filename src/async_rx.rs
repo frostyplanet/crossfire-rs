@@ -192,10 +192,14 @@ impl<T> AsyncRx<T> {
                 let _waker;
                 if let Some(waker) = o_waker.as_ref() {
                     if waker.get_state() == WakerState::WAKED as u8 {
-                        waker._check_waker_nolock(ctx);
+                        waker.check_waker_nolock(ctx);
                     } else {
-                        waker.check_waker(ctx);
+                        if !waker.will_wake(ctx) {
+                            let _ = o_waker.take();
+                        }
                     }
+                }
+                if let Some(waker) = o_waker.as_ref() {
                     _waker = waker;
                 } else {
                     let waker = RecvWaker::new_async(ctx);

@@ -213,12 +213,15 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         loop {
             if let Some(waker) = o_waker.as_ref() {
                 state = waker.get_state();
-                if state == WakerState::WAITING as u8 {
+                if state < WakerState::WAKED as u8 {
                     // Spurious waked by runtime, or
                     // Normally only selection or multiplex future will get here.
                     // No need to reg again, since waker is not consumed.
-                    state =
-                        shared.sender_try_again_async(item, waker, ctx, BackoffConfig::default());
+                    (state, *o_waker) = shared.sender_try_again_async(
+                        o_waker.take().unwrap(),
+                        ctx,
+                        BackoffConfig::default(),
+                    );
                     if state == WakerState::WAITING as u8 {
                         return Poll::Pending;
                     }
@@ -228,8 +231,8 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 } else {
                     debug_assert_eq!(state, WakerState::WAKED as u8);
                     if shared.send(item) {
-                        let _ = o_waker.take();
                         shared.on_send();
+                        let _ = o_waker.take();
                         return Poll::Ready(Ok(()));
                     }
                 }
@@ -240,17 +243,24 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     return Poll::Ready(Ok(()));
                 }
             }
-            let config = BackoffConfig::default().async_limit(self._detect_runtime());
-            let mut backoff = Backoff::new(config);
             let waker = if let Some(w) = o_waker.take() {
-                w._check_waker_nolock(ctx);
+                w.set_ptr(std::ptr::null_mut());
+                w.check_waker_nolock(ctx);
                 w
             } else {
-                SendWaker::new_async(ctx)
+                SendWaker::new_async(ctx, std::ptr::null_mut())
             };
-            (state, _waker) = shared.sender_reg_and_try(item, waker, &mut backoff);
+            (state, _waker) = shared.sender_reg_and_try(item, waker);
             *o_waker = _waker;
-            if state == WakerState::WAITING as u8 {
+            if state < WakerState::WAKED as u8 {
+                let backoff_limit = self._detect_runtime();
+                if backoff_limit > 0 {
+                    let config = BackoffConfig { spin_limit: 6, limit: backoff_limit };
+                    let mut backoff = Backoff::new(config);
+                    state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
+                }
+            }
+            if state < WakerState::WAKED as u8 {
                 return Poll::Pending;
             } else if state > WakerState::WAKED as u8 {
                 return process_state!(state);
