@@ -225,49 +225,61 @@ impl<T> ChannelShared<T> {
     /// in case of spurious waked up by runtime.
     #[inline]
     pub(crate) fn sender_try_again_async(
-        &self, item: &mut MaybeUninit<T>, waker: &SendWaker<T>, ctx: &mut Context,
-        backoff_conf: BackoffConfig,
-    ) -> u8 {
-        let mut backoff = Backoff::new(backoff_conf);
+        &self, waker: SendWaker<T>, ctx: &mut Context, backoff_conf: BackoffConfig,
+    ) -> (u8, Option<SendWaker<T>>) {
         if self.is_disconnected() {
-            return waker.active_close();
+            match waker.try_change_state(WakerState::WAITING, WakerState::CLOSED) {
+                Ok(_) => {
+                    return (WakerState::CLOSED as u8, None);
+                }
+                Err(state) => {
+                    // Since all rx has been drop, not possible to by COPY,
+                    return (state, None);
+                }
+            }
         }
-        // Assume WAITING, must check_waker
-        loop {
-            if let Some(guard) = waker.try_lock_weak() {
-                let state = waker.get_state();
-                if state >= WakerState::WAKED as u8 {
-                    // Return if WAKED, waker should re-register anyway
-                    return state;
-                }
-                if self.send(item) {
-                    waker.set_state(WakerState::DONE);
-                    drop(guard);
-                    if state <= WakerState::WAITING as u8 {
-                        self.senders.cancel_waker();
-                    }
-                    self.on_send();
-                    return WakerState::DONE as u8;
+        let mut state = waker.get_state();
+        // return pending need to check waker, avoid spurious wake
+        let will_wake = waker.will_wake(ctx);
+        if will_wake && state != WakerState::COPY as u8 {
+            return (state, Some(waker));
+        }
+        let mut backoff = Backoff::new(backoff_conf);
+        while state <= WakerState::WAKED as u8 {
+            if state != WakerState::COPY as u8 && backoff.is_completed() {
+                if will_wake {
+                    return (state, Some(waker));
                 } else {
-                    assert!(waker.load_ptr() != ptr::null_mut());
+                    // The waker could not be used anymore
+                    match waker.try_change_state(WakerState::WAITING, WakerState::WAKED) {
+                        Ok(_) => {
+                            return (WakerState::WAKED as u8, None);
+                        }
+                        Err(state) => {
+                            if state == WakerState::COPY as u8 {
+                                // reset to continue;
+                                backoff.reset();
+                                continue;
+                            }
+                            return (state, None);
+                        }
+                    }
                 }
-                waker._check_waker_nolock(ctx);
-                return state; // might be WAITING or WAKED
             }
             backoff.snooze();
+            state = waker.get_state();
         }
+        return (state, None);
     }
 
     /// if need_wake == true, called from on_recv(), when return None indicates try to wake up next.
     /// when need_wake == false, will always return Some(state).
     #[inline]
     pub(crate) fn sender_reg_and_try(
-        &self, item: &mut MaybeUninit<T>, waker: SendWaker<T>, backoff: &mut Backoff,
+        &self, item: &mut MaybeUninit<T>, waker: SendWaker<T>,
     ) -> (u8, Option<SendWaker<T>>) {
         self.senders.reg_waker(&waker);
-        let mut state: u8;
         // Not allow Spurious wake and enter this function again;
-        debug_assert_eq!(waker.load_ptr(), ptr::null_mut());
         if let Some(res) = self.try_send_oneshot(item) {
             if res {
                 waker.set_state(WakerState::DONE);
@@ -275,71 +287,78 @@ impl<T> ChannelShared<T> {
                 self.on_send();
                 return (WakerState::DONE as u8, Some(waker));
             } else {
-                if self.is_disconnected() {
-                    return (waker.active_close(), None);
-                }
                 waker.set_ptr(item.as_mut_ptr());
-                state = waker.get_state();
+                if self.is_disconnected() {
+                    return (WakerState::CLOSED as u8, None);
+                } else {
+                    return (WakerState::WAITING as u8, Some(waker));
+                }
             }
         } else {
-            // other's changing, omit close check and return
-            return (waker.cancel(), None);
-        }
-        while state < WakerState::WAKED as u8 {
-            if backoff.is_completed() {
-                break;
+            // Cancel to try again outside
+            // Just flow away this waker, on_recv will try to wake INIT state.
+            match waker.try_change_state(WakerState::WAITING, WakerState::WAKED) {
+                Ok(_) => {
+                    // might be in queue, should not use again
+                    return (WakerState::WAKED as u8, None);
+                }
+                Err(_) => {
+                    return (WakerState::WAKED as u8, Some(waker));
+                }
             }
-            backoff.yield_now();
-            state = waker.get_state();
         }
-        return (state, Some(waker));
+    }
+
+    /// Prevent COPY state enter
+    #[inline(always)]
+    pub(crate) fn sender_snooze(&self, waker: &SendWaker<T>, backoff: &mut Backoff) -> u8 {
+        backoff.reset();
+        loop {
+            backoff.snooze();
+            let state = waker.get_state();
+            if state >= WakerState::WAKED as u8 {
+                return state;
+            } else if state == WakerState::WAITING as u8 && backoff.is_completed() {
+                return state;
+            }
+        }
     }
 
     /// Return is_waked
     #[inline]
     pub(crate) fn on_recv_try_send(&self, waker: &SendWaker<T>) -> bool {
-        if let Some(_guard) = waker.try_lock() {
-            let state = waker.get_state();
-            if state >= WakerState::WAKED as u8 {
-                // It's not possible to be WAKED
-                return false;
-            }
-            // the receiver no need to check disconnect,
-            // its impossible if there's live waker
-            // Check the state again, during locked, no one allowed to change the status
-            let p = waker.load_ptr();
-            if p == ptr::null_mut() {
-                // Let the sender to re-register
-                // Might contend with sender_try_again_blocking
-                if waker.change_state_smaller_eq(WakerState::WAITING, WakerState::WAKED).is_ok() {
-                    waker._wake_nolock();
-                }
-                drop(_guard);
-                return self.is_full();
-            }
-            if let Channel::Array(inner) = &self.inner {
-                if unsafe { inner.push_with_ptr(p) } {
-                    waker.set_state(WakerState::DONE);
-                    waker._wake_nolock();
-                    drop(_guard);
-                    self.on_send();
-                    return true;
-                }
-            } else {
-                unreachable!();
-            }
-            // still full
-            // Let the sender to re-register
-            waker.set_state(WakerState::WAKED);
-            waker._wake_nolock();
-            return true; // Do not try another
-        } else {
-            if let Ok(_) = waker.wake_simple() {
-                return self.is_full();
-            } else {
-                return false;
-            }
+        // the receiver no need to check disconnect,
+        // its impossible if there's live waker
+        // protect against:
+        // 1. sender_try_again_async () for spurious waked
+        // 2. blocking timeout
+        if waker.try_change_state(WakerState::WAITING, WakerState::COPY).is_err() {
+            // WAKED set by cancel()
+            return false;
         }
+        let p = waker.load_ptr();
+        if p == ptr::null_mut() {
+            if waker.try_change_state(WakerState::COPY, WakerState::WAKED).is_ok() {
+                waker._wake_nolock();
+            }
+            return false;
+        }
+        if let Channel::Array(inner) = &self.inner {
+            if unsafe { inner.push_with_ptr(p) } {
+                waker.set_state(WakerState::DONE);
+                waker._wake_nolock();
+                self.on_send();
+                return true;
+            }
+        } else {
+            unreachable!();
+        }
+        // still full
+        // Let the sender to re-register
+        waker.set_state(WakerState::WAKED);
+        waker._wake_nolock();
+        // Do not try another
+        return true;
     }
 
     /// Wake up one rx

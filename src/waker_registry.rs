@@ -4,7 +4,6 @@ use crate::locked_waker::*;
 use crate::spinlock::Spinlock;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
-use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Weak;
 
@@ -27,9 +26,9 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn reg_waker(&self, waker: &SendWaker<T>) {
         debug_assert_eq!(waker.get_state(), WakerState::WAKED as u8);
+        debug_assert_eq!(waker.load_ptr(), std::ptr::null_mut());
         waker.set_state(WakerState::WAITING);
         // Clear the ptr in waker if it want to re-register
-        waker.set_ptr(ptr::null_mut());
         match self {
             RegistrySender::Single(inner) => inner.reg_waker(waker),
             RegistrySender::Multi(inner) => inner.reg_waker(waker),
