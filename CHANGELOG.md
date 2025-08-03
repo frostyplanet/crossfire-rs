@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [2.0.16] - 2025-08-05
+
+### Added
+
+- Add MAsyncTx::to_sink() and MAsyncRx::to_stream()
+- Add MAsyncTx::into_sink() and MAsyncRx::into_stream()
+
 ## [2.0.15] - 2025-08-04
 
 ## Added
