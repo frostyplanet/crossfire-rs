@@ -17,8 +17,6 @@ pub trait RegistryTrait {
 
     fn clear_wakers(&self, _seq: u64);
 
-    fn cancel_waker(&self, _waker: LockedWaker);
-
     fn fire(&self);
 
     fn close(&self);
@@ -45,9 +43,6 @@ impl RegistryTrait for RegistryDummy {
 
     #[inline(always)]
     fn clear_wakers(&self, _seq: u64) {}
-
-    #[inline(always)]
-    fn cancel_waker(&self, _waker: LockedWaker) {}
 
     #[inline(always)]
     fn fire(&self) {}
@@ -80,12 +75,6 @@ impl RegistryTrait for RegistrySingle {
         let waker = LockedWaker::new(ctx, 0);
         self.cell.put(waker.weak());
         waker
-    }
-
-    #[inline(always)]
-    fn cancel_waker(&self, _waker: LockedWaker) {
-        // Got to be it, because only one single thread.
-        self.cell.clear();
     }
 
     #[inline(always)]
@@ -142,12 +131,6 @@ impl RegistryTrait for RegistryMulti {
         let waker = LockedWaker::new(ctx, self.seq.fetch_add(1, Ordering::SeqCst));
         self.queue.push(waker.weak());
         waker
-    }
-
-    #[inline(always)]
-    fn cancel_waker(&self, waker: LockedWaker) {
-        // Just abandon and leave it to fire() to clean it
-        waker.cancel();
     }
 
     /// Call when ReceiveFuture is cancelled.

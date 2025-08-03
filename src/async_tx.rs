@@ -490,6 +490,20 @@ impl<T> MAsyncTx<T> {
     pub(crate) fn new(send: Sender<T>, shared: Arc<ChannelShared>) -> Self {
         Self(AsyncTx::new(send, shared))
     }
+
+    #[inline]
+    pub fn into_sink(self) -> AsyncSink<T> {
+        AsyncSink::new(self.0)
+    }
+
+    #[inline]
+    pub fn to_sink(&self) -> AsyncSink<T>
+    where
+        T: Unpin,
+    {
+        let tx: MAsyncTx<T> = self.clone();
+        tx.into_sink()
+    }
 }
 
 impl<T> Deref for MAsyncTx<T> {

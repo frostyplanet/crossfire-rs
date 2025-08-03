@@ -488,6 +488,14 @@ impl<T> MAsyncRx<T> {
     {
         AsyncStream::new(self.0)
     }
+
+    #[inline]
+    pub fn to_stream(&self) -> AsyncStream<T>
+    where
+        T: Send + Unpin + 'static,
+    {
+        AsyncStream::new(self.clone().0)
+    }
 }
 
 impl<T> Deref for MAsyncRx<T> {
