@@ -1,7 +1,6 @@
 use crate::sink::AsyncSink;
 use crate::{channel::*, MTx, Tx};
 use crossbeam::channel::Sender;
-use crossbeam::utils::Backoff;
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -10,8 +9,6 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-
-const BACKOFF_LIMIT: usize = 6;
 
 /// Single producer (sender) that works in async context.
 ///
@@ -55,7 +52,6 @@ const BACKOFF_LIMIT: usize = 6;
 /// }
 /// ```
 pub struct AsyncTx<T> {
-    bound_size: usize,
     pub(crate) sender: Sender<T>,
     pub(crate) shared: Arc<ChannelShared>,
     // Remove the Sync marker to prevent being put in Arc
@@ -85,8 +81,7 @@ impl<T> Drop for AsyncTx<T> {
 impl<T> AsyncTx<T> {
     #[inline]
     pub(crate) fn new(sender: Sender<T>, shared: Arc<ChannelShared>) -> Self {
-        let bound_size = sender.capacity().unwrap_or(0);
-        Self { bound_size, sender, shared, _phan: Default::default() }
+        Self { sender, shared, _phan: Default::default() }
     }
 
     /// Try to send message, non-blocking
@@ -199,34 +194,31 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // to skip the timeout cleaning logic in Drop.
         //
         // crossbeam-channel will check disconnected for us (if not raced)
-        let backoff = Backoff::new();
-        let limit = if self.bound_size == 1 { BACKOFF_LIMIT } else { 1 };
-        for _ in 0..limit {
-            let r = self.try_send(item);
-            if let Some(old_waker) = o_waker.take() {
-                // https://github.com/frostyplanet/crossfire-rs/issues/14
-                old_waker.cancel();
-            }
-            if let Err(TrySendError::Full(t)) = r {
-                item = t;
-            } else {
-                return r;
-            }
-            backoff.snooze();
+        let r = self.try_send(item);
+        if let Some(old_waker) = o_waker.take() {
+            // https://github.com/frostyplanet/crossfire-rs/issues/14
+            old_waker.cancel();
+        }
+        if let Err(TrySendError::Full(t)) = r {
+            item = t;
+        } else {
+            return r;
         }
         let waker = self.shared.reg_send_async(ctx);
         // NOTE: The other side put something whie reg_send and did not see the waker,
         // should check the channel again, otherwise might incur a dead lock.
         let r = self.try_send(item);
         if let Err(TrySendError::Full(t)) = r {
-            if self.shared.is_disconnected() {
+            if self.shared.get_rx_count() == 0 {
                 // Check channel close before sleep, otherwise might block forever
                 // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
                 return Err(TrySendError::Disconnected(t));
             }
-            waker.commit();
             o_waker.replace(waker);
             return Err(TrySendError::Full(t));
+        } else {
+            // Ok or Disconnected
+            self.shared.cancel_send_waker(waker);
         }
         return r;
     }
@@ -263,12 +255,10 @@ impl<T: Unpin> Drop for SendFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
-            let state = waker.abandon();
-            if state == WakerState::WAKED as u8 {
+            if waker.abandon() {
                 // We are waked, but give up sending, should notify another sender for safety
                 self.tx.shared.on_recv();
             } else {
-                debug_assert_eq!(state, WakerState::WAITING as u8);
                 self.tx.shared.clear_send_wakers(waker.get_seq());
             }
         }
@@ -312,12 +302,10 @@ impl<T: Unpin> Drop for SendTimeoutFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
-            let state = waker.abandon();
-            if state == WakerState::WAKED as u8 {
+            if waker.abandon() {
                 // We are waked, but give up sending, should notify another sender for safety
                 self.tx.shared.on_recv();
             } else {
-                debug_assert_eq!(state, WakerState::WAITING as u8);
                 self.tx.shared.clear_send_wakers(waker.get_seq());
             }
         }

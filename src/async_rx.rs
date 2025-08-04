@@ -1,7 +1,6 @@
 use crate::stream::AsyncStream;
 use crate::{channel::*, MRx, Rx};
 use crossbeam::channel::Receiver;
-use crossbeam::utils::Backoff;
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -10,8 +9,6 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-
-const BACKOFF_LIMIT: usize = 6;
 
 /// Single consumer (receiver) that works in async context.
 ///
@@ -56,7 +53,6 @@ const BACKOFF_LIMIT: usize = 6;
 /// }
 /// ```
 pub struct AsyncRx<T> {
-    bound_size: usize,
     pub(crate) recv: Receiver<T>,
     pub(crate) shared: Arc<ChannelShared>,
     // Remove the Sync marker to prevent being put in Arc
@@ -86,8 +82,7 @@ impl<T> Drop for AsyncRx<T> {
 impl<T> AsyncRx<T> {
     #[inline]
     pub(crate) fn new(recv: Receiver<T>, shared: Arc<ChannelShared>) -> Self {
-        let bound_size = recv.capacity().unwrap_or(0);
-        Self { bound_size, recv, shared, _phan: Default::default() }
+        Self { recv, shared, _phan: Default::default() }
     }
 
     /// Receive message, will await when channel is empty.
@@ -187,29 +182,23 @@ impl<T> AsyncRx<T> {
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        let backoff = Backoff::new();
-        let limit = if self.bound_size == 1 { BACKOFF_LIMIT } else { 1 };
-        for _ in 0..limit {
-            let r = self.try_recv();
-            if let Some(old_waker) = o_waker.take() {
-                // https://github.com/frostyplanet/crossfire-rs/issues/14
-                old_waker.cancel();
-            }
-            if let Err(TryRecvError::Empty) = &r {
-            } else {
-                return r;
-            }
-            backoff.snooze();
+        let r = self.try_recv();
+        if let Some(old_waker) = o_waker.take() {
+            // https://github.com/frostyplanet/crossfire-rs/issues/14
+            old_waker.cancel();
+        }
+        if let Err(TryRecvError::Empty) = &r {
+        } else {
+            return r;
         }
         let waker = self.shared.reg_recv_async(ctx);
         // NOTE: The other side put something whie reg_send and did not see the waker,
         // should check the channel again, otherwise might incur a dead lock.
         let r = self.try_recv();
         if let Err(TryRecvError::Empty) = &r {
-            waker.commit();
             // Check channel close before sleep, otherwise might block forever
             // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
-            if self.shared.is_disconnected() {
+            if self.shared.get_tx_count() == 0 {
                 // Ensure all message is received.
                 if let Ok(msg) = self.try_recv() {
                     return Ok(msg);
@@ -217,6 +206,8 @@ impl<T> AsyncRx<T> {
                 return Err(TryRecvError::Disconnected);
             }
             o_waker.replace(waker);
+        } else {
+            self.shared.cancel_recv_waker(waker);
         }
         return r;
     }
@@ -265,12 +256,10 @@ impl<T> Drop for ReceiveFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
-            let state = waker.abandon();
-            if state == WakerState::WAKED as u8 {
+            if waker.abandon() {
                 // We are waked, but giving up to recv, should notify another receiver for safety
                 self.rx.shared.on_send();
             } else {
-                debug_assert_eq!(state, WakerState::WAITING as u8);
                 self.rx.shared.clear_recv_wakers(waker.get_seq());
             }
         }
@@ -310,12 +299,10 @@ impl<T> Drop for ReceiveTimeoutFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
-            let state = waker.abandon();
-            if state == WakerState::WAKED as u8 {
+            if waker.abandon() {
                 // We are waked, but giving up to recv, should notify another receiver for safety
                 self.rx.shared.on_send();
             } else {
-                debug_assert_eq!(state, WakerState::WAITING as u8);
                 self.rx.shared.clear_recv_wakers(waker.get_seq());
             }
         }
