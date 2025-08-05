@@ -174,62 +174,75 @@ impl<T> AsyncRx<T> {
     pub(crate) fn poll_item(
         &self, ctx: &mut Context, o_waker: &mut Option<RecvWaker>,
     ) -> Result<T, TryRecvError> {
+        let shared = &self.shared;
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        let shared = &self.shared;
-        let config = BackoffConfig::default().async_limit(self._detect_runtime());
-        let mut backoff = Backoff::new(config);
-        loop {
-            if let Some(item) = shared.try_recv() {
-                shared.on_recv();
-                if let Some(waker) = o_waker.take() {
-                    shared.recv_waker_done(&waker);
+        macro_rules! try_recv {
+            () => {
+                if let Some(item) = shared.try_recv() {
+                    shared.on_recv();
+                    return Ok(item);
                 }
-                return Ok(item);
-            }
-            if backoff.is_completed() {
-                let _waker;
-                if let Some(waker) = o_waker.as_ref() {
-                    if waker.get_state() == WakerState::WAKED as u8 {
-                        waker.check_waker_nolock(ctx);
-                    } else {
-                        if !waker.will_wake(ctx) {
-                            let _ = o_waker.take();
-                        }
-                    }
+            };
+            ($waker: expr) => {
+                if let Some(item) = shared.try_recv() {
+                    shared.on_recv();
+                    shared.recv_waker_cancel($waker);
+                    let _ = o_waker.take();
+                    return Ok(item);
                 }
-                if let Some(waker) = o_waker.as_ref() {
-                    _waker = waker;
+            };
+        }
+
+        if let Some(waker) = o_waker.as_ref() {
+            try_recv!(waker);
+            let state = waker.get_state();
+            if state == WakerState::WAITING as u8 {
+                if waker.will_wake(ctx) {
+                    return Err(TryRecvError::Empty);
                 } else {
-                    let waker = RecvWaker::new_async(ctx);
-                    o_waker.replace(waker);
-                    _waker = o_waker.as_ref().unwrap();
-                }
-                if shared.reg_recv(_waker).is_ok() {
-                    // NOTE: The other side put something whie reg_send and did not see the waker,
-                    // should check the channel again, otherwise might incur a dead lock.
-                    if !shared.is_empty() {
-                        if let Some(item) = shared.try_recv() {
-                            shared.on_recv();
-                            if let Some(waker) = o_waker.take() {
-                                shared.recv_waker_done(&waker);
-                            }
-                            return Ok(item);
-                        }
+                    if let Some(waker) = o_waker.take() {
+                        waker.cancel();
                     }
-                    _waker.commit_waiting();
                 }
-                break;
+            } else if state == WakerState::WAKED as u8 {
+                waker.check_waker_nolock(ctx);
             }
-            backoff.snooze();
+        } else {
+            // First call
+            try_recv!();
+            let backoff_limit = self._detect_runtime();
+            if backoff_limit > 0 {
+                let config = BackoffConfig { spin_limit: 6, limit: backoff_limit };
+                let mut backoff = Backoff::new(config);
+                loop {
+                    backoff.snooze();
+                    try_recv!();
+                    if backoff.is_completed() {
+                        break;
+                    }
+                }
+            }
+        }
+        let _waker;
+        if let Some(waker) = o_waker.as_ref() {
+            _waker = waker;
+        } else {
+            let waker = RecvWaker::new_async(ctx);
+            o_waker.replace(waker);
+            _waker = o_waker.as_ref().unwrap();
+        }
+        if shared.reg_recv(_waker).is_ok() {
+            // NOTE: The other side put something whie reg_send and did not see the waker,
+            // should check the channel again, otherwise might incur a dead lock.
+            if !shared.is_empty() {
+                try_recv!(_waker);
+            }
+            _waker.commit_waiting();
         }
         if shared.is_disconnected() {
-            if let Some(item) = shared.try_recv() {
-                // No need to on_recv(), sender already gone
-                let _ = o_waker.take();
-                return Ok(item);
-            }
+            try_recv!();
             return Err(TryRecvError::Disconnected);
         }
         return Err(TryRecvError::Empty);
