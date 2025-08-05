@@ -96,7 +96,6 @@ impl<T> Rx<T> {
                 ($waker: expr) => {
                     if let Some(item) = shared.try_recv() {
                         shared.on_recv();
-                        shared.recv_waker_done(&$waker);
                         self.waker_cache.push($waker);
                         return Ok(item);
                     }
@@ -123,7 +122,12 @@ impl<T> Rx<T> {
                             }
                             state = waker.commit_waiting();
                         } else {
-                            state = waker.cancel();
+                            if let Some(item) = shared.try_recv() {
+                                shared.on_recv();
+                                shared.recv_waker_cancel(&waker);
+                                return Ok(item);
+                            }
+                            state = waker.commit_waiting();
                         }
                     }
                     Err(s) => {
