@@ -312,7 +312,6 @@ impl<T> ChannelShared<T> {
     /// Prevent COPY state enter
     #[inline(always)]
     pub(crate) fn sender_snooze(&self, waker: &SendWaker<T>, backoff: &mut Backoff) -> u8 {
-        backoff.reset();
         loop {
             backoff.snooze();
             let state = waker.get_state();
