@@ -150,6 +150,7 @@ impl<T: Send + 'static> Tx<T> {
                 // For nxn (the backoff is already complete), wait a little bit.
                 (state, o_waker) = shared.sender_reg_and_try(&mut _item, waker);
                 while state < WakerState::WAKED as u8 {
+                    backoff.reset();
                     state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
                     if state == WakerState::WAITING as u8 {
                         match check_timeout(deadline) {

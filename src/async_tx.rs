@@ -195,6 +195,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         }
         let mut _waker;
         let mut state;
+        let mut backoff: Option<Backoff> = None;
         macro_rules! process_state {
             ($state: expr) => {{
                 let _ = o_waker.take();
@@ -243,6 +244,23 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     return Poll::Ready(Ok(()));
                 }
             }
+            let backoff_limit = self._detect_runtime();
+            if backoff_limit > 0 {
+                let config = BackoffConfig { spin_limit: 6, limit: backoff_limit };
+                let mut _backoff = Backoff::new(config);
+                loop {
+                    _backoff.spin();
+                    if shared.send(item) {
+                        shared.on_send();
+                        let _ = o_waker.take();
+                        return Poll::Ready(Ok(()));
+                    }
+                    if _backoff.is_completed() {
+                        break;
+                    }
+                }
+                backoff.replace(_backoff);
+            }
             let waker = if let Some(w) = o_waker.take() {
                 w.set_ptr(std::ptr::null_mut());
                 w.check_waker_nolock(ctx);
@@ -253,11 +271,8 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             (state, _waker) = shared.sender_reg_and_try(item, waker);
             *o_waker = _waker;
             if state < WakerState::WAKED as u8 {
-                let backoff_limit = self._detect_runtime();
-                if backoff_limit > 0 {
-                    let config = BackoffConfig { spin_limit: 6, limit: backoff_limit };
-                    let mut backoff = Backoff::new(config);
-                    state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
+                if let Some(_backoff) = backoff.as_mut() {
+                    state = shared.sender_snooze(o_waker.as_ref().unwrap(), _backoff);
                 }
             }
             if state < WakerState::WAKED as u8 {
