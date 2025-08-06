@@ -605,7 +605,7 @@ fn bench_crossfire_unbounded_blocking_mpsc(c: &mut Criterion) {
 fn bench_crossfire_unbounded_blocking_mpmc(c: &mut Criterion) {
     let mut group = c.benchmark_group("crossfire_unbounded_blocking_n_n");
     group.significance_level(0.1).sample_size(50);
-    group.measurement_time(Duration::from_secs(20));
+    group.measurement_time(Duration::from_secs(10));
     for input in [(2, 2), (4, 4), (8, 8), (16, 16)] {
         let param = Concurrency { tx_count: input.0, rx_count: input.1 };
         group.throughput(Throughput::Elements(ONE_MILLION as u64));
