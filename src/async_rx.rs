@@ -111,8 +111,8 @@ impl<T> AsyncRx<T> {
     ///
     /// returns Err([RecvError]) when all Tx dropped.
     #[inline(always)]
-    pub fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
-        return ReceiveFuture { rx: self, waker: None };
+    pub fn recv<'a>(&'a self) -> RecvFuture<'a, T> {
+        return RecvFuture { rx: self, waker: None };
     }
 
     /// Waits for a message to be received from the channel, but only for a limited time.
@@ -129,9 +129,7 @@ impl<T> AsyncRx<T> {
     #[cfg(any(feature = "tokio", feature = "async_std"))]
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
     #[inline]
-    pub fn recv_timeout<'a>(
-        &'a self, duration: std::time::Duration,
-    ) -> ReceiveTimeoutFuture<'a, T> {
+    pub fn recv_timeout<'a>(&'a self, duration: std::time::Duration) -> RecvTimeoutFuture<'a, T> {
         let sleep = {
             #[cfg(feature = "tokio")]
             {
@@ -142,7 +140,7 @@ impl<T> AsyncRx<T> {
                 Box::pin(async_std::task::sleep(duration))
             }
         };
-        return ReceiveTimeoutFuture { rx: sef, waker: None, sleep };
+        return RecvTimeoutFuture { rx: self, waker: None, sleep };
     }
 
     /// Try to receive message, non-blocking.
@@ -229,14 +227,14 @@ impl<T> AsyncRx<T> {
 }
 
 /// A fixed-sized future object constructed by [AsyncRx::recv()]
-pub struct ReceiveFuture<'a, T> {
+pub struct RecvFuture<'a, T> {
     rx: &'a AsyncRx<T>,
     waker: Option<LockedWaker>,
 }
 
-unsafe impl<T: Send> Send for ReceiveFuture<'_, T> {}
+unsafe impl<T: Send> Send for RecvFuture<'_, T> {}
 
-impl<T> Drop for ReceiveFuture<'_, T> {
+impl<T> Drop for RecvFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
@@ -250,7 +248,7 @@ impl<T> Drop for ReceiveFuture<'_, T> {
     }
 }
 
-impl<T> Future for ReceiveFuture<'_, T> {
+impl<T> Future for RecvFuture<'_, T> {
     type Output = Result<T, RecvError>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
@@ -273,15 +271,15 @@ impl<T> Future for ReceiveFuture<'_, T> {
 }
 
 /// A fixed-sized future object constructed by [AsyncRx::recv_timeout()]
-pub struct ReceiveTimeoutFuture<'a, T> {
+pub struct RecvTimeoutFuture<'a, T> {
     rx: &'a AsyncRx<T>,
     waker: Option<LockedWaker>,
     sleep: Pin<Box<dyn Future<Output = ()>>>,
 }
 
-unsafe impl<T: Unpin + Send> Send for ReceiveTimeoutFuture<'_, T> {}
+unsafe impl<T: Unpin + Send> Send for RecvTimeoutFuture<'_, T> {}
 
-impl<T> Drop for ReceiveTimeoutFuture<'_, T> {
+impl<T> Drop for RecvTimeoutFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
@@ -295,7 +293,7 @@ impl<T> Drop for ReceiveTimeoutFuture<'_, T> {
     }
 }
 
-impl<T> Future for ReceiveTimeoutFuture<'_, T> {
+impl<T> Future for RecvTimeoutFuture<'_, T> {
     type Output = Result<T, RecvTimeoutError>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
@@ -326,7 +324,7 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
     /// Returns `Ok(T)` when successful.
     ///
     /// returns Err([RecvError]) when all Tx dropped.
-    fn recv<'a>(&'a self) -> ReceiveFuture<'a, T>;
+    fn recv<'a>(&'a self) -> RecvFuture<'a, T>;
 
     /// Waits for a message to be received from the channel, but only for a limited time.
     /// Will await when channel is empty.
@@ -341,7 +339,7 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
     /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped and channel is empty.
     #[cfg(any(feature = "tokio", feature = "async_std"))]
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
-    fn recv_timeout<'a>(&'a self, timeout: std::time::Duration) -> ReceiveTimeoutFuture<'a, T>;
+    fn recv_timeout<'a>(&'a self, timeout: std::time::Duration) -> RecvTimeoutFuture<'a, T>;
 
     /// Try to receive message, non-blocking.
     ///
@@ -379,14 +377,14 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
 
 impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for AsyncRx<T> {
     #[inline(always)]
-    fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
+    fn recv<'a>(&'a self) -> RecvFuture<'a, T> {
         AsyncRx::recv(self)
     }
 
     #[cfg(any(feature = "tokio", feature = "async_std"))]
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
     #[inline(always)]
-    fn recv_timeout<'a>(&'a self, duration: std::time::Duration) -> ReceiveTimeoutFuture<'a, T> {
+    fn recv_timeout<'a>(&'a self, duration: std::time::Duration) -> RecvTimeoutFuture<'a, T> {
         AsyncRx::recv_timeout(self, duration)
     }
 
@@ -482,14 +480,14 @@ impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for MAsyncRx<T> {
     }
 
     #[inline(always)]
-    fn recv<'a>(&'a self) -> ReceiveFuture<'a, T> {
+    fn recv<'a>(&'a self) -> RecvFuture<'a, T> {
         self.0.recv()
     }
 
     #[cfg(any(feature = "tokio", feature = "async_std"))]
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
     #[inline(always)]
-    fn recv_timeout<'a>(&'a self, duration: std::time::Duration) -> ReceiveTimeoutFuture<'a, T> {
+    fn recv_timeout<'a>(&'a self, duration: std::time::Duration) -> RecvTimeoutFuture<'a, T> {
         self.0.recv_timeout(duration)
     }
 }
