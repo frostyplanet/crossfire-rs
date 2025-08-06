@@ -298,23 +298,14 @@ impl<T> Future for ReceiveFuture<'_, T> {
 }
 
 /// A fixed-sized future object constructed by [AsyncRx::recv_timeout()]
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 pub struct ReceiveTimeoutFuture<'a, T> {
     rx: &'a AsyncRx<T>,
     waker: Option<LockedWaker>,
-    #[cfg(feature = "tokio")]
-    sleep: Pin<Box<tokio::time::Sleep>>,
-    #[cfg(not(feature = "tokio"))]
     sleep: Pin<Box<dyn Future<Output = ()>>>,
 }
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 unsafe impl<T: Unpin + Send> Send for ReceiveTimeoutFuture<'_, T> {}
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 impl<T> Drop for ReceiveTimeoutFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
@@ -331,8 +322,6 @@ impl<T> Drop for ReceiveTimeoutFuture<'_, T> {
     }
 }
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 impl<T> Future for ReceiveTimeoutFuture<'_, T> {
     type Output = Result<T, RecvTimeoutError>;
 

@@ -299,23 +299,15 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
 }
 
 /// A fixed-sized future object constructed by [AsyncTx::send_timeout()]
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 pub struct SendTimeoutFuture<'a, T: Unpin> {
     tx: &'a AsyncTx<T>,
     item: Option<T>,
     waker: Option<LockedWaker>,
-    #[cfg(feature = "tokio")]
-    sleep: Pin<Box<tokio::time::Sleep>>,
-    #[cfg(not(feature = "tokio"))]
     sleep: Pin<Box<dyn Future<Output = ()>>>,
 }
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 unsafe impl<T: Unpin + Send> Send for SendTimeoutFuture<'_, T> {}
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
 impl<T: Unpin> Drop for SendTimeoutFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
@@ -332,8 +324,6 @@ impl<T: Unpin> Drop for SendTimeoutFuture<'_, T> {
     }
 }
 
-#[cfg(any(feature = "tokio", feature = "async_std"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
 impl<T: Unpin + Send + 'static> Future for SendTimeoutFuture<'_, T> {
     type Output = Result<(), SendTimeoutError<T>>;
 
