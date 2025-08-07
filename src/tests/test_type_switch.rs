@@ -210,21 +210,12 @@ fn test_spsc_bounded_blocking_with_async_sender_switch(
         // Start blocking receiver in a thread
         let receiver_handle = std::thread::spawn(move || {
             let mut all_received = Vec::new();
-            // Receive some messages to create space in buffer
-            for _ in 0..2 {
-                match rx.recv() {
-                    Ok(value) => {
-                        debug!("Blocking receiver got message: {}", value);
-                        all_received.push(value);
-                    }
-                    Err(e) => {
-                        panic!("Failed to receive message: {:?}", e);
-                    }
-                }
-                // Small delay to let sender fill buffer
-                std::thread::sleep(std::time::Duration::from_millis(5));
+            while let Ok(value) = rx.recv() {
+                debug!("Blocking receiver got message: {}", value);
+                all_received.push(value);
             }
-            (rx, all_received)
+            debug!("Blocking receiver completed");
+            all_received
         });
 
         // Send messages with blocking sender in a thread (will block when buffer fills)
@@ -253,31 +244,10 @@ fn test_spsc_bounded_blocking_with_async_sender_switch(
             debug!("Async sender sent {} more messages", remaining_messages);
         });
 
-        // Get receiver back and continue receiving
-        let (rx, mut partial_received) = receiver_handle.join().expect("Receiver thread panicked");
-
-        // Continue receiving remaining messages in blocking thread
-        let final_receiver_handle = std::thread::spawn(move || {
-            let remaining_to_receive = total_messages - partial_received.len();
-            for _ in 0..remaining_to_receive {
-                match rx.recv() {
-                    Ok(value) => {
-                        debug!("Blocking receiver got remaining message: {}", value);
-                        partial_received.push(value);
-                    }
-                    Err(e) => {
-                        panic!("Failed to receive message: {:?}", e);
-                    }
-                }
-            }
-            partial_received
-        });
-
+        // Get final results
+        let all_received = receiver_handle.join().expect("Final receiver thread panicked");
         // Wait for async sender to complete
         async_sender_task.await.expect("Async sender task failed");
-
-        // Get final results
-        let all_received = final_receiver_handle.join().expect("Final receiver thread panicked");
 
         // Verify all messages were received
         assert_eq!(all_received.len(), total_messages);
