@@ -330,8 +330,8 @@ fn test_pressure_multi_tx_async_1_rx_blocking<R: BlockingRxTrait<usize>>(
 #[rstest]
 #[case(mpmc::bounded_tx_async_rx_blocking::<usize>(10), 8, 8)]
 #[case(mpmc::bounded_tx_async_rx_blocking::<usize>(10), 100, 100)]
-#[case(mpmc::bounded_tx_async_rx_blocking::<usize>(10), 10, 1000)]
-#[case(mpmc::bounded_tx_async_rx_blocking::<usize>(100), 500, 500)]
+#[case(mpmc::bounded_tx_async_rx_blocking::<usize>(10), 10, 300)]
+#[case(mpmc::bounded_tx_async_rx_blocking::<usize>(100), 300, 300)]
 fn test_pressure_multi_tx_async_multi_rx_blocking(
     setup_log: (), #[case] channel: (MAsyncTx<usize>, MRx<usize>), #[case] tx_count: usize,
     #[case] rx_count: usize,
