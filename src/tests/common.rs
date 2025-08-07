@@ -37,6 +37,21 @@ macro_rules! async_spawn {
 }
 pub(super) use async_spawn;
 
+#[allow(dead_code)]
+macro_rules! async_join_result {
+    ($th: expr) => {{
+        #[cfg(feature = "async_std")]
+        {
+            $th.await
+        }
+        #[cfg(not(feature = "async_std"))]
+        {
+            $th.await.expect("join")
+        }
+    }};
+}
+pub(super) use async_join_result;
+
 pub async fn sleep(duration: std::time::Duration) {
     #[cfg(feature = "async_std")]
     {
@@ -45,5 +60,23 @@ pub async fn sleep(duration: std::time::Duration) {
     #[cfg(not(feature = "async_std"))]
     {
         tokio::time::sleep(duration).await;
+    }
+}
+
+pub async fn timeout<F, T>(duration: std::time::Duration, future: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = T>,
+{
+    #[cfg(feature = "async_std")]
+    {
+        async_std::future::timeout(duration, future)
+            .await
+            .map_err(|_| format!("Test timed out after {:?}", duration))
+    }
+    #[cfg(not(feature = "async_std"))]
+    {
+        tokio::time::timeout(duration, future)
+            .await
+            .map_err(|_| format!("Test timed out after {:?}", duration))
     }
 }
