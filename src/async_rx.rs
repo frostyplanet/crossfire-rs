@@ -202,6 +202,11 @@ impl<T> AsyncRx<T> {
                 if waker.will_wake(ctx) {
                     return Err(TryRecvError::Empty);
                 } else {
+                    // spurious wake because no other future can be run,
+                    // might be blocking->async, let's yield to other thread
+                    // to save CPU resource.
+
+                    std::thread::yield_now();
                     if let Some(waker) = o_waker.take() {
                         self.recv_waker_cancel(&waker);
                     }

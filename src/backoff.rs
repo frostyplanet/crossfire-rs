@@ -3,9 +3,9 @@ use std::mem::transmute;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 
-const SPIN_LIMIT: u16 = 6;
-const DEFAULT_LIMIT: u16 = 6;
-const MAX_LIMIT: u16 = 10;
+pub const SPIN_LIMIT: u16 = 6;
+pub const DEFAULT_LIMIT: u16 = 6;
+pub const MAX_LIMIT: u16 = 10;
 
 static DEFAULT_CONFIG: AtomicU32 =
     AtomicU32::new(BackoffConfig { spin_limit: SPIN_LIMIT, limit: DEFAULT_LIMIT }.to_u32());

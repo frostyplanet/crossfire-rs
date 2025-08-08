@@ -218,11 +218,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     // Spurious waked by runtime, or
                     // Normally only selection or multiplex future will get here.
                     // No need to reg again, since waker is not consumed.
-                    (state, *o_waker) = shared.sender_try_again_async(
-                        o_waker.take().unwrap(),
-                        ctx,
-                        BackoffConfig::default(),
-                    );
+                    (state, *o_waker) = shared.sender_try_again_async(o_waker.take().unwrap(), ctx);
                     if state == WakerState::WAITING as u8 {
                         return Poll::Pending;
                     }

@@ -219,7 +219,7 @@ impl<T> ChannelShared<T> {
     /// in case of spurious waked up by runtime.
     #[inline]
     pub(crate) fn sender_try_again_async(
-        &self, waker: SendWaker<T>, ctx: &mut Context, backoff_conf: BackoffConfig,
+        &self, waker: SendWaker<T>, ctx: &mut Context,
     ) -> (u8, Option<SendWaker<T>>) {
         if self.is_disconnected() {
             match waker.try_change_state(WakerState::WAITING, WakerState::CLOSED) {
@@ -235,8 +235,18 @@ impl<T> ChannelShared<T> {
         let mut state = waker.get_state();
         // return pending need to check waker, avoid spurious wake
         let will_wake = waker.will_wake(ctx);
-        if will_wake && state != WakerState::COPY as u8 {
-            return (state, Some(waker));
+        let backoff_conf: BackoffConfig;
+        if will_wake {
+            // might be due to select!
+            if state != WakerState::COPY as u8 {
+                return (state, Some(waker));
+            }
+            backoff_conf = BackoffConfig { spin_limit: SPIN_LIMIT, limit: DEFAULT_LIMIT };
+        } else {
+            // spurious wake because no other future can be run,
+            // might be async<->blocking, let's yield to other thread
+            // to save CPU resource.
+            backoff_conf = BackoffConfig { spin_limit: 2, limit: MAX_LIMIT };
         }
         let mut backoff = Backoff::new(backoff_conf);
         while state <= WakerState::WAKED as u8 {
