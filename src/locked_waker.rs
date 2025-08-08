@@ -174,12 +174,11 @@ impl RecvWaker {
             payload: (),
         }))
     }
+
+    /// Return true if the canceled waker is not woken
     #[inline(always)]
-    pub fn cancel(&self) -> u8 {
-        match self.try_change_state(WakerState::INIT, WakerState::WAKED) {
-            Ok(_) => return WakerState::WAKED as u8,
-            Err(s) => return s,
-        }
+    pub fn cancel(&self) -> bool {
+        self.0.state.swap(WakerState::WAKED as u8, Ordering::SeqCst) < WakerState::WAKED as u8
     }
 
     #[inline(always)]

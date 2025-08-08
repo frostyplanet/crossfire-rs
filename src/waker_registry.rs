@@ -45,11 +45,13 @@ impl<T> RegistrySender<T> {
         }
     }
 
+    /// cancel one outdated waker, make sure it does not accumulate
     #[inline(always)]
-    pub fn cancel_waker(&self) {
+    pub fn cancel_waker(&self, waker: &SendWaker<T>) {
         match self {
             RegistrySender::Single(inner) => inner.cancel_waker(),
-            _ => {}
+            RegistrySender::Multi(inner) => inner.cancel_waker(waker.get_seq()),
+            RegistrySender::Dummy(_) => {}
         }
     }
 
@@ -110,11 +112,12 @@ impl RegistryRecv {
         }
     }
 
+    /// cancel one outdated waker, make sure it does not accumulate
     #[inline(always)]
-    pub fn cancel_waker(&self) {
+    pub fn cancel_waker(&self, waker: &RecvWaker) {
         match self {
             RegistryRecv::Single(inner) => inner.cancel_waker(),
-            _ => {}
+            RegistryRecv::Multi(inner) => inner.cancel_waker(waker.get_seq()),
         }
     }
 
@@ -238,6 +241,13 @@ impl<W: WakerTrait> RegistryMulti<W> {
             self.is_empty.store(false, Ordering::Release);
         }
         guard.queue.push_back(weak);
+    }
+
+    /// This function only clears one
+    fn cancel_waker(&self, seq: usize) {
+        if let Some(w) = self.pop() {
+            w.try_to_clear(seq);
+        }
     }
 
     /// Call when ReceiveFuture is cancelled.

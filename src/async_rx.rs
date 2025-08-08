@@ -203,7 +203,7 @@ impl<T> AsyncRx<T> {
                     return Err(TryRecvError::Empty);
                 } else {
                     if let Some(waker) = o_waker.take() {
-                        waker.cancel();
+                        self.recv_waker_cancel(&waker);
                     }
                 }
             } else if state == WakerState::WAKED as u8 {
