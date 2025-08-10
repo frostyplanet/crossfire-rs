@@ -269,7 +269,7 @@ impl<W: WakerTrait> RegistryMulti<W> {
 
     #[inline(always)]
     fn pop(&self) -> Option<W> {
-        if self.is_empty.load(Ordering::Acquire) {
+        if self.is_empty.load(Ordering::SeqCst) {
             return None;
         }
         let mut waker: Option<W> = None;
