@@ -191,37 +191,34 @@ impl<T> AsyncRx<T> {
         let limit = if self.bound_size == 1 { BACKOFF_LIMIT } else { 1 };
         for _ in 0..limit {
             let r = self.try_recv();
+            if let Some(old_waker) = o_waker.take() {
+                // https://github.com/frostyplanet/crossfire-rs/issues/14
+                old_waker.cancel();
+            }
             if let Err(TryRecvError::Empty) = &r {
             } else {
-                let _ = o_waker.take();
                 return r;
             }
             backoff.snooze();
         }
-        if self.shared.reg_recv_async(ctx, o_waker) {
-            // NOTE: The other side put something whie reg_send and did not see the waker,
-            // should check the channel again, otherwise might incur a dead lock.
-            let r = self.try_recv();
-            if let Err(TryRecvError::Empty) = &r {
-                if let Some(waker) = o_waker.as_ref() {
-                    waker.commit();
+        let waker = self.shared.reg_recv_async(ctx);
+        // NOTE: The other side put something whie reg_send and did not see the waker,
+        // should check the channel again, otherwise might incur a dead lock.
+        let r = self.try_recv();
+        if let Err(TryRecvError::Empty) = &r {
+            waker.commit();
+            // Check channel close before sleep, otherwise might block forever
+            // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
+            if self.shared.is_disconnected() {
+                // Ensure all message is received.
+                if let Ok(msg) = self.try_recv() {
+                    return Ok(msg);
                 }
-            } else {
-                let _ = o_waker.take();
-                return r;
+                return Err(TryRecvError::Disconnected);
             }
+            o_waker.replace(waker);
         }
-        // Check channel close before sleep, otherwise might block forever
-        // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
-        if self.shared.is_disconnected() {
-            let _ = o_waker.take();
-            // Ensure all message is received.
-            if let Ok(msg) = self.try_recv() {
-                return Ok(msg);
-            }
-            return Err(TryRecvError::Disconnected);
-        }
-        return Err(TryRecvError::Empty);
+        return r;
     }
 
     #[inline]

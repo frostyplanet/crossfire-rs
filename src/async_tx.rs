@@ -203,35 +203,32 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         let limit = if self.bound_size == 1 { BACKOFF_LIMIT } else { 1 };
         for _ in 0..limit {
             let r = self.try_send(item);
+            if let Some(old_waker) = o_waker.take() {
+                // https://github.com/frostyplanet/crossfire-rs/issues/14
+                old_waker.cancel();
+            }
             if let Err(TrySendError::Full(t)) = r {
                 item = t;
             } else {
-                let _ = o_waker.take();
                 return r;
             }
             backoff.snooze();
         }
-        if self.shared.reg_send_async(ctx, o_waker) {
-            // NOTE: The other side put something whie reg_send and did not see the waker,
-            // should check the channel again, otherwise might incur a dead lock.
-            let r = self.try_send(item);
-            if let Err(TrySendError::Full(t)) = r {
-                item = t;
-                if let Some(waker) = o_waker.as_ref() {
-                    waker.commit();
-                }
-            } else {
-                let _ = o_waker.take();
-                return r;
+        let waker = self.shared.reg_send_async(ctx);
+        // NOTE: The other side put something whie reg_send and did not see the waker,
+        // should check the channel again, otherwise might incur a dead lock.
+        let r = self.try_send(item);
+        if let Err(TrySendError::Full(t)) = r {
+            if self.shared.is_disconnected() {
+                // Check channel close before sleep, otherwise might block forever
+                // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
+                return Err(TrySendError::Disconnected(t));
             }
+            waker.commit();
+            o_waker.replace(waker);
+            return Err(TrySendError::Full(t));
         }
-        if self.shared.is_disconnected() {
-            let _ = o_waker.take();
-            // Check channel close before sleep, otherwise might block forever
-            // Confirmed by test_pressure_1_tx_blocking_1_rx_async()
-            return Err(TrySendError::Disconnected(item));
-        }
-        return Err(TrySendError::Full(item));
+        return r;
     }
 
     /// Send a message while **blocking the current thread**. Be careful!

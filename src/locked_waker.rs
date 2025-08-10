@@ -1,7 +1,7 @@
 use crate::collections::WeakCell;
 use std::fmt;
 use std::sync::{
-    atomic::{AtomicU64, AtomicU8, Ordering},
+    atomic::{AtomicU8, Ordering},
     Arc, Weak,
 };
 use std::task::*;
@@ -12,12 +12,7 @@ pub struct LockedWaker(Arc<LockedWakerInner>);
 impl fmt::Debug for LockedWaker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let _self = self.0.as_ref();
-        write!(
-            f,
-            "LockedWaker(seq={}, state={})",
-            _self.seq.load(Ordering::Acquire),
-            _self.state.load(Ordering::Acquire)
-        )
+        write!(f, "LockedWaker(seq={}, state={})", _self.seq, _self.state.load(Ordering::Acquire))
     }
 }
 
@@ -31,7 +26,7 @@ pub(crate) enum WakerState {
 struct LockedWakerInner {
     waker: std::task::Waker,
     state: AtomicU8,
-    seq: AtomicU64,
+    seq: u64,
 }
 
 pub struct LockedWakerRef(Weak<LockedWakerInner>);
@@ -44,9 +39,9 @@ impl fmt::Debug for LockedWakerRef {
 
 impl LockedWaker {
     #[inline(always)]
-    pub(crate) fn new(ctx: &Context) -> Self {
+    pub(crate) fn new(ctx: &Context, seq: u64) -> Self {
         let s = Arc::new(LockedWakerInner {
-            seq: AtomicU64::new(0),
+            seq,
             waker: ctx.waker().clone(),
             state: AtomicU8::new(WakerState::INIT as u8),
         });
@@ -55,44 +50,23 @@ impl LockedWaker {
 
     #[inline(always)]
     pub(crate) fn get_seq(&self) -> u64 {
-        self.0.seq.load(Ordering::Acquire)
+        self.0.seq
     }
 
+    // return is_already waked
     #[inline(always)]
-    pub(crate) fn set_seq(&self, seq: u64) {
-        self.0.seq.store(seq, Ordering::Release);
+    pub(crate) fn cancel(&self) {
+        self.0.state.store(WakerState::WAKED as u8, Ordering::Release)
     }
 
-    #[inline(always)]
-    pub(crate) fn reset_init(&self) {
-        self.0.state.store(WakerState::INIT as u8, Ordering::Release);
-    }
-
-    #[inline(always)]
     pub(crate) fn commit(&self) {
-        // Content with wake() on the other-side
-        let _ = self.0.state.compare_exchange(
-            WakerState::INIT as u8,
-            WakerState::WAITING as u8,
-            Ordering::SeqCst,
-            Ordering::Relaxed,
-        );
+        self.0.state.store(WakerState::WAITING as u8, Ordering::Release);
     }
 
     // return is_already waked
     #[inline(always)]
     pub(crate) fn abandon(&self) -> u8 {
         return self.0.state.swap(WakerState::WAKED as u8, Ordering::SeqCst);
-    }
-
-    #[inline(always)]
-    pub(crate) fn get_state(&self) -> u8 {
-        self.0.state.load(Ordering::Acquire)
-    }
-
-    #[inline(always)]
-    pub(crate) fn will_wake(&self, ctx: &Context) -> bool {
-        self.0.waker.will_wake(ctx.waker())
     }
 
     #[inline(always)]

@@ -1,6 +1,7 @@
 use crate::collections::LockedQueue;
 use crate::locked_waker::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::Context;
 
 #[enum_dispatch(RegistryTrait)]
 pub enum Registry {
@@ -12,11 +13,11 @@ pub enum Registry {
 #[enum_dispatch]
 pub trait RegistryTrait {
     /// For async context
-    fn reg_waker(&self, waker: &LockedWaker);
+    fn reg_async(&self, _ctx: &mut Context) -> LockedWaker;
 
     fn clear_wakers(&self, _seq: u64);
 
-    fn cancel_waker(&self, _waker: &LockedWaker);
+    fn cancel_waker(&self, _waker: LockedWaker);
 
     fn fire(&self);
 
@@ -38,7 +39,7 @@ impl RegistryDummy {
 
 impl RegistryTrait for RegistryDummy {
     #[inline(always)]
-    fn reg_waker(&self, _waker: &LockedWaker) {
+    fn reg_async(&self, _ctx: &mut Context) -> LockedWaker {
         unreachable!();
     }
 
@@ -46,7 +47,7 @@ impl RegistryTrait for RegistryDummy {
     fn clear_wakers(&self, _seq: u64) {}
 
     #[inline(always)]
-    fn cancel_waker(&self, _waker: &LockedWaker) {}
+    fn cancel_waker(&self, _waker: LockedWaker) {}
 
     #[inline(always)]
     fn fire(&self) {}
@@ -75,14 +76,16 @@ impl RegistrySingle {
 impl RegistryTrait for RegistrySingle {
     /// return is_skip
     #[inline(always)]
-    fn reg_waker(&self, waker: &LockedWaker) {
+    fn reg_async(&self, ctx: &mut Context) -> LockedWaker {
+        let waker = LockedWaker::new(ctx, 0);
         self.cell.put(waker.weak());
+        waker
     }
 
     #[inline(always)]
-    fn cancel_waker(&self, _waker: &LockedWaker) {
+    fn cancel_waker(&self, _waker: LockedWaker) {
         // Got to be it, because only one single thread.
-        // It's ok to ignore it.
+        self.cell.clear();
     }
 
     #[inline(always)]
@@ -135,20 +138,16 @@ impl RegistryMulti {
 
 impl RegistryTrait for RegistryMulti {
     #[inline(always)]
-    fn reg_waker(&self, waker: &LockedWaker) {
-        let seq = self.seq.fetch_add(1, Ordering::SeqCst);
-        waker.set_seq(seq);
+    fn reg_async(&self, ctx: &mut Context) -> LockedWaker {
+        let waker = LockedWaker::new(ctx, self.seq.fetch_add(1, Ordering::SeqCst));
         self.queue.push(waker.weak());
+        waker
     }
 
     #[inline(always)]
-    fn cancel_waker(&self, waker: &LockedWaker) {
-        let seq = waker.get_seq();
-        if let Some(waker_ref) = self.queue.pop() {
-            waker_ref.try_to_clear(seq);
-            // Just abandon and leave it to fire() to clean it.
-            // At most try one.
-        }
+    fn cancel_waker(&self, waker: LockedWaker) {
+        // Just abandon and leave it to fire() to clean it
+        waker.cancel();
     }
 
     /// Call when ReceiveFuture is cancelled.
