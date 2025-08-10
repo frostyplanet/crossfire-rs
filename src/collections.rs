@@ -75,7 +75,7 @@ impl<T> LockedQueue<T> {
     pub fn push(&self, msg: T) {
         let mut guard = self.queue.lock();
         if guard.is_empty() {
-            self.empty.store(false, Ordering::SeqCst);
+            self.empty.store(false, Ordering::Release);
         }
         guard.push_back(msg);
     }
@@ -88,7 +88,7 @@ impl<T> LockedQueue<T> {
         let mut guard = self.queue.lock();
         if let Some(item) = guard.pop_front() {
             if guard.len() == 0 {
-                self.empty.store(true, Ordering::SeqCst);
+                self.empty.store(true, Ordering::Release);
             }
             Some(item)
         } else {
