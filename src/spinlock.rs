@@ -9,6 +9,8 @@ pub struct Spinlock<T> {
     lock: AtomicBool,
 }
 
+unsafe impl<T: Sync> Sync for Spinlock<T> {}
+
 pub struct SpinlockGuard<'a, T> {
     inner: &'a mut T,
     lock: &'a AtomicBool,
