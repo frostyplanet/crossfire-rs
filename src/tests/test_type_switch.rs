@@ -70,17 +70,12 @@ fn test_bounded_async_with_sync_receiver_switch_buffered<T: AsyncTxTrait<usize>>
         let remaining_messages = total_messages - async_consumed;
         let sync_th = std::thread::spawn(move || {
             let mut sync_received = Vec::new();
-            for _ in 0..remaining_messages {
-                match blocking_rx.recv() {
-                    Ok(value) => {
-                        debug!("Sync receiver got message: {}", value);
-                        sync_received.push(value);
-                    }
-                    Err(e) => {
-                        panic!("Failed to receive message with blocking receiver: {:?}", e);
-                    }
-                }
+
+            while let Ok(value) = blocking_rx.recv() {
+                debug!("Sync receiver got message: {}", value);
+                sync_received.push(value);
             }
+
             debug!("Sync receiver consumed {} messages from buffer", sync_received.len());
             sync_received
         });
@@ -157,16 +152,9 @@ fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered(
         let remaining_messages = total_messages - async_consumed;
         let sync_th = std::thread::spawn(move || {
             let mut sync_received = Vec::new();
-            for _ in 0..remaining_messages {
-                match sync_rx.recv() {
-                    Ok(value) => {
-                        debug!("Sync receiver got message: {}", value);
-                        sync_received.push(value);
-                    }
-                    Err(e) => {
-                        panic!("Failed to receive message with blocking receiver: {:?}", e);
-                    }
-                }
+            while let Ok(value) = sync_rx.recv() {
+                debug!("Sync receiver got message: {}", value);
+                sync_received.push(value);
             }
             debug!("Sync receiver consumed {} messages from buffer", sync_received.len());
             sync_received
@@ -402,14 +390,7 @@ fn test_spsc_bounded_blocking_with_async_receiver_switch(
         let receiver_handle = std::thread::spawn(move || {
             let mut sync_received = Vec::new();
             for _ in 0..sync_consumed {
-                match rx.recv() {
-                    Ok(value) => {
-                        sync_received.push(value);
-                    }
-                    Err(e) => {
-                        panic!("Failed to receive message: {:?}", e);
-                    }
-                }
+                sync_received.push(rx.recv().expect("Failed to receive message"));
             }
             debug!(
                 "Blocking receiver consumed {} messages, {} remain in buffer",
@@ -481,14 +462,7 @@ fn test_mpsc_bounded_blocking_with_async_receiver_switch(
         let receiver_handle = std::thread::spawn(move || {
             let mut sync_received = Vec::new();
             for _ in 0..sync_consumed {
-                match rx.recv() {
-                    Ok(value) => {
-                        sync_received.push(value);
-                    }
-                    Err(e) => {
-                        panic!("Failed to receive message: {:?}", e);
-                    }
-                }
+                sync_received.push(rx.recv().expect("Failed to receive message"));
             }
             debug!(
                 "Blocking receiver consumed {} messages, {} remain in buffer",
@@ -560,14 +534,7 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch(
         let receiver_handle = std::thread::spawn(move || {
             let mut sync_received = Vec::new();
             for _ in 0..sync_consumed {
-                match rx.recv() {
-                    Ok(value) => {
-                        sync_received.push(value);
-                    }
-                    Err(e) => {
-                        panic!("Failed to receive message: {:?}", e);
-                    }
-                }
+                sync_received.push(rx.recv().expect("Failed to receive message"));
             }
             debug!(
                 "Blocking receiver consumed {} messages, {} remain in buffer",
@@ -585,18 +552,9 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch(
 
         // Consume remaining messages with async receiver in a task
         let async_receiver_task = async_spawn!(async move {
-            let remaining_messages = total_messages - sync_consumed;
             let mut async_received = Vec::new();
-
-            for _ in 0..remaining_messages {
-                match async_rx.recv().await {
-                    Ok(value) => {
-                        async_received.push(value);
-                    }
-                    Err(e) => {
-                        panic!("Failed to receive message: {:?}", e);
-                    }
-                }
+            while let Ok(value) = async_rx.recv().await {
+                async_received.push(value);
             }
             debug!("Async receiver consumed {} remaining messages", async_received.len());
             async_received
@@ -712,15 +670,8 @@ fn test_spsc_bounded_async_with_blocking_sender_switch(
         // Receive all messages with async receiver in a task
         let receiver_task = async_spawn!(async move {
             let mut all_received = Vec::new();
-            for _ in 0..total_messages {
-                match rx.recv().await {
-                    Ok(value) => {
-                        all_received.push(value);
-                    }
-                    Err(e) => {
-                        panic!("Failed to receive message: {:?}", e);
-                    }
-                }
+            while let Ok(value) = rx.recv().await {
+                all_received.push(value);
             }
             all_received
         });
@@ -776,15 +727,8 @@ fn test_mpsc_bounded_async_with_blocking_sender_switch(
         // Receive all messages with async receiver in a task
         let receiver_task = async_spawn!(async move {
             let mut all_received = Vec::new();
-            for _ in 0..total_messages {
-                match rx.recv().await {
-                    Ok(value) => {
-                        all_received.push(value);
-                    }
-                    Err(e) => {
-                        panic!("Failed to receive message: {:?}", e);
-                    }
-                }
+            while let Ok(value) = rx.recv().await {
+                all_received.push(value);
             }
             all_received
         });
