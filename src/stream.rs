@@ -15,6 +15,8 @@ pub struct AsyncStream<T> {
     ended: bool,
 }
 
+unsafe impl<T: Send> Sync for AsyncStream<T> {}
+
 impl<T> fmt::Debug for AsyncStream<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncStream")

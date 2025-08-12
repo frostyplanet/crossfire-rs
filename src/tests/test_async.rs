@@ -891,3 +891,17 @@ fn test_conversion() {
     let (_mtx, mrx) = mpmc::bounded_async(1);
     let _stream: AsyncStream<usize> = mrx.into(); // AsyncRx -> AsyncStream
 }
+
+#[test]
+fn test_stream_traits() {
+    use crate::stream::AsyncStream;
+    use futures::stream::Stream;
+    use std::pin::Pin;
+
+    fn standard_stream<S: Stream<Item = usize> + Send + Sync + 'static>(_s: Pin<Box<S>>) {}
+
+    let (_tx, rx) = mpmc::bounded_async(1);
+
+    let stream: AsyncStream<usize> = rx.into_stream();
+    standard_stream(Box::pin(stream));
+}
