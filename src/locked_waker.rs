@@ -21,6 +21,19 @@ pub enum WakerState {
     Done = 5,
 }
 
+impl From<u8> for WakerState {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => WakerState::Init,
+            1 => WakerState::Waiting,
+            3 => WakerState::Waked,
+            4 => WakerState::Closed,
+            5 => WakerState::Done,
+            _ => panic!("invalid WakerState"),
+        }
+    }
+}
+
 #[derive(PartialEq, Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum WakeResult {
@@ -397,7 +410,13 @@ impl<P: Copy> WakerCache<P> {
 
     #[inline(always)]
     pub(crate) fn push(&self, waker: ChannelWaker<P>) {
-        debug_assert!(waker.get_state() >= WakerState::Waked as u8);
+        debug_assert!(
+            waker.get_state() >= WakerState::Waked as u8,
+            "{} >= {}",
+            waker.get_state(),
+            WakerState::Waked as u8
+        );
+
         let a = waker.to_arc();
         if Arc::weak_count(&a) == 0 && Arc::strong_count(&a) == 1 {
             self.0.try_put(a);

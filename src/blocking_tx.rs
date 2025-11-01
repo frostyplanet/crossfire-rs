@@ -45,7 +45,7 @@ pub struct Tx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
-    waker_cache: WakerCache<*const T>,
+    pub(crate) waker_cache: WakerCache<*const T>,
 }
 
 unsafe impl<T: Send> Send for Tx<T> {}
@@ -75,22 +75,29 @@ impl<T> From<AsyncTx<T>> for Tx<T> {
     }
 }
 
+macro_rules! return_ok {
+    ($self:expr, $shared:expr, $o_waker:expr) => {
+        trace_log!("tx: send {:?}", $o_waker);
+        if let Some(waker) = $o_waker.take() {
+            $self.waker_cache.push(waker);
+        }
+        if $shared.is_full() {
+            // It's for 8x1, 16x1.
+            std::thread::yield_now();
+        }
+        return Ok(())
+    };
+}
+
 impl<T: Send + 'static> Tx<T> {
     #[inline(always)]
-    pub(crate) fn _send_bounded(
-        &self, item: &MaybeUninit<T>, deadline: Option<Instant>,
-    ) -> Result<(), SendTimeoutError<T>> {
-        let shared = &self.shared;
-        let large = shared.large;
-        let backoff_cfg = BackoffConfig::default().spin(2).limit(shared.backoff_limit);
-        let mut backoff = Backoff::new(backoff_cfg);
-        let direct_copy = deadline.is_none() && shared.sender_direct_copy();
-        if large {
-            backoff.set_step(2);
-        }
+    pub(crate) fn _send_fast(
+        shared: &ChannelShared<T>, item: &MaybeUninit<T>, direct: bool, mut backoff: Backoff,
+    ) -> Option<()> {
         loop {
-            let r = if large { backoff.yield_now() } else { backoff.spin() };
-            if direct_copy && large {
+            let r = if shared.large { backoff.yield_now() } else { backoff.spin() };
+
+            if direct {
                 match shared.try_send_oneshot(item.as_ptr()) {
                     Some(false) => break,
                     None => {
@@ -103,7 +110,7 @@ impl<T: Send + 'static> Tx<T> {
                         shared.on_send();
                         trace_log!("tx: send");
                         std::thread::yield_now();
-                        return Ok(());
+                        return Some(());
                     }
                 }
             } else {
@@ -115,26 +122,71 @@ impl<T: Send + 'static> Tx<T> {
                 }
                 shared.on_send();
                 trace_log!("tx: send");
-                return Ok(());
+                return Some(());
             }
         }
-        let direct_copy_ptr: *const T = if direct_copy { item.as_ptr() } else { std::ptr::null() };
 
-        let mut state: u8;
-        let mut o_waker: Option<SendWaker<T>> = None;
-        macro_rules! return_ok {
-            () => {
-                trace_log!("tx: send {:?}", o_waker);
-                if let Some(waker) = o_waker.take() {
-                    self.waker_cache.push(waker);
-                }
+        None
+    }
+
+    #[inline(always)]
+    pub(crate) fn _send_fast_waker(
+        shared: &ChannelShared<T>, waker_cache: &WakerCache<*const T>, waker: SendWaker<T>,
+        item: &MaybeUninit<T>, mut backoff: Backoff,
+    ) -> Result<(), SendWaker<T>> {
+        loop {
+            if shared.send(&item) {
+                shared.on_send();
+                trace_log!("tx: send {:?}", waker);
+                waker_cache.push(waker);
+
                 if shared.is_full() {
                     // It's for 8x1, 16x1.
                     std::thread::yield_now();
                 }
-                return Ok(())
-            };
+                return Ok(());
+            }
+
+            if backoff.is_completed() {
+                break;
+            }
+            backoff.snooze();
         }
+
+        Err(waker)
+    }
+
+    #[inline(always)]
+    pub(crate) fn _send_prepark(
+        shared: &ChannelShared<T>, waker: SendWaker<T>, item: &MaybeUninit<T>,
+    ) -> (u8, Option<SendWaker<T>>) {
+        waker.reset_init();
+        // For nx1 (more likely congest), need to reset backoff
+        // to allow more yield to receivers.
+        // For nxn (the backoff is already complete), wait a little bit.
+        let (state, o_waker) = shared.sender_reg_and_try(&item, waker, false);
+        trace_log!("tx: sender_reg_and_try {:?} state={}", o_waker, state);
+        (state, o_waker)
+    }
+
+    #[inline(always)]
+    pub(crate) fn _send_bounded(
+        &self, item: &MaybeUninit<T>, deadline: Option<Instant>,
+    ) -> Result<(), SendTimeoutError<T>> {
+        let shared = &self.shared;
+        let large = shared.large;
+        let mut backoff =
+            BackoffConfig::default().spin(2).limit(shared.backoff_limit).large(large).build();
+        let direct_copy = deadline.is_none() && shared.sender_direct_copy();
+
+        if Self::_send_fast(shared, item, direct_copy && large, backoff).is_some() {
+            return Ok(());
+        }
+
+        let direct_copy_ptr: *const T = if direct_copy { item.as_ptr() } else { std::ptr::null() };
+
+        let mut state: u8;
+        let mut o_waker: Option<SendWaker<T>> = None;
         loop {
             let waker = if let Some(w) = o_waker.take() {
                 w.reset_init();
@@ -174,19 +226,12 @@ impl<T: Send + 'static> Tx<T> {
                     state = o_waker.as_ref().unwrap().get_state();
                 }
             }
+
             if state == WakerState::Done as u8 {
-                return_ok!();
+                return_ok!(self, shared, o_waker);
             } else if state == WakerState::Waked as u8 {
-                backoff.reset();
-                loop {
-                    if shared.send(&item) {
-                        shared.on_send();
-                        return_ok!();
-                    }
-                    if backoff.is_completed() {
-                        break;
-                    }
-                    backoff.snooze();
+                if Self::_send_fast(shared, item, direct_copy && large, backoff).is_some() {
+                    return Ok(());
                 }
             } else if state == WakerState::Closed as u8 {
                 return Err(SendTimeoutError::Disconnected(unsafe { item.assume_init_read() }));

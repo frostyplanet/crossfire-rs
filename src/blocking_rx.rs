@@ -44,7 +44,7 @@ pub struct Rx<T> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
-    waker_cache: WakerCache<()>,
+    pub(crate) waker_cache: WakerCache<()>,
 }
 
 unsafe impl<T: Send> Send for Rx<T> {}
@@ -74,10 +74,89 @@ impl<T> From<AsyncRx<T>> for Rx<T> {
     }
 }
 
+macro_rules! try_recv {
+    ($shared:expr) => {{
+        $shared.try_recv().map(|item| {
+            $shared.on_recv();
+            trace_log!("rx: recv");
+            item
+        })
+    }};
+}
+
 impl<T> Rx<T> {
     #[inline(always)]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
         Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
+    }
+
+    #[inline(always)]
+    pub(crate) fn _recv_fast(shared: &ChannelShared<T>, mut backoff: Backoff) -> Option<T> {
+        let mut _item = try_recv!(shared);
+        if _item.is_none() {
+            loop {
+                let r = backoff.snooze();
+                _item = try_recv!(shared);
+
+                if _item.is_some() || r {
+                    break;
+                }
+            }
+        }
+
+        _item
+    }
+
+    #[inline(always)]
+    pub(crate) fn _recv_fast_waker(
+        shared: &ChannelShared<T>, waker_cache: &WakerCache<()>, waker: ChannelWaker<()>,
+        mut backoff: Backoff,
+    ) -> Result<T, ChannelWaker<()>> {
+        if let Some(item) = shared.try_recv() {
+            shared.on_recv();
+            trace_log!("rx: recv {:?}", waker);
+            waker_cache.push(waker);
+            return Ok(item);
+        };
+
+        loop {
+            let r = backoff.snooze();
+            if let Some(item) = shared.try_recv() {
+                shared.on_recv();
+                trace_log!("rx: recv {:?}", waker);
+                waker_cache.push(waker);
+                return Ok(item);
+            };
+
+            if r {
+                break;
+            }
+        }
+
+        Err(waker)
+    }
+
+    #[inline(always)]
+    pub(crate) fn _recv_prepark(
+        shared: &ChannelShared<T>, waker: ChannelWaker<()>, state: &mut u8,
+    ) -> Result<ChannelWaker<()>, T> {
+        if waker.get_state() == WakerState::Waked as u8 {
+            waker.reset_init();
+        }
+        shared.reg_recv(&waker);
+        if shared.is_empty() {
+            *state = waker.commit_waiting();
+        } else {
+            if let Some(item) = shared.try_recv() {
+                shared.on_recv();
+                trace_log!("rx: recv cancel {:?} Init", waker);
+                shared.cancel_waker(&waker);
+                return Err(item);
+            }
+            *state = waker.commit_waiting();
+        }
+
+        Ok(waker)
     }
 
     #[inline(always)]
@@ -86,57 +165,27 @@ impl<T> Rx<T> {
         if shared.is_zero() {
             todo!();
         } else {
-            macro_rules! try_recv {
-                () => {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        trace_log!("rx: recv");
-                        return Ok(item);
-                    }
-                };
-                ($waker: expr) => {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        trace_log!("rx: recv {:?}", $waker);
-                        self.waker_cache.push($waker);
-                        return Ok(item);
-                    }
-                };
+            let backoff =
+                BackoffConfig::default().limit(shared.backoff_limit).large(shared.large).build();
+            if let Some(item) = Self::_recv_fast(&shared, backoff) {
+                return Ok(item);
             }
-            try_recv!();
-            let mut cfg = BackoffConfig::default().limit(shared.backoff_limit);
-            if shared.large {
-                cfg = cfg.spin(2);
-            }
-            let mut backoff = Backoff::new(cfg);
-            loop {
-                let r = backoff.snooze();
-                try_recv!();
-                if r {
-                    break;
-                }
-            }
-            let waker = self.waker_cache.new_blocking(());
-            let mut state;
+
+            let mut waker = self.waker_cache.new_blocking(());
+            let mut state = WakerState::Init as u8;
             'MAIN: loop {
-                if waker.get_state() == WakerState::Waked as u8 {
-                    waker.reset_init();
-                }
-                shared.reg_recv(&waker);
-                if shared.is_empty() {
-                    state = waker.commit_waiting();
-                } else {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        trace_log!("rx: recv cancel {:?} Init", waker);
-                        self.recvs.cancel_waker(&waker);
+                match Self::_recv_prepark(shared, waker, &mut state) {
+                    Ok(w) => {
+                        waker = w;
+                    }
+                    Err(item) => {
                         return Ok(item);
                     }
-                    state = waker.commit_waiting();
                 }
+
                 trace_log!("rx: {:?} commit_waiting state={}", waker, state);
                 if shared.is_disconnected() {
-                    break 'MAIN;
+                    return Err(RecvTimeoutError::Disconnected);
                 }
                 while state == WakerState::Waiting as u8 {
                     match check_timeout(deadline) {
@@ -156,15 +205,21 @@ impl<T> Rx<T> {
                 if state == WakerState::Closed as u8 {
                     break 'MAIN;
                 }
-                backoff.reset();
-                loop {
-                    try_recv!(waker);
-                    if backoff.snooze() {
-                        break;
+
+                match Self::_recv_fast_waker(shared, &self.waker_cache, waker, backoff) {
+                    Ok(item) => return Ok(item),
+                    Err(w) => {
+                        waker = w;
                     }
                 }
             }
-            try_recv!(waker);
+
+            match Self::_recv_fast_waker(shared, &self.waker_cache, waker, backoff) {
+                Ok(item) => return Ok(item),
+                Err(w) => {
+                    self.waker_cache.push(w);
+                }
+            }
             // make sure all msgs received, since we have soonze
             return Err(RecvTimeoutError::Disconnected);
         }

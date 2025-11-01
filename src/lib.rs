@@ -234,6 +234,7 @@ pub use blocking_tx::*;
 mod blocking_rx;
 pub use blocking_rx::*;
 mod async_tx;
+pub mod blocking_select;
 pub use async_tx::*;
 mod async_rx;
 pub use async_rx::*;
@@ -243,6 +244,7 @@ pub mod stream;
 
 mod crossbeam;
 pub use crossbeam::err::*;
+pub use crossbeam::*;
 
 #[macro_export(local_inner_macros)]
 macro_rules! trace_log {

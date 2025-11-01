@@ -92,8 +92,24 @@ impl BackoffConfig {
         }
         self
     }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub const fn large(self, large: bool) -> Self {
+        if large {
+            return self.spin(2);
+        }
+        self
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub fn build(self) -> Backoff {
+        Backoff::new(self)
+    }
 }
 
+#[derive(Clone, Copy)]
 pub struct Backoff {
     step: u16,
     pub config: BackoffConfig,
@@ -119,6 +135,7 @@ impl Backoff {
         }
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     pub fn set_step(&mut self, step: u16) {
         self.step = step;

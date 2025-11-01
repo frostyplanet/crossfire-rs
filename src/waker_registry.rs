@@ -192,7 +192,7 @@ impl RegistryRecv {
 
     #[inline(always)]
     pub fn reg_waker(&self, waker: &RecvWaker) {
-        debug_assert_eq!(waker.get_state(), WakerState::Init as u8);
+        // debug_assert_eq!(waker.get_state(), WakerState::Init as u8);
         match self {
             RegistryRecv::Multi(inner) => inner.reg_waker(waker),
             RegistryRecv::Single(inner) => inner.reg_waker(waker),

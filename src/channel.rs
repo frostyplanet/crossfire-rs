@@ -356,6 +356,11 @@ impl<T> ChannelShared<T> {
         })
     }
 
+    #[inline(always)]
+    pub(crate) fn cancel_waker(&self, waker: &RecvWaker) {
+        self.recvs.cancel_waker(waker);
+    }
+
     /// Call on cancellation, return true to indicate drop temporary message
     /// return false to indicate already Done.
     #[inline(always)]
