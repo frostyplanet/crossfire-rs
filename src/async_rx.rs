@@ -291,7 +291,7 @@ impl<T> AsyncRx<T> {
             }
             if !stream {
                 let _waker = o_waker.as_ref().unwrap();
-                let state = _waker.commit_waiting();
+                let state = shared.recvs.commit_waiting(&_waker);
                 trace_log!("rx{:?}: commit_waiting {:?} {}", tokio_task_id!(), _waker, state);
                 if state == WakerState::Woken as u8 {
                     continue;
