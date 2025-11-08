@@ -160,7 +160,7 @@ impl<T> ChannelShared<T> {
                         return (WakerState::Waiting as u8, Some(waker));
                     }
                 } else {
-                    let state = waker.commit_waiting();
+                    let state = self.senders.commit_waiting(&waker);
                     // let on_recv do it's job,
                     // is_disconnected == true means no receivers
                     if self.is_disconnected() {
