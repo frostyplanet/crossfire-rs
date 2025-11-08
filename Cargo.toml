@@ -19,7 +19,7 @@ rust-version = "1.61"
 [dependencies]
 crossbeam-queue = "0.3.12"
 crossbeam-utils = "0.8"
-futures = "0.3"
+futures-core = "0.3"
 parking_lot = "0"
 tokio = { version = "1", features = ["time", "rt"], optional=true }
 async-std = {version = "1", optional=true}
@@ -38,6 +38,7 @@ crossbeam-channel = "0.5"
 flume = {version="0.11", features= ["async"] }
 kanal = {version="0.1"}
 async-channel = {version="2.5.0"}
+futures-util = {version="0.3", default-features = false}
 
 [features]
 default = []

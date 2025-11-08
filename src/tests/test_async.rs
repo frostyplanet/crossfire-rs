@@ -1,7 +1,8 @@
 use super::common::*;
 use crate::{sink::*, stream::*, *};
 use captains_log::{logfn, *};
-use futures::stream::{FusedStream, StreamExt};
+use futures_core::stream::FusedStream;
+use futures_util::{pin_mut, select, stream::StreamExt, FutureExt};
 use rstest::*;
 use std::future::Future;
 use std::pin::Pin;
@@ -86,7 +87,6 @@ fn test_basic_compile_bounded_empty_full() {
 #[logfn]
 #[rstest]
 fn test_sync() {
-    use futures::FutureExt;
     runtime_block_on!(async move {
         let (tx, rx) = spsc::bounded_async::<usize>(100);
         //  Example1: should fail to compile with Arc
@@ -145,7 +145,7 @@ fn test_sync() {
             }
         });
         'LOOP: for _ in 0..10 {
-            futures::select! {
+            select! {
                 _ = sleep(Duration::from_millis(500)).fuse() =>{
                     println!("tick");
                 },
@@ -326,7 +326,6 @@ fn test_basic_unbounded_idle_select<T: BlockingTxTrait<usize>, R: AsyncRxTrait<u
         }
     };
 
-    use futures::{pin_mut, select, FutureExt};
     runtime_block_on!(async move {
         let mut c = rx.recv().fuse();
         for _ in 0..round {

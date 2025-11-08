@@ -1,6 +1,6 @@
 use crate::channel::*;
 use crate::{AsyncRx, MAsyncRx};
-use futures::stream;
+use futures_core::stream;
 use std::fmt;
 use std::ops::Deref;
 use std::pin::Pin;
@@ -8,7 +8,7 @@ use std::task::*;
 
 /// Constructed by [AsyncRx::into_stream()](crate::AsyncRx::into_stream())
 ///
-/// Implements `futures::stream::Stream`.
+/// Implements `futures_core::stream::Stream`.
 pub struct AsyncStream<T> {
     rx: AsyncRx<T>,
     waker: Option<RecvWaker>,
