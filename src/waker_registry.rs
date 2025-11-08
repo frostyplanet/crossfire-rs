@@ -29,14 +29,14 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn use_direct_copy(&self, channel: &ChannelShared<T>) -> bool {
         match self {
-            RegistrySender::Multi(inner) => {
+            Self::Multi(inner) => {
                 if channel.congest.load(Ordering::Relaxed) > 0 {
                     return true;
                 }
                 return !inner.is_empty();
             }
-            RegistrySender::Single(_) => true,
-            RegistrySender::Dummy => false,
+            Self::Single(_) => true,
+            Self::Dummy => false,
         }
     }
 
@@ -45,8 +45,8 @@ impl<T> RegistrySender<T> {
         debug_assert_eq!(waker.get_state(), WakerState::Init as u8);
         // Clear the ptr in waker if it want to re-register
         match self {
-            RegistrySender::Multi(inner) => inner.reg_waker(waker),
-            RegistrySender::Single(inner) => inner.reg_waker(waker),
+            Self::Multi(inner) => inner.reg_waker(waker),
+            Self::Single(inner) => inner.reg_waker(waker),
             _ => {}
         }
         trace_log!("tx{:?}: reg {:?}", tokio_task_id!(), waker);
@@ -56,12 +56,12 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn clear_wakers(&self, waker: &SendWaker<T>) {
         match self {
-            RegistrySender::Single(inner) => {
+            Self::Single(inner) => {
                 if inner.clear() {
                     trace_log!("tx: clear {:?}", waker);
                 }
             }
-            RegistrySender::Multi(inner) => inner.clear_wakers(waker, false, "tx"),
+            Self::Multi(inner) => inner.clear_wakers(waker, false, "tx"),
             _ => {}
         }
     }
@@ -77,7 +77,7 @@ impl<T> RegistrySender<T> {
         &self, waker: SendWaker<T>, state: WakerState,
     ) -> (u8, Option<SendWaker<T>>) {
         match self {
-            RegistrySender::Multi(inner) => {
+            Self::Multi(inner) => {
                 let cur_state = waker.get_state_relaxed();
                 // If we se Woken here, only possible otherside has woken it
                 if cur_state >= WakerState::Woken as u8 {
@@ -94,7 +94,7 @@ impl<T> RegistrySender<T> {
                     return (state as u8, None);
                 }
             }
-            RegistrySender::Single(inner) => {
+            Self::Single(inner) => {
                 if inner.clear() {
                     let cur_state = waker.get_state_relaxed();
                     if cur_state < state as u8 {
@@ -125,7 +125,7 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn cancel_waker(&self, waker: &SendWaker<T>) {
         match self {
-            RegistrySender::Multi(inner) => {
+            Self::Multi(inner) => {
                 let cur_state = waker.get_state_relaxed();
                 // If we se Woken here, only possible otherside has woken it
                 if cur_state >= WakerState::Woken as u8 {
@@ -140,10 +140,10 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn fire(&self, shared: &ChannelShared<T>) -> WakeResult {
         match self {
-            RegistrySender::Multi(inner) => {
+            Self::Multi(inner) => {
                 return inner.fire(|waker| shared.on_recv_try_send(waker), "tx");
             }
-            RegistrySender::Single(inner) => {
+            Self::Single(inner) => {
                 if let Some(waker) = inner.pop() {
                     let _r = shared.on_recv_try_send(&waker);
                     trace_log!("wake tx {:?} {:?}", waker, _r);
@@ -158,8 +158,8 @@ impl<T> RegistrySender<T> {
     #[inline(always)]
     pub fn close(&self) {
         match self {
-            RegistrySender::Single(inner) => inner.close("tx"),
-            RegistrySender::Multi(inner) => inner.close("tx"),
+            Self::Single(inner) => inner.close("tx"),
+            Self::Multi(inner) => inner.close("tx"),
             _ => {}
         }
     }
@@ -167,9 +167,17 @@ impl<T> RegistrySender<T> {
     /// return waker queue size
     pub fn len(&self) -> usize {
         match self {
-            RegistrySender::Single(inner) => inner.len(),
-            RegistrySender::Multi(inner) => inner.len(),
-            RegistrySender::Dummy => 0,
+            Self::Single(inner) => inner.len(),
+            Self::Multi(inner) => inner.len(),
+            Self::Dummy => 0,
+        }
+    }
+
+    #[inline(always)]
+    pub fn commit_waiting(&self, waker: &SendWaker<T>) -> u8 {
+        match self {
+            Self::Multi(_) => return waker.commit_waiting(),
+            _ => return WakerState::Init as u8,
         }
     }
 }
@@ -194,8 +202,8 @@ impl RegistryRecv {
     pub fn reg_waker(&self, waker: &RecvWaker) {
         debug_assert_eq!(waker.get_state(), WakerState::Init as u8);
         match self {
-            RegistryRecv::Multi(inner) => inner.reg_waker(waker),
-            RegistryRecv::Single(inner) => inner.reg_waker(waker),
+            Self::Multi(inner) => inner.reg_waker(waker),
+            Self::Single(inner) => inner.reg_waker(waker),
         }
         trace_log!("rx{:?}: reg {:?}", tokio_task_id!(), waker);
     }
@@ -203,10 +211,10 @@ impl RegistryRecv {
     #[inline(always)]
     pub fn fire(&self) {
         match self {
-            RegistryRecv::Multi(inner) => {
+            Self::Multi(inner) => {
                 inner.fire(|waker| waker.wake(), "rx");
             }
-            RegistryRecv::Single(inner) => {
+            Self::Single(inner) => {
                 if let Some(waker) = inner.pop() {
                     let _r = waker.wake();
                     trace_log!("wake rx {:?} {:?}", waker, _r);
@@ -219,8 +227,8 @@ impl RegistryRecv {
     #[inline(always)]
     pub fn clear_wakers(&self, waker: &RecvWaker) {
         match self {
-            RegistryRecv::Multi(inner) => inner.clear_wakers(waker, false, "rx"),
-            RegistryRecv::Single(inner) => {
+            Self::Multi(inner) => inner.clear_wakers(waker, false, "rx"),
+            Self::Single(inner) => {
                 if inner.clear() {
                     trace_log!("clear rx waker {:?}", waker);
                 }
@@ -232,7 +240,7 @@ impl RegistryRecv {
     #[inline(always)]
     pub fn cancel_waker(&self, waker: &RecvWaker) {
         match self {
-            RegistryRecv::Multi(inner) => {
+            Self::Multi(inner) => {
                 // If we se Woken here, only possible otherside has woken it
                 if waker.get_state_relaxed() >= WakerState::Woken as u8 {
                     return;
@@ -246,16 +254,24 @@ impl RegistryRecv {
     #[inline(always)]
     pub fn close(&self) {
         match self {
-            RegistryRecv::Single(inner) => inner.close("rx"),
-            RegistryRecv::Multi(inner) => inner.close("rx"),
+            Self::Single(inner) => inner.close("rx"),
+            Self::Multi(inner) => inner.close("rx"),
         }
     }
 
     /// return waker queue size
     pub fn len(&self) -> usize {
         match self {
-            RegistryRecv::Single(inner) => inner.len(),
-            RegistryRecv::Multi(inner) => inner.len(),
+            Self::Single(inner) => inner.len(),
+            Self::Multi(inner) => inner.len(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn commit_waiting(&self, waker: &RecvWaker) -> u8 {
+        match self {
+            Self::Multi(_) => return waker.commit_waiting(),
+            _ => return WakerState::Init as u8,
         }
     }
 }

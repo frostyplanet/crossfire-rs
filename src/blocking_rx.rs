@@ -121,7 +121,7 @@ impl<T> Rx<T> {
             }
             shared.reg_recv(&waker);
             if shared.is_empty() {
-                state = waker.commit_waiting();
+                state = shared.recvs.commit_waiting(&waker);
             } else {
                 if let Some(item) = shared.inner.try_recv() {
                     shared.on_recv();
@@ -129,13 +129,13 @@ impl<T> Rx<T> {
                     self.recvs.cancel_waker(&waker);
                     return Ok(item);
                 }
-                state = waker.commit_waiting();
+                state = shared.recvs.commit_waiting(&waker);
             }
             trace_log!("rx: {:?} commit_waiting state={}", waker, state);
             if shared.is_disconnected() {
                 break 'MAIN;
             }
-            while state == WakerState::Waiting as u8 {
+            while state < WakerState::Woken as u8 {
                 match check_timeout(deadline) {
                     Ok(None) => {
                         std::thread::park();
