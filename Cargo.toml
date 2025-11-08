@@ -1,6 +1,6 @@
 [package]
 name = "crossfire"
-version = "2.1.6"
+version = "2.1.7"
 authors = ["plan <frostyplanet@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
