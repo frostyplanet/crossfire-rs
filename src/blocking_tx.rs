@@ -151,7 +151,7 @@ impl<T: Send + 'static> Tx<T> {
                 if direct_copy_ptr != std::ptr::null_mut() {
                     state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
                 }
-                if state == WakerState::Waiting as u8 {
+                if state <= WakerState::Waiting as u8 {
                     match check_timeout(deadline) {
                         Ok(None) => {
                             std::thread::park();
