@@ -317,6 +317,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
 }
 
 /// A fixed-sized future object constructed by [AsyncTx::make_send_future()]
+#[must_use]
 pub struct SendFuture<'a, T: Unpin> {
     tx: &'a AsyncTx<T>,
     item: MaybeUninit<T>,
