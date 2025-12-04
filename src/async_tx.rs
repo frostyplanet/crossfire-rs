@@ -317,6 +317,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
 }
 
 /// A fixed-sized future object constructed by [AsyncTx::make_send_future()]
+#[must_use]
 pub struct SendFuture<'a, T: Unpin> {
     tx: &'a AsyncTx<T>,
     item: MaybeUninit<T>,
@@ -358,6 +359,7 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
 }
 
 /// A fixed-sized future object constructed by [AsyncTx::send_timeout()]
+#[must_use]
 pub struct SendTimeoutFuture<'a, T: Unpin, R> {
     tx: &'a AsyncTx<T>,
     sleep: Pin<Box<dyn Future<Output = R>>>,

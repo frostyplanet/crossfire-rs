@@ -323,6 +323,7 @@ impl<T> AsyncRx<T> {
 }
 
 /// A fixed-sized future object constructed by [AsyncRx::recv()]
+#[must_use]
 pub struct RecvFuture<'a, T> {
     rx: &'a AsyncRx<T>,
     waker: Option<RecvWaker>,
@@ -362,6 +363,7 @@ impl<T> Future for RecvFuture<'_, T> {
 }
 
 /// A fixed-sized future object constructed by [AsyncRx::recv_timeout()]
+#[must_use]
 pub struct RecvTimeoutFuture<'a, T, R> {
     rx: &'a AsyncRx<T>,
     waker: Option<RecvWaker>,
