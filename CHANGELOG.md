@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [2.1.8] - 2025-11-08
+
+### Fixed
+
+- Add `#[must_use]` to hint missing await on Future (by MathisWellmann)
+
 ## [2.1.7] - 2025-11-08
 
 ### Changed
