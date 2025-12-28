@@ -116,6 +116,49 @@ fn _crossbeam_unbounded_sync(tx_count: usize, rx_count: usize, msg_count: usize)
     assert_eq!(send_counter, recv_counter);
 }
 
+fn _crossbeam_select_mpsc(num_channels: usize, bound: usize, total_msgs: usize) {
+    let msg_count_per_channel = total_msgs / num_channels;
+    let mut rxs = Vec::new();
+    let mut th_tx = Vec::new();
+    for _ in 0..num_channels {
+        let (tx, rx) = crossbeam_channel::bounded::<usize>(bound);
+        rxs.push(rx);
+        th_tx.push(thread::spawn(move || {
+            for i in 0..msg_count_per_channel {
+                tx.send(i).expect("send");
+            }
+        }));
+    }
+
+    // Receive all messages using select - reuse Select instance
+    let mut recv_counter = 0;
+
+    let mut select = crossbeam_channel::Select::new();
+    let mut handles = Vec::with_capacity(num_channels);
+    for rx in &rxs {
+        let op = select.recv(rx);
+        handles.push(op);
+    }
+    while recv_counter < total_msgs {
+        // Perform the selection
+        let oper = select.select();
+        let i = oper.index();
+        match oper.recv(&rxs[i]) {
+            Ok(_) => recv_counter += 1,
+            Err(_) => {
+                // https://docs.rs/crossbeam-channel/latest/crossbeam_channel/struct.Select.html#method.remove
+                // If new operations are added after removing some, the indices of removed operations will not be reused
+                select.remove(i);
+            }
+        }
+    }
+    assert_eq!(total_msgs, recv_counter);
+    // Wait for all senders to finish before receiving
+    for th in th_tx {
+        let _ = th.join();
+    }
+}
+
 fn bench_crossbeam_bounded_sync(c: &mut Criterion) {
     let mut group = c.benchmark_group("crossbeam_bounded");
     group.significance_level(0.1).sample_size(50);
@@ -167,5 +210,28 @@ fn bench_crossbeam_unbounded_sync(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_crossbeam_bounded_sync, bench_crossbeam_unbounded_sync);
+fn bench_crossbeam_select_mpsc(c: &mut Criterion) {
+    let mut group = c.benchmark_group("crossbeam_select");
+    group.significance_level(0.1).sample_size(50);
+    group.measurement_time(Duration::from_secs(20));
+
+    let param = (4, 100, ONE_MILLION); // 3 channels, bound=100, 1M/3 messages per channel
+    group.throughput(Throughput::Elements(ONE_MILLION as u64));
+    group.bench_with_input(
+        BenchmarkId::new("select_mpsc_4_channels", "4"),
+        &param,
+        |b, &(num_channels, bound, msg_count_per_channel)| {
+            b.iter(|| _crossbeam_select_mpsc(num_channels, bound, ONE_MILLION))
+        },
+    );
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_crossbeam_bounded_sync,
+    bench_crossbeam_unbounded_sync,
+    bench_crossbeam_select_mpsc
+);
 criterion_main!(benches);
