@@ -1,7 +1,7 @@
 use crate::stream::AsyncStream;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
-use crate::{channel::*, trace_log, MRx, Rx};
+use crate::{shared::*, trace_log, MRx, Rx};
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -190,7 +190,7 @@ impl<T> AsyncRx<T> {
     /// Returns Err([TryRecvError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline(always)]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        if let Some(item) = self.shared.try_recv() {
+        if let Some(item) = self.shared.inner.try_recv() {
             self.shared.on_recv();
             return Ok(item);
         } else {
@@ -218,7 +218,7 @@ impl<T> AsyncRx<T> {
         // to skip the timeout cleaning logic in Drop.
         macro_rules! try_recv {
             ($state: expr) => {
-                if let Some(item) = shared.try_recv() {
+                if let Some(item) = shared.inner.try_recv() {
                     shared.on_recv();
                     if let Some(waker) = o_waker.take() {
                         trace_log!("rx{:?}: recv {:?} {}", tokio_task_id!(), waker, $state);
@@ -265,7 +265,7 @@ impl<T> AsyncRx<T> {
                 if let Some(mut backoff) = shared.get_async_backoff() {
                     loop {
                         backoff.spin();
-                        if let Some(item) = shared.try_recv() {
+                        if let Some(item) = shared.inner.try_recv() {
                             shared.on_recv();
                             trace_log!("rx{:?}: recv", tokio_task_id!());
                             return Ok(item);

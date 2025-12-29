@@ -37,7 +37,7 @@
 //! }
 //! ```
 
-use crate::channel::*;
+use crate::shared::*;
 use crate::trace_log;
 use core::cell::UnsafeCell;
 use core::mem::transmute;

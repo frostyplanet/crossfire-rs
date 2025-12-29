@@ -1,75 +1,22 @@
 use crate::backoff::*;
-use crate::crossbeam::array_queue::ArrayQueue;
-pub use crate::crossbeam::err::*;
-pub use crate::locked_waker::*;
+pub(crate) use crate::crossbeam::err::*;
+pub(crate) use crate::flavor::*;
+pub(crate) use crate::locked_waker::*;
 use crate::trace_log;
-pub use crate::waker_registry::*;
-use crossbeam_queue::SegQueue;
+pub(crate) use crate::waker_registry::*;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-pub(crate) enum Channel<T> {
-    List(SegQueue<T>),
-    Array(ArrayQueue<T>),
-}
-
-impl<T> Channel<T> {
-    #[inline(always)]
-    pub fn new_list() -> Self {
-        Self::List(SegQueue::new())
-    }
-
-    #[inline(always)]
-    pub fn new_array(bound: usize) -> Self {
-        assert!(bound <= u32::MAX as usize);
-        assert!(bound > 0);
-        Self::Array(ArrayQueue::new(bound))
-    }
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        match self {
-            Self::List(s) => s.len(),
-            Self::Array(s) => s.len(),
-        }
-    }
-
-    #[inline(always)]
-    fn capacity(&self) -> Option<usize> {
-        match self {
-            Self::Array(s) => Some(s.capacity()),
-            Self::List(_) => None,
-        }
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        match self {
-            Self::List(s) => s.is_empty(),
-            Self::Array(s) => s.is_empty(),
-        }
-    }
-
-    #[inline(always)]
-    fn is_full(&self) -> bool {
-        match self {
-            Self::Array(s) => s.is_full(),
-            Self::List(_) => false,
-        }
-    }
-}
 
 pub struct ChannelShared<T> {
     closed: AtomicBool,
     tx_count: AtomicUsize,
     rx_count: AtomicUsize,
     pub(crate) congest: AtomicIsize,
-    pub(crate) inner: Channel<T>,
+    pub(crate) inner: Flavor<T>,
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
-    pub(crate) bound_size: Option<u32>,
     pub(crate) backoff_limit: u16,
     pub(crate) large: bool,
     pub(crate) may_direct_copy: bool,
@@ -77,24 +24,13 @@ pub struct ChannelShared<T> {
 
 impl<T> ChannelShared<T> {
     pub(crate) fn new(
-        inner: Channel<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
+        inner: Flavor<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
     ) -> Arc<Self> {
-        let bound_size;
-        let backoff_limit;
         let mut large = false;
-        let may_direct_copy;
-        backoff_limit = crate::backoff::DEFAULT_LIMIT;
         if let Some(bound) = inner.capacity() {
-            bound_size = Some(bound as u32);
             if bound >= 10 {
                 large = true;
-                may_direct_copy = true;
-            } else {
-                may_direct_copy = false;
             }
-        } else {
-            bound_size = None;
-            may_direct_copy = false;
         }
         Arc::new(Self {
             closed: AtomicBool::new(false),
@@ -103,29 +39,11 @@ impl<T> ChannelShared<T> {
             congest: AtomicIsize::new(0),
             senders,
             recvs,
-            bound_size,
-            backoff_limit,
+            backoff_limit: inner.backoff_limit(),
             large,
-            may_direct_copy,
+            may_direct_copy: inner.may_direct_copy(),
             inner,
         })
-    }
-
-    #[inline(always)]
-    pub(crate) fn try_recv(&self) -> Option<T> {
-        match &self.inner {
-            Channel::List(inner) => {
-                return inner.pop();
-            }
-            Channel::Array(inner) => {
-                return inner.pop();
-            }
-        }
-    }
-
-    #[inline(always)]
-    pub(crate) fn is_zero(&self) -> bool {
-        self.bound_size == Some(0)
     }
 
     /// The number of messages in the channel.
@@ -231,31 +149,6 @@ impl<T> ChannelShared<T> {
         self.recvs.reg_waker(o_waker)
     }
 
-    #[inline(always)]
-    pub(crate) fn send(&self, item: &MaybeUninit<T>) -> bool {
-        match &self.inner {
-            Channel::Array(inner) => {
-                return unsafe { inner.push_with_ptr(item.as_ptr()) };
-            }
-            Channel::List(inner) => {
-                inner.push(unsafe { item.assume_init_read() });
-                return true;
-            }
-        }
-    }
-
-    #[inline]
-    pub(crate) fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
-        match &self.inner {
-            Channel::Array(inner) => {
-                return unsafe { inner.try_push_oneshot(item) };
-            }
-            Channel::List(_inner) => {
-                unreachable!();
-            }
-        }
-    }
-
     /// if need_wake == true, called from on_recv(), when return None indicates try to wake up next.
     /// when need_wake == false, will always return Some(state).
     ///
@@ -266,7 +159,7 @@ impl<T> ChannelShared<T> {
     ) -> (u8, Option<SendWaker<T>>) {
         self.senders.reg_waker(&waker);
         // Not allow Spurious wake and enter this function again;
-        if let Some(res) = self.try_send_oneshot(item.as_ptr()) {
+        if let Some(res) = self.inner.try_send_oneshot(item.as_ptr()) {
             if res {
                 self.on_send();
                 return self.senders.cancel_reuse_waker(waker, WakerState::Done);
@@ -328,14 +221,10 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn on_recv_try_send(&self, waker: &WakerInner<*const T>) -> WakeResult {
         waker.wake_or_copy(|p: *const T| -> u8 {
-            if let Channel::Array(inner) = &self.inner {
-                if unsafe { inner.push_with_ptr(p) } {
-                    WakerState::Done as u8
-                } else {
-                    WakerState::Woken as u8
-                }
+            if let Some(true) = self.inner.try_send_oneshot(p) {
+                WakerState::Done as u8
             } else {
-                unreachable!();
+                WakerState::Woken as u8
             }
         })
     }
