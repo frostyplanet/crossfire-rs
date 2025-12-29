@@ -1,10 +1,12 @@
+use crate::waker_registry::*;
 use std::mem::MaybeUninit;
 
 mod array;
-pub use array::*;
+pub(crate) use array::*;
 mod list;
-use crate::waker_registry::*;
-pub use list::*;
+pub(crate) use list::*;
+mod one;
+pub(crate) use one::*;
 
 #[enum_dispatch::enum_dispatch]
 pub(crate) trait FlavorImpl<T> {
@@ -34,7 +36,7 @@ pub(crate) trait FlavorImpl<T> {
 }
 
 pub(crate) trait FlavorPrivate<T> {
-    fn to_flavor(self) -> crate::flavor::Flavor<T>;
+    fn to_flavor(self) -> Flavor<T>;
 
     fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T>;
 
@@ -43,6 +45,7 @@ pub(crate) trait FlavorPrivate<T> {
 
 #[enum_dispatch::enum_dispatch(FlavorImpl<T>)]
 pub enum Flavor<T> {
-    List(List<T>),
     Array(Array<T>),
+    List(List<T>),
+    One(OneSize<T>),
 }

@@ -16,7 +16,11 @@ macro_rules! init_share {
 
 macro_rules! init_array {
     ($bound: expr) => {{
-        Array::<T>::new($bound)
+        if $bound == 1 {
+            init_share!(OneSize::<T>::new(true, true))
+        } else {
+            init_share!(Array::<T>::new($bound))
+        }
     }};
 }
 
@@ -44,7 +48,7 @@ pub fn unbounded_async<T: Unpin>() -> (MTx<T>, MAsyncRx<T>) {
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
 pub fn bounded_blocking<T: Unpin>(size: usize) -> (MTx<T>, MRx<T>) {
-    let share = init_share!(init_array!(size));
+    let share = init_array!(size);
     let tx = MTx::new(share.clone());
     let rx = MRx::new(share);
     (tx, rx)
@@ -54,7 +58,7 @@ pub fn bounded_blocking<T: Unpin>(size: usize) -> (MTx<T>, MRx<T>) {
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
 pub fn bounded_async<T: Unpin>(size: usize) -> (MAsyncTx<T>, MAsyncRx<T>) {
-    let share = init_share!(init_array!(size));
+    let share = init_array!(size);
     let tx = MAsyncTx::new(share.clone());
     let rx = MAsyncRx::new(share);
     (tx, rx)
@@ -64,7 +68,7 @@ pub fn bounded_async<T: Unpin>(size: usize) -> (MAsyncTx<T>, MAsyncRx<T>) {
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
 pub fn bounded_tx_async_rx_blocking<T: Unpin>(size: usize) -> (MAsyncTx<T>, MRx<T>) {
-    let share = init_share!(init_array!(size));
+    let share = init_array!(size);
     let tx = MAsyncTx::new(share.clone());
     let rx = MRx::new(share);
     (tx, rx)
@@ -74,7 +78,7 @@ pub fn bounded_tx_async_rx_blocking<T: Unpin>(size: usize) -> (MAsyncTx<T>, MRx<
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
 pub fn bounded_tx_blocking_rx_async<T: Unpin>(size: usize) -> (MTx<T>, MAsyncRx<T>) {
-    let share = init_share!(init_array!(size));
+    let share = init_array!(size);
     let tx = MTx::new(share.clone());
     let rx = MAsyncRx::new(share);
     (tx, rx)
