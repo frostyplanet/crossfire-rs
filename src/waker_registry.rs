@@ -1,6 +1,6 @@
-use crate::channel::ChannelShared;
 use crate::collections::WeakCell;
 use crate::locked_waker::*;
+use crate::share::ChannelShared;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
 use crate::trace_log;
