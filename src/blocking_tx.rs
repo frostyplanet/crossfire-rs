@@ -1,5 +1,5 @@
 use crate::backoff::*;
-use crate::{channel::*, trace_log, AsyncTx, MAsyncTx};
+use crate::{share::*, trace_log, AsyncTx, MAsyncTx};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -91,7 +91,7 @@ impl<T: Send + 'static> Tx<T> {
         loop {
             let r = if large { backoff.yield_now() } else { backoff.spin() };
             if direct_copy && large {
-                match shared.try_send_oneshot(item.as_ptr()) {
+                match shared.inner.try_send_oneshot(item.as_ptr()) {
                     Some(false) => break,
                     None => {
                         if r {
@@ -107,7 +107,7 @@ impl<T: Send + 'static> Tx<T> {
                     }
                 }
             } else {
-                if false == shared.send(&item) {
+                if false == shared.inner.try_send(&item) {
                     if r {
                         break;
                     }
@@ -179,7 +179,7 @@ impl<T: Send + 'static> Tx<T> {
             } else if state == WakerState::Woken as u8 {
                 backoff.reset();
                 loop {
-                    if shared.send(&item) {
+                    if shared.inner.try_send(&item) {
                         shared.on_send();
                         return_ok!();
                     }
@@ -206,24 +206,15 @@ impl<T: Send + 'static> Tx<T> {
         if shared.is_disconnected() {
             return Err(SendError(item));
         }
-        match &shared.inner {
-            Channel::Array(inner) => {
-                let _item = MaybeUninit::new(item);
-                if unsafe { inner.push_with_ptr(_item.as_ptr()) } {
-                    shared.on_send();
-                    return Ok(());
-                }
-                match self._send_bounded(&_item, None) {
-                    Ok(_) => return Ok(()),
-                    Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
-                    Err(SendTimeoutError::Timeout(_)) => unreachable!(),
-                }
-            }
-            Channel::List(inner) => {
-                inner.push(item);
-                shared.on_send();
-                return Ok(());
-            }
+        let _item = MaybeUninit::new(item);
+        if shared.inner.try_send(&_item) {
+            shared.on_send();
+            return Ok(());
+        }
+        match self._send_bounded(&_item, None) {
+            Ok(_) => return Ok(()),
+            Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
+            Err(SendTimeoutError::Timeout(_)) => unreachable!(),
         }
     }
 
@@ -241,7 +232,7 @@ impl<T: Send + 'static> Tx<T> {
             return Err(TrySendError::Disconnected(item));
         }
         let _item = MaybeUninit::new(item);
-        if shared.send(&_item) {
+        if shared.inner.try_send(&_item) {
             shared.on_send();
             return Ok(());
         } else {
@@ -265,28 +256,21 @@ impl<T: Send + 'static> Tx<T> {
         if shared.is_disconnected() {
             return Err(SendTimeoutError::Disconnected(item));
         }
-        match &shared.inner {
-            Channel::Array(inner) => match Instant::now().checked_add(timeout) {
-                None => self.try_send(item).map_err(|e| match e {
-                    TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),
-                    TrySendError::Full(t) => SendTimeoutError::Timeout(t),
-                }),
-                Some(deadline) => {
-                    let _item = MaybeUninit::new(item);
-                    if unsafe { inner.push_with_ptr(_item.as_ptr()) } {
-                        shared.on_send();
-                        return Ok(());
-                    }
-                    match self._send_bounded(&_item, Some(deadline)) {
-                        Ok(_) => return Ok(()),
-                        Err(e) => return Err(e),
-                    }
+        match Instant::now().checked_add(timeout) {
+            None => self.try_send(item).map_err(|e| match e {
+                TrySendError::Disconnected(t) => SendTimeoutError::Disconnected(t),
+                TrySendError::Full(t) => SendTimeoutError::Timeout(t),
+            }),
+            Some(deadline) => {
+                let _item = MaybeUninit::new(item);
+                if shared.inner.try_send(&_item) {
+                    shared.on_send();
+                    return Ok(());
                 }
-            },
-            Channel::List(inner) => {
-                inner.push(item);
-                shared.on_send();
-                return Ok(());
+                match self._send_bounded(&_item, Some(deadline)) {
+                    Ok(_) => return Ok(()),
+                    Err(e) => return Err(e),
+                }
             }
         }
     }

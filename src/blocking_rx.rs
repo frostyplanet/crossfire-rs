@@ -1,5 +1,5 @@
 use crate::backoff::*;
-use crate::{channel::*, trace_log, AsyncRx, MAsyncRx};
+use crate::{share::*, trace_log, AsyncRx, MAsyncRx};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -83,91 +83,87 @@ impl<T> Rx<T> {
     #[inline(always)]
     pub(crate) fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<T, RecvTimeoutError> {
         let shared = &self.shared;
-        if shared.is_zero() {
-            todo!();
-        } else {
-            macro_rules! try_recv {
-                () => {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        trace_log!("rx: recv");
-                        return Ok(item);
-                    }
-                };
-                ($waker: expr) => {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        trace_log!("rx: recv {:?}", $waker);
-                        self.waker_cache.push($waker);
-                        return Ok(item);
-                    }
-                };
-            }
+        macro_rules! try_recv {
+            () => {
+                if let Some(item) = shared.inner.try_recv() {
+                    shared.on_recv();
+                    trace_log!("rx: recv");
+                    return Ok(item);
+                }
+            };
+            ($waker: expr) => {
+                if let Some(item) = shared.inner.try_recv() {
+                    shared.on_recv();
+                    trace_log!("rx: recv {:?}", $waker);
+                    self.waker_cache.push($waker);
+                    return Ok(item);
+                }
+            };
+        }
+        try_recv!();
+        let mut cfg = BackoffConfig::default().limit(shared.backoff_limit);
+        if shared.large {
+            cfg = cfg.spin(2);
+        }
+        let mut backoff = Backoff::new(cfg);
+        loop {
+            let r = backoff.snooze();
             try_recv!();
-            let mut cfg = BackoffConfig::default().limit(shared.backoff_limit);
-            if shared.large {
-                cfg = cfg.spin(2);
+            if r {
+                break;
             }
-            let mut backoff = Backoff::new(cfg);
+        }
+        let waker = self.waker_cache.new_blocking(());
+        let mut state;
+        'MAIN: loop {
+            if waker.get_state() == WakerState::Woken as u8 {
+                waker.reset_init();
+            }
+            shared.reg_recv(&waker);
+            if shared.is_empty() {
+                state = waker.commit_waiting();
+            } else {
+                if let Some(item) = shared.inner.try_recv() {
+                    shared.on_recv();
+                    trace_log!("rx: recv cancel {:?} Init", waker);
+                    self.recvs.cancel_waker(&waker);
+                    return Ok(item);
+                }
+                state = waker.commit_waiting();
+            }
+            trace_log!("rx: {:?} commit_waiting state={}", waker, state);
+            if shared.is_disconnected() {
+                break 'MAIN;
+            }
+            while state == WakerState::Waiting as u8 {
+                match check_timeout(deadline) {
+                    Ok(None) => {
+                        std::thread::park();
+                    }
+                    Ok(Some(dur)) => {
+                        std::thread::park_timeout(dur);
+                    }
+                    Err(_) => {
+                        let _ = shared.abandon_recv_waker(waker);
+                        return Err(RecvTimeoutError::Timeout);
+                    }
+                }
+                state = waker.get_state();
+            }
+            if state == WakerState::Closed as u8 {
+                break 'MAIN;
+            }
+            backoff.reset();
             loop {
-                let r = backoff.snooze();
-                try_recv!();
-                if r {
+                try_recv!(waker);
+                if backoff.snooze() {
                     break;
                 }
             }
-            let waker = self.waker_cache.new_blocking(());
-            let mut state;
-            'MAIN: loop {
-                if waker.get_state() == WakerState::Woken as u8 {
-                    waker.reset_init();
-                }
-                shared.reg_recv(&waker);
-                if shared.is_empty() {
-                    state = waker.commit_waiting();
-                } else {
-                    if let Some(item) = shared.try_recv() {
-                        shared.on_recv();
-                        trace_log!("rx: recv cancel {:?} Init", waker);
-                        self.recvs.cancel_waker(&waker);
-                        return Ok(item);
-                    }
-                    state = waker.commit_waiting();
-                }
-                trace_log!("rx: {:?} commit_waiting state={}", waker, state);
-                if shared.is_disconnected() {
-                    break 'MAIN;
-                }
-                while state == WakerState::Waiting as u8 {
-                    match check_timeout(deadline) {
-                        Ok(None) => {
-                            std::thread::park();
-                        }
-                        Ok(Some(dur)) => {
-                            std::thread::park_timeout(dur);
-                        }
-                        Err(_) => {
-                            let _ = shared.abandon_recv_waker(waker);
-                            return Err(RecvTimeoutError::Timeout);
-                        }
-                    }
-                    state = waker.get_state();
-                }
-                if state == WakerState::Closed as u8 {
-                    break 'MAIN;
-                }
-                backoff.reset();
-                loop {
-                    try_recv!(waker);
-                    if backoff.snooze() {
-                        break;
-                    }
-                }
-            }
-            try_recv!(waker);
-            // make sure all msgs received, since we have soonze
-            return Err(RecvTimeoutError::Disconnected);
         }
+        try_recv!(waker);
+        // make sure all msgs received, since we have soonze
+        return Err(RecvTimeoutError::Disconnected);
     }
 
     /// Receives a message from the channel. This method will block until a message is received or the channel is closed.
@@ -192,18 +188,14 @@ impl<T> Rx<T> {
     /// Returns Err([TryRecvError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        if self.shared.is_zero() {
-            todo!();
+        if let Some(item) = self.shared.inner.try_recv() {
+            self.shared.on_recv();
+            return Ok(item);
         } else {
-            if let Some(item) = self.shared.try_recv() {
-                self.shared.on_recv();
-                return Ok(item);
-            } else {
-                if self.shared.is_disconnected() {
-                    return Err(TryRecvError::Disconnected);
-                }
-                return Err(TryRecvError::Empty);
+            if self.shared.is_disconnected() {
+                return Err(TryRecvError::Disconnected);
             }
+            return Err(TryRecvError::Empty);
         }
     }
 

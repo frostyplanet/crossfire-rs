@@ -1,7 +1,7 @@
 use crate::sink::AsyncSink;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
-use crate::{channel::*, trace_log, MTx, Tx};
+use crate::{share::*, trace_log, MTx, Tx};
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -131,7 +131,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             return Err(TrySendError::Disconnected(item));
         }
         let _item = MaybeUninit::new(item);
-        if self.shared.send(&_item) {
+        if self.shared.inner.try_send(&_item) {
             self.shared.on_send();
             return Ok(());
         } else {
@@ -240,7 +240,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
         loop {
-            if shared.send(item) {
+            if shared.inner.try_send(item) {
                 shared.on_send();
                 if let Some(_waker) = o_waker.take() {
                     trace_log!("tx{:?}: send {:?}", tokio_task_id!(), _waker);
@@ -278,7 +278,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 if let Some(mut backoff) = shared.get_async_backoff() {
                     loop {
                         backoff.spin();
-                        if shared.send(item) {
+                        if shared.inner.try_send(item) {
                             shared.on_send();
                             trace_log!("tx{:?}: send", tokio_task_id!());
                             return Poll::Ready(Ok(()));
