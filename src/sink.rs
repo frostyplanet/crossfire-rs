@@ -1,4 +1,4 @@
-use crate::channel::*;
+use crate::shared::*;
 use crate::TrySendError;
 use crate::{AsyncTx, MAsyncTx};
 use std::fmt;
@@ -83,7 +83,7 @@ impl<T: Send + Unpin + 'static> AsyncSink<T> {
     pub fn poll_send(&mut self, ctx: &mut Context, item: T) -> Result<(), TrySendError<T>> {
         let _item = MaybeUninit::new(item);
         let shared = &self.tx.shared;
-        if shared.send(&_item) {
+        if shared.inner.try_send(&_item) {
             shared.on_send();
             return Ok(());
         }

@@ -37,7 +37,7 @@
 //! }
 //! ```
 
-use crate::channel::*;
+use crate::shared::*;
 use core::cell::UnsafeCell;
 use core::mem::transmute;
 use std::future::Future;

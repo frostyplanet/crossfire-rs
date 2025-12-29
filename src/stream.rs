@@ -1,4 +1,4 @@
-use crate::channel::*;
+use crate::shared::*;
 use crate::{AsyncRx, MAsyncRx};
 use futures_core::stream;
 use std::fmt;
