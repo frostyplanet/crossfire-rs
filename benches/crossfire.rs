@@ -7,6 +7,37 @@ use std::time::Duration;
 mod common;
 use common::*;
 
+// Initialize logger for benchmarks
+fn init_logger() {
+    #[cfg(feature = "trace_log")]
+    {
+        use captains_log::*;
+        use std::sync::Once;
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let format = recipe::LOG_FORMAT_THREADED_DEBUG;
+            let ring = ringfile::LogRingFile::new(
+                "/tmp/crossfire_ring.log",
+                500 * 1024 * 1024,
+                Level::Debug,
+                format,
+            );
+            let mut config = Builder::default()
+                .signal(signal_consts::SIGINT)
+                .signal(signal_consts::SIGTERM)
+                .tracing_global()
+                .add_sink(ring)
+                .add_sink(LogConsole::new(
+                    ConsoleTarget::Stdout,
+                    Level::Info,
+                    recipe::LOG_FORMAT_DEBUG,
+                ));
+            config.dynamic = true;
+            config.build().expect("log_setup");
+        });
+    }
+}
+
 macro_rules! bench_bounded_blocking {
     ($group: expr, $name: expr, $tx: expr, $rx: expr, $new: expr, $size: expr, $count: expr) => {
         bench_bounded_blocking!($group, $name, $tx, $rx, $new, $size, $count, 20, 100);
@@ -282,6 +313,7 @@ async fn _crossfire_bounded_async<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>
 
 fn crossfire_bounded_1_blocking_1_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_1_blocking_1_1");
     bench_bounded_blocking!(group, "spsc", 1, 1, spsc::bounded_blocking, 1, TEN_THOUSAND, 10, 100);
     bench_bounded_blocking!(group, "mpsc", 1, 1, mpsc::bounded_blocking, 1, TEN_THOUSAND, 10, 100);
@@ -291,6 +323,7 @@ fn crossfire_bounded_1_blocking_1_1(c: &mut Criterion) {
 
 fn crossfire_bounded_1_blocking_n_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_1_blocking_n_1");
     for input in n_1() {
         bench_bounded_blocking!(
@@ -323,6 +356,7 @@ fn crossfire_bounded_1_blocking_n_1(c: &mut Criterion) {
 
 fn crossfire_bounded_1_blocking_n_n(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_1_blocking_n_n");
     for input in n_n() {
         bench_bounded_blocking!(
@@ -342,6 +376,7 @@ fn crossfire_bounded_1_blocking_n_n(c: &mut Criterion) {
 
 fn crossfire_bounded_100_blocking_1_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_100_blocking_1_1");
     bench_bounded_blocking!(group, "spsc", 1, 1, spsc::bounded_blocking, 100, ONE_MILLION);
     bench_bounded_blocking!(group, "mpsc", 1, 1, mpsc::bounded_blocking, 100, ONE_MILLION);
@@ -351,6 +386,7 @@ fn crossfire_bounded_100_blocking_1_1(c: &mut Criterion) {
 
 fn crossfire_bounded_100_blocking_n_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_100_blocking_n_1");
     for input in n_1() {
         bench_bounded_blocking!(group, "mpsc", input, 1, mpsc::bounded_blocking, 100, ONE_MILLION);
@@ -363,6 +399,7 @@ fn crossfire_bounded_100_blocking_n_1(c: &mut Criterion) {
 
 fn crossfire_bounded_100_blocking_n_n(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_100_blocking_n_n");
     for input in n_n() {
         bench_bounded_blocking!(
@@ -380,6 +417,7 @@ fn crossfire_bounded_100_blocking_n_n(c: &mut Criterion) {
 
 fn crossfire_bounded_1_async_1_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_1_async_1_1");
     bench_bounded_async!(group, "spsc", 1, 1, spsc::bounded_async, 1, TEN_THOUSAND, 10, 100);
     bench_bounded_async!(group, "mpsc", 1, 1, mpsc::bounded_async, 1, TEN_THOUSAND, 10, 100);
@@ -389,6 +427,7 @@ fn crossfire_bounded_1_async_1_1(c: &mut Criterion) {
 
 fn crossfire_bounded_1_async_n_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_1_async_n_1");
     for input in n_1() {
         bench_bounded_async!(
@@ -421,6 +460,7 @@ fn crossfire_bounded_1_async_n_1(c: &mut Criterion) {
 
 fn crossfire_bounded_1_async_n_n(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_1_async_n_n");
     for input in n_n() {
         bench_bounded_async!(
@@ -440,6 +480,7 @@ fn crossfire_bounded_1_async_n_n(c: &mut Criterion) {
 
 fn crossfire_bounded_100_async_1_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_100_async_1_1");
     bench_bounded_async!(group, "spsc", 1, 1, spsc::bounded_async, 100, ONE_MILLION);
     bench_bounded_async!(group, "mpsc", 1, 1, mpsc::bounded_async, 100, ONE_MILLION);
@@ -449,6 +490,7 @@ fn crossfire_bounded_100_async_1_1(c: &mut Criterion) {
 
 fn crossfire_bounded_100_async_n_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_100_async_n_1");
     for input in n_1() {
         bench_bounded_async!(group, "mpsc", input, 1, mpsc::bounded_async, 100, ONE_MILLION);
@@ -462,6 +504,7 @@ fn crossfire_bounded_100_async_n_1(c: &mut Criterion) {
 
 fn crossfire_bounded_100_async_n_n(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_bounded_100_async_n_n");
     for input in n_n() {
         bench_bounded_async!(
@@ -479,6 +522,7 @@ fn crossfire_bounded_100_async_n_n(c: &mut Criterion) {
 
 fn crossfire_unbounded_blocking_1_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_unbounded_blocking_1_1");
     bench_unbounded_blocking!(group, "spsc", 1, 1, spsc::unbounded_blocking, ONE_MILLION);
     bench_unbounded_blocking!(group, "mpsc", 1, 1, mpsc::unbounded_blocking, ONE_MILLION);
@@ -488,6 +532,7 @@ fn crossfire_unbounded_blocking_1_1(c: &mut Criterion) {
 
 fn crossfire_unbounded_blocking_n_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_unbounded_blocking_n_1");
     for input in n_1() {
         bench_unbounded_blocking!(group, "mpsc", input, 1, mpsc::unbounded_blocking, ONE_MILLION);
@@ -500,6 +545,7 @@ fn crossfire_unbounded_blocking_n_1(c: &mut Criterion) {
 
 fn crossfire_unbounded_blocking_n_n(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_unbounded_blocking_n_n");
     for input in n_n() {
         bench_unbounded_blocking!(
@@ -516,6 +562,7 @@ fn crossfire_unbounded_blocking_n_n(c: &mut Criterion) {
 
 fn crossfire_unbounded_async_1_1(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_unbounded_async_1_1");
     bench_unbounded_async!(group, "spsc", 1, 1, spsc::unbounded_async, ONE_MILLION);
     bench_unbounded_async!(group, "mpsc", 1, 1, mpsc::unbounded_async, ONE_MILLION);
@@ -525,6 +572,7 @@ fn crossfire_unbounded_async_1_1(c: &mut Criterion) {
 
 fn crossfire_unbounded_async_mpsc(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_unbounded_async_n_1");
     for input in n_1() {
         bench_unbounded_async!(group, "mpsc", input, 1, mpsc::unbounded_async, ONE_MILLION);
@@ -537,6 +585,7 @@ fn crossfire_unbounded_async_mpsc(c: &mut Criterion) {
 
 fn crossfire_unbounded_async_mpmc(c: &mut Criterion) {
     detect_backoff_cfg();
+    init_logger();
     let mut group = c.benchmark_group("crossfire_unbounded_async_n_n");
     for input in n_n() {
         bench_unbounded_async!(group, "mpmc", input.0, input.1, mpmc::unbounded_async, ONE_MILLION);
