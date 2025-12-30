@@ -48,6 +48,10 @@ name = "crossfire"
 harness = false
 
 [[bench]]
+name = "crossfire_select"
+harness = false
+
+[[bench]]
 name = "crossbeam"
 harness = false
 
