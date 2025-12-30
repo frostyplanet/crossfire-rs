@@ -54,7 +54,7 @@ macro_rules! init_array {
         if $bound <= 1 {
             init_share!(OneSize::<T>::new())
         } else {
-            init_share!(Array::<T>::new($bound))
+            init_share!(Array::<T, true, true>::new($bound))
         }
     }};
 }
