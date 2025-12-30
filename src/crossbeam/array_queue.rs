@@ -1,4 +1,14 @@
+//! Modify by frostyplanet@gmail.com for the crossfire crate:
+//!
+//!   - Modified push() to push_with_ptr();
+//!   - Add try_push_oneshot() which combinds the logic of push and check_full in one step;
+//!   - Remove unused functions.
+//!
+//! Fork from crossbeam-queue crate commit 5a154def002304814d50f3c7658bd30eb46b2fad
+//!
 //! The MIT License (MIT)
+//!
+//! Copyright (c) 2025, 2026 frostyplanet@gmail.com
 //!
 //! Copyright (c) 2019 The Crossbeam Project Developers
 //!
@@ -147,12 +157,12 @@ impl<T> ArrayQueue<T> {
         }
     }
 
-    #[allow(dead_code)]
-    #[inline(always)]
     /// This function is optimise for channel suspected to be full,
     /// It's an equal replacement to is_full(), if not try only oneshot,
     /// return Ok(true) when push ok, Ok(false) when channel is full.
     /// None when uncertain (normally needs a loop)
+    #[allow(dead_code)]
+    #[inline(always)]
     pub unsafe fn try_push_oneshot(&self, value: *const T) -> Option<bool> {
         // Use two SeqCst to compare tail & head, it's an equal replacement to is_full()
         let tail = self.tail.load(Ordering::SeqCst);
@@ -274,6 +284,7 @@ impl<T> ArrayQueue<T> {
     /// assert_eq!(q.pop(), Some(10));
     /// assert!(q.pop().is_none());
     /// ```
+    #[inline(always)]
     pub fn pop(&self) -> Option<T> {
         let backoff = Backoff::new();
         let mut head = self.head.load(Ordering::Relaxed);
@@ -366,6 +377,7 @@ impl<T> ArrayQueue<T> {
     /// q.push(1).unwrap();
     /// assert!(!q.is_empty());
     /// ```
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         let head = self.head.load(Ordering::SeqCst);
         let tail = self.tail.load(Ordering::SeqCst);
@@ -391,6 +403,7 @@ impl<T> ArrayQueue<T> {
     /// q.push(1).unwrap();
     /// assert!(q.is_full());
     /// ```
+    #[inline(always)]
     pub fn is_full(&self) -> bool {
         let tail = self.tail.load(Ordering::SeqCst);
         let head = self.head.load(Ordering::SeqCst);
@@ -418,6 +431,7 @@ impl<T> ArrayQueue<T> {
     /// q.push(20).unwrap();
     /// assert_eq!(q.len(), 2);
     /// ```
+    #[inline]
     pub fn len(&self) -> usize {
         loop {
             // Load the tail, then load the head.
@@ -482,55 +496,5 @@ impl<T> Drop for ArrayQueue<T> {
 impl<T> fmt::Debug for ArrayQueue<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("ArrayQueue { .. }")
-    }
-}
-
-impl<T> IntoIterator for ArrayQueue<T> {
-    type Item = T;
-
-    type IntoIter = IntoIter<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter { value: self }
-    }
-}
-
-#[derive(Debug)]
-pub struct IntoIter<T> {
-    value: ArrayQueue<T>,
-}
-
-impl<T> Iterator for IntoIter<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let value = &mut self.value;
-        let head = *value.head.get_mut();
-        if value.head.get_mut() != value.tail.get_mut() {
-            let index = head & (value.one_lap - 1);
-            let lap = head & !(value.one_lap - 1);
-            // SAFETY: We have mutable access to this, so we can read without
-            // worrying about concurrency. Furthermore, we know this is
-            // initialized because it is the value pointed at by `value.head`
-            // and this is a non-empty queue.
-            let val = unsafe {
-                debug_assert!(index < value.buffer.len());
-                let slot = value.buffer.get_unchecked_mut(index);
-                slot.value.get().read().assume_init()
-            };
-            let new = if index + 1 < value.capacity() {
-                // Same lap, incremented index.
-                // Set to `{ lap: lap, index: index + 1 }`.
-                head + 1
-            } else {
-                // One lap forward, index wraps around to zero.
-                // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
-                lap.wrapping_add(value.one_lap)
-            };
-            *value.head.get_mut() = new;
-            Some(val)
-        } else {
-            None
-        }
     }
 }
