@@ -3,19 +3,19 @@ use crate::crossbeam::array_queue::ArrayQueue;
 use crate::waker_registry::*;
 use std::mem::MaybeUninit;
 
-pub struct Array<T>(ArrayQueue<T>);
+pub struct Array<T, const MP: bool, const MC: bool>(ArrayQueue<T, MP, MC>);
 
-impl<T> Array<T> {
+impl<T, const MP: bool, const MC: bool> Array<T, MP, MC> {
     pub fn new(mut bound: usize) -> Self {
         assert!(bound <= u32::MAX as usize);
         if bound == 0 {
             bound = 1;
         }
-        Array(ArrayQueue::<T>::new(bound))
+        Array(ArrayQueue::<T, MP, MC>::new(bound))
     }
 }
 
-impl<T> FlavorImpl<T> for Array<T> {
+impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
     #[inline(always)]
     fn len(&self) -> usize {
         self.0.len()
@@ -77,27 +77,43 @@ impl<T> FlavorImpl<T> for Array<T> {
     }
 }
 
-impl<T> FlavorPrivate<T> for Array<T> {
+impl<T> FlavorPrivate<T> for Array<T, true, true> {
     #[inline]
     fn to_flavor(self) -> Flavor<T> {
-        Flavor::Array(self)
+        Flavor::ArrayMPMC(self)
     }
 
     #[inline]
-    fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T> {
-        if MP {
-            RegistrySender::<T>::new_multi()
-        } else {
-            RegistrySender::<T>::new_single()
-        }
+    fn new_reg_sender<const _MP: bool>(&self) -> RegistrySender<T> {
+        debug_assert_eq!(_MP, true);
+        RegistrySender::<T>::new_multi()
     }
 
     #[inline]
-    fn new_reg_recv<const MC: bool>(&self) -> RegistryRecv {
-        if MC {
+    fn new_reg_recv<const _MC: bool>(&self) -> RegistryRecv {
+        if _MC {
             RegistryRecv::new_multi()
         } else {
             RegistryRecv::new_single()
         }
+    }
+}
+
+impl<T> FlavorPrivate<T> for Array<T, false, false> {
+    #[inline]
+    fn to_flavor(self) -> Flavor<T> {
+        Flavor::ArraySPSC(self)
+    }
+
+    #[inline]
+    fn new_reg_sender<const _MP: bool>(&self) -> RegistrySender<T> {
+        debug_assert_eq!(_MP, false);
+        RegistrySender::<T>::new_single()
+    }
+
+    #[inline]
+    fn new_reg_recv<const _MC: bool>(&self) -> RegistryRecv {
+        debug_assert_eq!(_MC, false);
+        RegistryRecv::new_single()
     }
 }
