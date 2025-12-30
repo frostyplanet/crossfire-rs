@@ -51,6 +51,7 @@ pub(crate) trait FlavorPrivate<T> {
 #[enum_dispatch::enum_dispatch(FlavorImpl<T>)]
 pub enum Flavor<T> {
     List(List<T>),
-    Array(Array<T>),
     One(OneSize<T>),
+    ArraySPSC(Array<T, false, false>),
+    ArrayMPMC(Array<T, true, true>),
 }
