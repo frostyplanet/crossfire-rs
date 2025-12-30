@@ -1,5 +1,6 @@
 //! Modify by frostyplanet@gmail.com for the crossfire crate:
 //!
+//!   - Optimise for single consumer scenario;
 //!   - Modified push() to push_with_ptr();
 //!   - Add try_push_oneshot() which combinds the logic of push and check_full in one step;
 //!   - Remove unused functions.
@@ -42,7 +43,7 @@
 //!   - <http://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue>
 
 use core::cell::UnsafeCell;
-use core::fmt;
+
 use core::mem::{self, MaybeUninit};
 use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr;
@@ -85,7 +86,7 @@ struct Slot<T> {
 /// assert_eq!(q.push('c'), Err('c'));
 /// assert_eq!(q.pop(), Some('a'));
 /// ```
-pub struct ArrayQueue<T> {
+pub struct ArrayQueue<T, const MP: bool, const MC: bool> {
     /// The head of the queue.
     ///
     /// This value is a "stamp" consisting of an index into the buffer and a lap, but packed into a
@@ -109,13 +110,13 @@ pub struct ArrayQueue<T> {
     one_lap: usize,
 }
 
-unsafe impl<T: Send> Sync for ArrayQueue<T> {}
-unsafe impl<T: Send> Send for ArrayQueue<T> {}
+unsafe impl<T: Send, const MP: bool, const MC: bool> Sync for ArrayQueue<T, MP, MC> {}
+unsafe impl<T: Send, const MP: bool, const MC: bool> Send for ArrayQueue<T, MP, MC> {}
 
-impl<T> UnwindSafe for ArrayQueue<T> {}
-impl<T> RefUnwindSafe for ArrayQueue<T> {}
+impl<T, const MP: bool, const MC: bool> UnwindSafe for ArrayQueue<T, MP, MC> {}
+impl<T, const MP: bool, const MC: bool> RefUnwindSafe for ArrayQueue<T, MP, MC> {}
 
-impl<T> ArrayQueue<T> {
+impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     /// Creates a new bounded queue with the given capacity.
     ///
     /// # Panics
@@ -210,26 +211,26 @@ impl<T> ArrayQueue<T> {
                 // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
                 lap.wrapping_add(self.one_lap)
             };
-            // Try moving the tail.
-            match self.tail.compare_exchange_weak(
-                tail,
-                new_tail,
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    // Write the value into the slot and update the stamp.
-                    unsafe {
-                        let item: &mut MaybeUninit<T> = mem::transmute(slot.value.get());
-                        item.write(ptr::read(value));
-                    }
-                    slot.stamp.store(tail + 1, Ordering::Release);
-                    return Ok(true);
-                }
-                Err(t) => {
+            if MP {
+                // Try moving the tail.
+                if let Err(t) = self.tail.compare_exchange_weak(
+                    tail,
+                    new_tail,
+                    Ordering::SeqCst,
+                    Ordering::Relaxed,
+                ) {
                     return Err((stamp, Some(t)));
                 }
+            } else {
+                self.tail.store(new_tail, Ordering::SeqCst);
             }
+            // Write the value into the slot and update the stamp.
+            unsafe {
+                let item: &mut MaybeUninit<T> = mem::transmute(slot.value.get());
+                item.write(ptr::read(value));
+            }
+            slot.stamp.store(tail + 1, Ordering::Release);
+            return Ok(true);
         } else {
             return Err((stamp, None));
         }
@@ -238,7 +239,8 @@ impl<T> ArrayQueue<T> {
     #[inline(always)]
     pub unsafe fn push_with_ptr(&self, value: *const T) -> bool {
         let backoff = Backoff::new();
-        let mut tail = self.tail.load(Ordering::Relaxed);
+        let mut tail =
+            if MP { self.tail.load(Ordering::Relaxed) } else { self.tail.load(Ordering::Acquire) };
         macro_rules! check_full {
             ($tail: expr) => {
                 atomic::fence(Ordering::SeqCst);
@@ -263,7 +265,9 @@ impl<T> ArrayQueue<T> {
                         check_full!(tail);
                     }
                     backoff.snooze();
-                    tail = self.tail.load(Ordering::Relaxed);
+                    if MP {
+                        tail = self.tail.load(Ordering::Relaxed);
+                    }
                 }
             }
         }
@@ -287,7 +291,8 @@ impl<T> ArrayQueue<T> {
     #[inline(always)]
     pub fn pop(&self) -> Option<T> {
         let backoff = Backoff::new();
-        let mut head = self.head.load(Ordering::Relaxed);
+        let mut head =
+            if MC { self.head.load(Ordering::Relaxed) } else { self.head.load(Ordering::Acquire) };
 
         loop {
             // Deconstruct the head.
@@ -310,40 +315,41 @@ impl<T> ArrayQueue<T> {
                     // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
                     lap.wrapping_add(self.one_lap)
                 };
-
-                // Try moving the head.
-                match self.head.compare_exchange_weak(
-                    head,
-                    new,
-                    Ordering::SeqCst,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(_) => {
-                        // Read the value from the slot and update the stamp.
-                        let msg = unsafe { slot.value.get().read().assume_init() };
-                        slot.stamp.store(head.wrapping_add(self.one_lap), Ordering::Release);
-                        return Some(msg);
-                    }
-                    Err(h) => {
+                if MC {
+                    // Try moving the head.
+                    if let Err(h) = self.head.compare_exchange_weak(
+                        head,
+                        new,
+                        Ordering::SeqCst,
+                        Ordering::Relaxed,
+                    ) {
                         head = h;
                         backoff.spin();
+                        continue;
                     }
+                } else {
+                    self.head.store(new, Ordering::SeqCst);
                 }
-            } else if stamp == head {
-                atomic::fence(Ordering::SeqCst);
-                let tail = self.tail.load(Ordering::Relaxed);
-
-                // If the tail equals the head, that means the channel is empty.
-                if tail == head {
-                    return None;
-                }
-
-                backoff.spin();
-                head = self.head.load(Ordering::Relaxed);
+                // Read the value from the slot and update the stamp.
+                let msg = unsafe { slot.value.get().read().assume_init() };
+                slot.stamp.store(head.wrapping_add(self.one_lap), Ordering::Release);
+                return Some(msg);
             } else {
-                // Snooze because we need to wait for the stamp to get updated.
-                backoff.snooze();
-                head = self.head.load(Ordering::Relaxed);
+                if stamp == head {
+                    atomic::fence(Ordering::SeqCst);
+                    let tail = self.tail.load(Ordering::Relaxed);
+                    // If the tail equals the head, that means the channel is empty.
+                    if tail == head {
+                        return None;
+                    }
+                    backoff.spin();
+                } else {
+                    // Snooze because we need to wait for the stamp to get updated.
+                    backoff.snooze();
+                }
+                if MC {
+                    head = self.head.load(Ordering::Relaxed);
+                }
             }
         }
     }
@@ -457,7 +463,7 @@ impl<T> ArrayQueue<T> {
     }
 }
 
-impl<T> Drop for ArrayQueue<T> {
+impl<T, const MP: bool, const MC: bool> Drop for ArrayQueue<T, MP, MC> {
     fn drop(&mut self) {
         if mem::needs_drop::<T>() {
             // Get the index of the head.
@@ -490,11 +496,5 @@ impl<T> Drop for ArrayQueue<T> {
                 }
             }
         }
-    }
-}
-
-impl<T> fmt::Debug for ArrayQueue<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad("ArrayQueue { .. }")
     }
 }
