@@ -66,6 +66,15 @@ impl<T> FlavorImpl<T> for Array<T> {
             }
         }
     }
+
+    #[inline]
+    fn may_direct_copy(&self) -> bool {
+        if self.0.capacity() > 10 {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl<T> FlavorPrivate<T> for Array<T> {

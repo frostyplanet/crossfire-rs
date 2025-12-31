@@ -28,6 +28,8 @@ pub(crate) trait FlavorImpl<T> {
     fn try_recv(&self) -> Option<T>;
 
     fn backoff_limit(&self) -> u16;
+
+    fn may_direct_copy(&self) -> bool;
 }
 
 pub(crate) trait FlavorPrivate<T> {

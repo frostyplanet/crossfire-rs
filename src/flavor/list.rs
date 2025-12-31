@@ -46,14 +46,12 @@ impl<T> FlavorImpl<T> for List<T> {
 
     #[inline]
     fn backoff_limit(&self) -> u16 {
-        #[cfg(target_arch = "x86_64")]
-        {
-            crate::backoff::DEFAULT_LIMIT
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            crate::backoff::MAX_LIMIT
-        }
+        crate::backoff::DEFAULT_LIMIT
+    }
+
+    #[inline]
+    fn may_direct_copy(&self) -> bool {
+        false
     }
 }
 
