@@ -2,30 +2,20 @@ use super::{Flavor, FlavorImpl, FlavorPrivate};
 use crate::backoff::*;
 use crate::waker_registry::*;
 use core::cell::UnsafeCell;
-use core::mem::MaybeUninit;
+use core::mem::{needs_drop, MaybeUninit};
+use core::ptr;
+use core::sync::atomic::{
+    compiler_fence, AtomicU16, AtomicU32,
+    Ordering::{self, Acquire, Relaxed, Release, SeqCst},
+};
 use crossbeam_utils::CachePadded;
-use std::ptr;
-use std::sync::atomic::{AtomicU8, Ordering};
 
 /// A simplify ArrayQueue specialized for size=1
 pub struct OneSize<T> {
-    setting: CachePadded<Setting>,
-    state: AtomicU8,
+    pos: CachePadded<AtomicU32>,
+
     /// The value in this slot.
-    value: UnsafeCell<MaybeUninit<T>>,
-}
-
-struct Setting {
-    mp: bool,
-    mc: bool,
-}
-
-#[repr(u8)]
-enum SlotState {
-    Empty = 0,
-    Writing = 1,
-    Exist = 2,
-    Reading = 3,
+    slots: [Slot<T>; 2],
 }
 
 unsafe impl<T: Send> Sync for OneSize<T> {}
@@ -33,141 +23,143 @@ unsafe impl<T: Send> Send for OneSize<T> {}
 
 impl<T> OneSize<T> {
     #[inline]
-    pub fn new(mp: bool, mc: bool) -> Self {
-        Self {
-            setting: CachePadded::new(Setting { mp, mc }),
-            state: AtomicU8::new(SlotState::Empty as u8),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-        }
+    pub fn new() -> Self {
+        Self { pos: CachePadded::new(AtomicU32::new(0)), slots: [Slot::init(0), Slot::init(1)] }
+    }
+
+    #[inline(always)]
+    fn unpack(pos: u32) -> (u16, u16) {
+        let head = (pos >> 16) as u16;
+        let tail = pos as u16;
+        (head, tail)
+    }
+
+    #[inline(always)]
+    fn pack(head: u16, tail: u16) -> u32 {
+        ((head as u32) << 16) | (tail as u32)
     }
 
     /// return Ok(true) on ok, Ok(false) on full, Err(()) to spin
     #[inline(always)]
-    unsafe fn try_push(&self, value: *const T) -> Result<bool, ()> {
-        if self.setting.mp {
-            loop {
-                match self.state.compare_exchange_weak(
-                    SlotState::Empty as u8,
-                    SlotState::Writing as u8,
-                    Ordering::SeqCst,
-                    Ordering::Acquire,
-                ) {
-                    Err(state) => {
-                        if state == SlotState::Empty as u8 {
-                            continue;
-                        } else if state == SlotState::Exist as u8 {
-                            // need double check, but usually try_send have double check
-                            return Ok(false);
-                        }
-                        return Err(());
+    unsafe fn _try_push(
+        &self, order: Ordering, value: *const T, failure: Ordering,
+    ) -> Result<(), ()> {
+        let mut pos = self.pos.load(order);
+        compiler_fence(Acquire);
+        loop {
+            let (head, tail) = Self::unpack(pos);
+            if head == tail {
+                let new_pos = Self::pack(head, tail.wrapping_add(1));
+                match self.pos.compare_exchange_weak(pos, new_pos, SeqCst, failure) {
+                    Ok(_) => {
+                        let index = tail & 0x1;
+                        self.slots[index as usize].write(tail, value);
+                        return Ok(());
                     }
-                    Ok(_) => break,
+                    Err(_pos) => {
+                        pos = _pos;
+                    }
                 }
-            }
-        } else {
-            let state = self.state.load(Ordering::SeqCst);
-            if state == SlotState::Exist as u8 {
-                return Ok(false);
-            } else if state != SlotState::Empty as u8 {
+            } else {
                 return Err(());
             }
         }
-        unsafe {
-            (*self.value.get()).write(ptr::read(value));
-        }
-        // spsc (does not use CAS),
-        // and mpmc also need to ensure total ordering against is_full()/is_empty(),
-        self.state.store(SlotState::Exist as u8, Ordering::SeqCst);
-        return Ok(true);
     }
 
     #[inline(always)]
-    pub unsafe fn push_with_ptr(&self, value: *const T) -> bool {
-        if let Ok(r) = unsafe { self.try_push(value) } {
-            return r;
-        }
-        let mut backoff = Backoff::new(BackoffConfig::default());
+    fn _pop(&self, order: Ordering) -> Option<T> {
+        let mut pos = self.pos.load(order);
+        compiler_fence(Acquire);
         loop {
-            backoff.snooze();
-            if let Ok(r) = unsafe { self.try_push(value) } {
-                return r;
+            let (head, tail) = Self::unpack(pos);
+            if head == tail {
+                return None;
             }
-        }
-    }
-
-    #[inline(always)]
-    fn try_pop(&self) -> Result<Option<T>, ()> {
-        let mc = self.setting.mc;
-        if mc {
-            loop {
-                match self.state.compare_exchange_weak(
-                    SlotState::Exist as u8,
-                    SlotState::Reading as u8,
-                    Ordering::SeqCst,
-                    Ordering::Acquire,
-                ) {
-                    Err(state) => {
-                        if state == SlotState::Exist as u8 {
-                            continue;
-                        } else if state == SlotState::Empty as u8 {
-                            #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-                            {
-                                return Ok(None);
-                            }
-                            #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
-                            {
-                                // XXX additional fence to ensure it's really empty
-                                if self.state.load(Ordering::SeqCst) == SlotState::Empty as u8 {
-                                    return Ok(None);
-                                }
-                            }
-                        }
-                        return Err(());
-                    }
-                    Ok(_) => break,
+            let next_head = head.wrapping_add(1);
+            let new_pos = Self::pack(next_head, tail);
+            match self.pos.compare_exchange_weak(pos, new_pos, SeqCst, Acquire) {
+                Err(_pos) => {
+                    pos = _pos;
                 }
-            }
-        } else {
-            let state = self.state.load(Ordering::SeqCst);
-            if state == SlotState::Empty as u8 {
-                return Ok(None);
-            } else if state != SlotState::Exist as u8 {
-                return Err(());
-            }
-        }
-        let msg = unsafe { self.value.get().read().assume_init() };
-        // spsc (does not use CAS),
-        // and mpmc also need to ensure total ordering against is_full()/is_empty(),
-        self.state.store(SlotState::Empty as u8, Ordering::SeqCst);
-        return Ok(Some(msg));
-    }
-
-    /// return None on empty
-    #[inline(always)]
-    pub fn pop(&self) -> Option<T> {
-        if let Ok(r) = self.try_pop() {
-            return r;
-        }
-        let mut backoff = Backoff::new(BackoffConfig::default());
-        loop {
-            backoff.snooze();
-            if let Ok(r) = self.try_pop() {
-                return r;
+                Ok(_) => {
+                    let index = head & 0x1;
+                    return Some(self.slots[index as usize].read(next_head));
+                }
             }
         }
     }
 }
 
+struct Slot<T> {
+    value: UnsafeCell<MaybeUninit<T>>,
+    stamp: AtomicU16,
+}
+
+impl<T> Slot<T> {
+    #[inline]
+    fn init(i: u16) -> Self {
+        Self { value: UnsafeCell::new(MaybeUninit::uninit()), stamp: AtomicU16::new(i) }
+    }
+
+    #[inline(always)]
+    fn write(&self, tail: u16, value: *const T) {
+        let mut stamp = self.stamp.load(Acquire);
+        if stamp != tail {
+            let mut backoff = Backoff::new(BackoffConfig::default());
+            loop {
+                backoff.spin();
+                stamp = self.stamp.load(Acquire);
+                if stamp == tail {
+                    break;
+                }
+            }
+        }
+        unsafe { (*self.value.get()).write(ptr::read(value)) };
+        self.stamp.store(tail.wrapping_add(1), Release);
+    }
+
+    #[inline(always)]
+    fn read(&self, head: u16) -> T {
+        let mut stamp = self.stamp.load(Acquire);
+        if stamp != head {
+            let mut backoff = Backoff::new(BackoffConfig::default());
+            loop {
+                backoff.spin();
+                stamp = self.stamp.load(Acquire);
+                if stamp == head {
+                    break;
+                }
+            }
+        }
+        let msg = unsafe { self.value.get().read().assume_init() };
+        // there might be slow reader, update the stamp to allow writer reuse the slot
+        self.stamp.store(head.wrapping_add(1), Release);
+        msg
+    }
+
+    #[inline(always)]
+    fn drop(&self) {
+        unsafe { self.value.get().read().assume_init_drop() };
+    }
+}
+
 impl<T> Drop for OneSize<T> {
     fn drop(&mut self) {
-        let _ = self.try_recv();
+        if needs_drop::<T>() {
+            let pos = *self.pos.get_mut();
+            let (head, tail) = Self::unpack(pos);
+            if head != tail {
+                let index = head & 0x1;
+                self.slots[index as usize].drop();
+            }
+        }
     }
 }
 
 impl<T> FlavorImpl<T> for OneSize<T> {
     #[inline(always)]
     fn len(&self) -> usize {
-        if self.state.load(Ordering::SeqCst) != SlotState::Empty as u8 {
+        if self.is_full() {
             1
         } else {
             0
@@ -181,65 +173,47 @@ impl<T> FlavorImpl<T> for OneSize<T> {
 
     #[inline(always)]
     fn is_full(&self) -> bool {
-        self.state.load(Ordering::SeqCst) == SlotState::Exist as u8
+        !self.is_empty()
     }
 
     #[inline(always)]
     fn is_empty(&self) -> bool {
-        self.state.load(Ordering::SeqCst) == SlotState::Empty as u8
+        let pos = self.pos.load(SeqCst);
+        let (head, tail) = Self::unpack(pos);
+        head == tail
     }
 
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
-        unsafe { self.push_with_ptr(item.as_ptr()) }
+        // Will always double-check with is_full or try_send_oneshot()
+        unsafe { self._try_push(Relaxed, item.as_ptr(), Relaxed).is_ok() }
     }
 
     #[inline(always)]
     fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
-        if let Ok(r) = unsafe { self.try_push(item) } {
-            if r == false {
-                if self.setting.mp {
-                    // XXX additional fence to ensure it's really full, on cas failure branch use
-                    // Acquire (not SeqCst)
-                    if self.state.load(Ordering::SeqCst) == SlotState::Exist as u8 {
-                        return Some(false);
-                    } else {
-                        return None;
-                    }
-                }
-            }
-            Some(r)
-        } else {
-            None
-        }
+        Some(unsafe { self._try_push(SeqCst, item, SeqCst).is_ok() })
     }
 
     #[inline(always)]
     fn try_recv(&self) -> Option<T> {
-        self.pop()
+        self._pop(SeqCst)
     }
 
     #[inline]
     fn backoff_limit(&self) -> u16 {
-        #[cfg(target_arch = "x86_64")]
-        {
-            crate::backoff::DEFAULT_LIMIT
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            crate::backoff::MAX_LIMIT
-        }
+        crate::backoff::DEFAULT_LIMIT
     }
 }
 
 impl<T> FlavorPrivate<T> for OneSize<T> {
+    #[inline]
     fn to_flavor(self) -> Flavor<T> {
         Flavor::One(self)
     }
 
     #[inline]
-    fn new_reg_sender<const _MP: bool>(&self) -> RegistrySender<T> {
-        if _MP {
+    fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T> {
+        if MP {
             RegistrySender::<T>::new_multi()
         } else {
             RegistrySender::<T>::new_single()
@@ -247,8 +221,8 @@ impl<T> FlavorPrivate<T> for OneSize<T> {
     }
 
     #[inline]
-    fn new_reg_recv<const _MC: bool>(&self) -> RegistryRecv {
-        if _MC {
+    fn new_reg_recv<const MC: bool>(&self) -> RegistryRecv {
+        if MC {
             RegistryRecv::new_multi()
         } else {
             RegistryRecv::new_single()
