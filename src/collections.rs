@@ -113,16 +113,12 @@ impl<T> WeakCell<T> {
     //// it is allow to fail, with only one shot and weak Ops
     #[inline(always)]
     pub fn clear(&self) -> bool {
+        // Don't need acurate, it's optional
         let v = self.ptr.load(Ordering::Acquire);
         if v == ptr::null_mut() {
             return false;
         }
-        match self.ptr.compare_exchange_weak(
-            v,
-            ptr::null_mut(),
-            Ordering::SeqCst,
-            Ordering::Relaxed,
-        ) {
+        match self.ptr.compare_exchange(v, ptr::null_mut(), Ordering::Release, Ordering::Relaxed) {
             Ok(_) => {
                 let _ = unsafe { Weak::from_raw(v) };
                 return true;
