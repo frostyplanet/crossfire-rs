@@ -41,15 +41,27 @@ use crate::blocking_rx::*;
 use crate::blocking_tx::*;
 use crate::share::*;
 
+macro_rules! init_share {
+    ($flavor: expr) => {{
+        let send_wakers = $flavor.new_reg_sender::<true>();
+        let recv_wakers = $flavor.new_reg_recv::<false>();
+        ChannelShared::new($flavor.to_flavor(), send_wakers, recv_wakers)
+    }};
+}
+
+macro_rules! init_array {
+    ($bound: expr) => {{
+        Array::<T>::new($bound)
+    }};
+}
+
 /// Creates an unbounded channel for use in a blocking context.
 ///
 /// The sender will never block, so we use the same `Tx` for all threads.
 pub fn unbounded_blocking<T: Unpin>() -> (MTx<T>, Rx<T>) {
-    let send_wakers = RegistrySender::Dummy;
-    let recv_wakers = RegistryRecv::new_single();
-    let shared = ChannelShared::new(List::new(), send_wakers, recv_wakers);
-    let tx = MTx::new(shared.clone());
-    let rx = Rx::new(shared);
+    let share = init_share!(List::<T>::new());
+    let tx = MTx::new(share.clone());
+    let rx = Rx::new(share);
     (tx, rx)
 }
 
@@ -57,70 +69,48 @@ pub fn unbounded_blocking<T: Unpin>() -> (MTx<T>, Rx<T>) {
 ///
 /// Although the sender type is `MTx`, it will never block.
 pub fn unbounded_async<T: Unpin>() -> (MTx<T>, AsyncRx<T>) {
-    let send_wakers = RegistrySender::Dummy;
-    let recv_wakers = RegistryRecv::new_single();
-    let shared = ChannelShared::new(List::new(), send_wakers, recv_wakers);
-    let tx = MTx::new(shared.clone());
-    let rx = AsyncRx::new(shared);
+    let share = init_share!(List::<T>::new());
+    let tx = MTx::new(share.clone());
+    let rx = AsyncRx::new(share);
     (tx, rx)
 }
 
 /// Creates a bounded channel for use in a blocking context.
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
-pub fn bounded_blocking<T: Unpin>(mut size: usize) -> (MTx<T>, Rx<T>) {
-    if size == 0 {
-        size = 1;
-    }
-    let send_wakers = RegistrySender::new_multi();
-    let recv_wakers = RegistryRecv::new_single();
-    let shared = ChannelShared::new(Array::new(size), send_wakers, recv_wakers);
-    let tx = MTx::new(shared.clone());
-    let rx = Rx::new(shared);
+pub fn bounded_blocking<T: Unpin>(size: usize) -> (MTx<T>, Rx<T>) {
+    let share = init_share!(init_array!(size));
+    let tx = MTx::new(share.clone());
+    let rx = Rx::new(share);
     (tx, rx)
 }
 
 /// Creates a bounded channel where both the sender and receiver are async.
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
-pub fn bounded_async<T: Unpin>(mut size: usize) -> (MAsyncTx<T>, AsyncRx<T>) {
-    if size == 0 {
-        size = 1;
-    }
-    let send_wakers = RegistrySender::new_multi();
-    let recv_wakers = RegistryRecv::new_single();
-    let shared = ChannelShared::new(Array::new(size), send_wakers, recv_wakers);
-    let tx = MAsyncTx::new(shared.clone());
-    let rx = AsyncRx::new(shared);
+pub fn bounded_async<T: Unpin>(size: usize) -> (MAsyncTx<T>, AsyncRx<T>) {
+    let share = init_share!(init_array!(size));
+    let tx = MAsyncTx::new(share.clone());
+    let rx = AsyncRx::new(share);
     (tx, rx)
 }
 
 /// Creates a bounded channel where the sender is async and the receiver is blocking.
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
-pub fn bounded_tx_async_rx_blocking<T: Unpin>(mut size: usize) -> (MAsyncTx<T>, Rx<T>) {
-    if size == 0 {
-        size = 1;
-    }
-    let send_wakers = RegistrySender::new_multi();
-    let recv_wakers = RegistryRecv::new_single();
-    let shared = ChannelShared::new(Array::new(size), send_wakers, recv_wakers);
-    let tx = MAsyncTx::new(shared.clone());
-    let rx = Rx::new(shared);
+pub fn bounded_tx_async_rx_blocking<T: Unpin>(size: usize) -> (MAsyncTx<T>, Rx<T>) {
+    let share = init_share!(init_array!(size));
+    let tx = MAsyncTx::new(share.clone());
+    let rx = Rx::new(share);
     (tx, rx)
 }
 
 /// Creates a bounded channel where the sender is blocking and the receiver is async.
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
-pub fn bounded_tx_blocking_rx_async<T>(mut size: usize) -> (MTx<T>, AsyncRx<T>) {
-    if size == 0 {
-        size = 1;
-    }
-    let send_wakers = RegistrySender::new_multi();
-    let recv_wakers = RegistryRecv::new_single();
-    let shared = ChannelShared::new(Array::new(size), send_wakers, recv_wakers);
-    let tx = MTx::new(shared.clone());
-    let rx = AsyncRx::new(shared);
+pub fn bounded_tx_blocking_rx_async<T>(size: usize) -> (MTx<T>, AsyncRx<T>) {
+    let share = init_share!(init_array!(size));
+    let tx = MTx::new(share.clone());
+    let rx = AsyncRx::new(share);
     (tx, rx)
 }
