@@ -1,14 +1,17 @@
-use super::{Flavor, FlavorImpl};
+use super::{Flavor, FlavorImpl, FlavorPrivate};
 use crate::crossbeam::array_queue::ArrayQueue;
+use crate::waker_registry::*;
 use std::mem::MaybeUninit;
 
 pub struct Array<T>(ArrayQueue<T>);
 
 impl<T> Array<T> {
-    pub fn new(bound: usize) -> Flavor<T> {
+    pub fn new(mut bound: usize) -> Self {
         assert!(bound <= u32::MAX as usize);
-        assert!(bound > 0);
-        Flavor::Array(Self(ArrayQueue::new(bound)))
+        if bound == 0 {
+            bound = 1;
+        }
+        Array(ArrayQueue::<T>::new(bound))
     }
 }
 
@@ -70,6 +73,31 @@ impl<T> FlavorImpl<T> for Array<T> {
             true
         } else {
             false
+        }
+    }
+}
+
+impl<T> FlavorPrivate<T> for Array<T> {
+    #[inline]
+    fn to_flavor(self) -> Flavor<T> {
+        Flavor::Array(self)
+    }
+
+    #[inline]
+    fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T> {
+        if MP {
+            RegistrySender::<T>::new_multi()
+        } else {
+            RegistrySender::<T>::new_single()
+        }
+    }
+
+    #[inline]
+    fn new_reg_recv<const MC: bool>(&self) -> RegistryRecv {
+        if MC {
+            RegistryRecv::new_multi()
+        } else {
+            RegistryRecv::new_single()
         }
     }
 }

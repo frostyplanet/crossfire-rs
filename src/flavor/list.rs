@@ -1,4 +1,5 @@
-use super::{Flavor, FlavorImpl};
+use super::{Flavor, FlavorImpl, FlavorPrivate};
+use crate::waker_registry::*;
 use crossbeam_queue::SegQueue;
 use std::mem::MaybeUninit;
 
@@ -6,8 +7,8 @@ pub struct List<T>(SegQueue<T>);
 
 impl<T> List<T> {
     #[inline(always)]
-    pub fn new() -> Flavor<T> {
-        Flavor::List(Self(SegQueue::new()))
+    pub fn new() -> Self {
+        Self(SegQueue::<T>::new())
     }
 }
 
@@ -51,5 +52,26 @@ impl<T> FlavorImpl<T> for List<T> {
     #[inline]
     fn may_direct_copy(&self) -> bool {
         false
+    }
+}
+
+impl<T> FlavorPrivate<T> for List<T> {
+    #[inline]
+    fn to_flavor(self) -> Flavor<T> {
+        Flavor::List(self)
+    }
+
+    #[inline]
+    fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T> {
+        RegistrySender::<T>::Dummy
+    }
+
+    #[inline]
+    fn new_reg_recv<const MC: bool>(&self) -> RegistryRecv {
+        if MC {
+            RegistryRecv::new_multi()
+        } else {
+            RegistryRecv::new_single()
+        }
     }
 }
