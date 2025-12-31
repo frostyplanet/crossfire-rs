@@ -243,8 +243,13 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
             if MP { self.tail.load(Ordering::Relaxed) } else { self.tail.load(Ordering::Acquire) };
         macro_rules! check_full {
             ($tail: expr) => {
-                atomic::fence(Ordering::SeqCst);
-                let head = self.head.load(Ordering::Relaxed);
+                let head = if MP || MC {
+                    // NOTE: The fence is preventing livestock
+                    atomic::fence(Ordering::SeqCst);
+                    self.head.load(Ordering::Relaxed)
+                } else {
+                    self.head.load(Ordering::SeqCst)
+                };
                 // If the head lags one lap behind the tail as well...
                 if head.wrapping_add(self.one_lap) == $tail {
                     // ...then the queue is full.
@@ -336,8 +341,13 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
                 return Some(msg);
             } else {
                 if stamp == head {
-                    atomic::fence(Ordering::SeqCst);
-                    let tail = self.tail.load(Ordering::Relaxed);
+                    let tail = if MP || MC {
+                        // NOTE: The fence is preventing livestock
+                        atomic::fence(Ordering::SeqCst);
+                        self.tail.load(Ordering::Relaxed)
+                    } else {
+                        self.tail.load(Ordering::SeqCst)
+                    };
                     // If the tail equals the head, that means the channel is empty.
                     if tail == head {
                         return None;
