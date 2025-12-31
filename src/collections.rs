@@ -54,7 +54,7 @@ impl<T> ArcCell<T> {
         match self.ptr.compare_exchange(
             ptr::null_mut(),
             item_ptr,
-            Ordering::SeqCst,
+            Ordering::Release,
             Ordering::Relaxed,
         ) {
             Ok(_) => {}
