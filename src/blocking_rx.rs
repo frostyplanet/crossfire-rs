@@ -101,8 +101,8 @@ impl<T> Rx<T> {
             };
         }
         try_recv!();
-        let mut cfg = BackoffConfig::default().limit(shared.backoff_limit);
-        if shared.large {
+        let mut cfg = BackoffConfig::default().limit(shared.inner.backoff_limit());
+        if shared.inner.is_large() {
             cfg = cfg.spin(2);
         }
         let mut backoff = Backoff::new(cfg);

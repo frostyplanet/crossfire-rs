@@ -17,27 +17,12 @@ pub struct ChannelShared<T> {
     pub(crate) inner: Flavor<T>,
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
-    pub(crate) backoff_limit: u16,
-    pub(crate) large: bool,
-    pub(crate) may_direct_copy: bool,
 }
 
 impl<T> ChannelShared<T> {
     pub(crate) fn new(
         inner: Flavor<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
     ) -> Arc<Self> {
-        let mut large = false;
-        let may_direct_copy;
-        if let Some(bound) = inner.capacity() {
-            if bound >= 10 {
-                large = true;
-                may_direct_copy = true;
-            } else {
-                may_direct_copy = false;
-            }
-        } else {
-            may_direct_copy = false;
-        }
         Arc::new(Self {
             closed: AtomicBool::new(false),
             tx_count: AtomicUsize::new(1),
@@ -45,9 +30,6 @@ impl<T> ChannelShared<T> {
             congest: AtomicIsize::new(0),
             senders,
             recvs,
-            backoff_limit: inner.backoff_limit(),
-            large,
-            may_direct_copy,
             inner,
         })
     }
@@ -95,7 +77,7 @@ impl<T> ChannelShared<T> {
 
     #[inline(always)]
     pub(crate) fn sender_direct_copy(&self) -> bool {
-        self.may_direct_copy && self.senders.use_direct_copy(self)
+        self.inner.may_direct_copy() && self.senders.use_direct_copy(self)
     }
 
     /// Returns the number of wakers for senders and receivers. For debugging purposes.
@@ -299,7 +281,8 @@ impl<T> ChannelShared<T> {
 
     #[inline(always)]
     pub(crate) fn get_async_backoff(&self) -> Option<Backoff> {
-        if self.large {
+        let backoff = self.inner.backoff_limit();
+        if backoff == 0 {
             return None;
         }
         let cfg = BackoffConfig::default();

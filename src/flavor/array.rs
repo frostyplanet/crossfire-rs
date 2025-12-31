@@ -27,6 +27,11 @@ impl<T> FlavorImpl<T> for Array<T> {
     }
 
     #[inline(always)]
+    fn is_large(&self) -> bool {
+        self.0.capacity() > 10
+    }
+
+    #[inline(always)]
     fn is_full(&self) -> bool {
         self.0.is_full()
     }
@@ -64,6 +69,15 @@ impl<T> FlavorImpl<T> for Array<T> {
             {
                 crate::backoff::MAX_LIMIT
             }
+        }
+    }
+
+    #[inline]
+    fn may_direct_copy(&self) -> bool {
+        if self.0.capacity() > 10 {
+            true
+        } else {
+            false
         }
     }
 }
