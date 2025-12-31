@@ -4,7 +4,11 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
 
 pub const SPIN_LIMIT: u16 = 6;
+
+#[cfg(target_arch = "x86_64")]
 pub const DEFAULT_LIMIT: u16 = 6;
+#[cfg(not(target_arch = "x86_64"))]
+pub const DEFAULT_LIMIT: u16 = 10;
 pub const MAX_LIMIT: u16 = 10;
 
 static DETECT_CONFIG: AtomicU32 =
@@ -32,10 +36,7 @@ pub fn detect_backoff_cfg() {
     {
         // For one core (like VM machine), better use yield_now instead of spin_loop.
         DETECT_CONFIG.store(
-            #[cfg(target_arch = "x86_64")]
             BackoffConfig { spin_limit: 0, limit: DEFAULT_LIMIT }.to_u32(),
-            #[cfg(not(target_arch = "x86_64"))]
-            BackoffConfig { spin_limit: 0, limit: MAX_LIMIT }.to_u32(),
             Ordering::Release,
         );
     }

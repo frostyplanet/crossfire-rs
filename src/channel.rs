@@ -83,34 +83,18 @@ impl<T> ChannelShared<T> {
         let backoff_limit;
         let mut large = false;
         let may_direct_copy;
+        backoff_limit = crate::backoff::DEFAULT_LIMIT;
         if let Some(bound) = inner.capacity() {
             bound_size = Some(bound as u32);
             if bound >= 10 {
                 large = true;
-                backoff_limit = crate::backoff::DEFAULT_LIMIT;
                 may_direct_copy = true;
             } else {
                 may_direct_copy = false;
-                #[cfg(target_arch = "x86_64")]
-                {
-                    backoff_limit = crate::backoff::DEFAULT_LIMIT;
-                }
-                #[cfg(not(target_arch = "x86_64"))]
-                {
-                    backoff_limit = crate::backoff::MAX_LIMIT;
-                }
             }
         } else {
             bound_size = None;
             may_direct_copy = false;
-            #[cfg(target_arch = "x86_64")]
-            {
-                backoff_limit = crate::backoff::DEFAULT_LIMIT;
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            {
-                backoff_limit = crate::backoff::MAX_LIMIT;
-            }
         }
         Arc::new(Self {
             closed: AtomicBool::new(false),
