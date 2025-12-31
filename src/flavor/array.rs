@@ -1,4 +1,4 @@
-use super::{Flavor, FlavorImpl, FlavorPrivate};
+use super::{Flavor, FlavorImpl, FlavorPrivate, TryRecvError, TrySendErr};
 use crate::crossbeam::array_queue::ArrayQueue;
 use crate::waker_registry::*;
 use std::mem::MaybeUninit;
@@ -37,18 +37,23 @@ impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
     }
 
     #[inline(always)]
-    fn try_send(&self, item: &MaybeUninit<T>) -> bool {
-        return unsafe { self.0.push_with_ptr(item.as_ptr()) };
+    fn try_send(&self, item: &MaybeUninit<T>) -> Result<(), TrySendErr> {
+        return unsafe { self.0.try_send(item.as_ptr()) };
     }
 
     #[inline(always)]
-    fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
-        return unsafe { self.0.try_push_oneshot(item) };
+    fn try_send_oneshot(&self, item: *const T) -> Option<Result<(), TrySendErr>> {
+        return unsafe { self.0.try_send_oneshot(item) };
     }
 
     #[inline(always)]
-    fn try_recv(&self) -> Option<T> {
+    fn try_recv(&self) -> Result<T, TryRecvError> {
         self.0.pop()
+    }
+
+    #[inline]
+    fn close(&self) -> bool {
+        self.0.disconnect()
     }
 
     #[inline]

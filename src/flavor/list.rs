@@ -1,4 +1,4 @@
-use super::{Flavor, FlavorImpl, FlavorPrivate};
+use super::{Flavor, FlavorImpl, FlavorPrivate, TryRecvError, TrySendErr};
 use crate::waker_registry::*;
 use crossbeam_queue::SegQueue;
 use std::mem::MaybeUninit;
@@ -34,14 +34,21 @@ impl<T> FlavorImpl<T> for List<T> {
     }
 
     #[inline(always)]
-    fn try_send(&self, item: &MaybeUninit<T>) -> bool {
-        self.0.push(unsafe { item.assume_init_read() });
-        true
+    fn try_send(&self, item: &MaybeUninit<T>) -> Result<(), TrySendErr> {
+        todo!();
+        //self.0.push(unsafe { item.assume_init_read() });
+        //true
     }
 
     #[inline(always)]
-    fn try_recv(&self) -> Option<T> {
-        self.0.pop()
+    fn try_recv(&self) -> Result<T, TryRecvError> {
+        todo!();
+        //self.0.pop()
+    }
+
+    #[inline]
+    fn close(&self) -> bool {
+        todo!();
     }
 
     #[inline]

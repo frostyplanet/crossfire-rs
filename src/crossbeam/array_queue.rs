@@ -1,8 +1,9 @@
 //! Modify by frostyplanet@gmail.com for the crossfire crate:
 //!
 //!   - Optimise for single consumer scenario;
-//!   - Modified push() to push_with_ptr();
-//!   - Add try_push_oneshot() which combinds the logic of push and check_full in one step;
+//!   - Add mark_bit according to crossbeam-channel
+//!   - Modified push() to try_send() for ptr argument;
+//!   - Add try_send_oneshot() which combinds the logic of push and check_full in one step;
 //!   - Remove unused functions.
 //!
 //! Fork from crossbeam-queue crate commit 5a154def002304814d50f3c7658bd30eb46b2fad
@@ -44,6 +45,7 @@
 
 use core::cell::UnsafeCell;
 
+use crate::flavor::{TryRecvError, TrySendErr};
 use core::mem::{self, MaybeUninit};
 use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr;
@@ -108,6 +110,9 @@ pub struct ArrayQueue<T, const MP: bool, const MC: bool> {
 
     /// A stamp with the value of `{ lap: 1, index: 0 }`.
     one_lap: usize,
+
+    /// If this bit is set in the tail, that means the channel is disconnected.
+    mark_bit: usize,
 }
 
 unsafe impl<T: Send, const MP: bool, const MC: bool> Sync for ArrayQueue<T, MP, MC> {}
@@ -133,6 +138,10 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     pub fn new(cap: usize) -> Self {
         assert!(cap > 0, "capacity must be non-zero");
 
+        // Compute constants `mark_bit` and `one_lap`.
+        let mark_bit = (cap + 1).next_power_of_two();
+        let one_lap = mark_bit * 2;
+
         // Head is initialized to `{ lap: 0, index: 0 }`.
         // Tail is initialized to `{ lap: 0, index: 0 }`.
         let head = 0;
@@ -147,12 +156,10 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
             })
             .collect();
 
-        // One lap is the smallest power of two greater than `cap`.
-        let one_lap = (cap + 1).next_power_of_two();
-
         Self {
             buffer,
             one_lap,
+            mark_bit,
             head: CachePadded::new(AtomicUsize::new(head)),
             tail: CachePadded::new(AtomicUsize::new(tail)),
         }
@@ -162,24 +169,24 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     /// It's an equal replacement to is_full(), if not try only oneshot,
     /// return Ok(true) when push ok, Ok(false) when channel is full.
     /// None when uncertain (normally needs a loop)
-    #[allow(dead_code)]
     #[inline(always)]
-    pub unsafe fn try_push_oneshot(&self, value: *const T) -> Option<bool> {
+    pub unsafe fn try_send_oneshot(&self, value: *const T) -> Option<Result<(), TrySendErr>> {
         // Use two SeqCst to compare tail & head, it's an equal replacement to is_full()
         let tail = self.tail.load(Ordering::SeqCst);
         macro_rules! check_full {
             ($tail: expr) => {
                 let head = self.head.load(Ordering::SeqCst);
                 // If the head lags one lap behind the tail as well...
-                if head.wrapping_add(self.one_lap) == $tail {
+                if head.wrapping_add(self.one_lap) == ($tail & !self.mark_bit) {
                     // ...then the queue is full.
-                    return Some(false);
+                    return Some(Err(TrySendErr::Full));
                 }
             };
         }
         check_full!(tail);
         match self._try_push(tail, value) {
-            Ok(_) => return Some(true),
+            Ok(true) => return Some(Ok(())),
+            Ok(false) => return Some(Err(TrySendErr::Disconnected)),
             Err((_stamp, _new_tail)) => {
                 // after the first check_full with both loads are SeqCst, this is unlikely full, but also a hot path
                 return None;
@@ -187,12 +194,17 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
         }
     }
 
-    /// return stamp, new_tail
+    /// Return Ok(true) on sent ok,  Ok(false) on close
+    /// if need to try again, return Err((stamp, Option<new_tail>))
+    /// On CAS failure, will return Some(new_tail), should imm spin again
     #[inline]
     fn _try_push(&self, tail: usize, value: *const T) -> Result<bool, (usize, Option<usize>)> {
         let cap = self.capacity();
         // Deconstruct the tail.
-        let index = tail & (self.one_lap - 1);
+        if tail & self.mark_bit != 0 {
+            return Ok(false);
+        }
+        let index = tail & (self.mark_bit - 1);
         let lap = tail & !(self.one_lap - 1);
 
         // Inspect the corresponding slot.
@@ -211,18 +223,13 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
                 // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
                 lap.wrapping_add(self.one_lap)
             };
-            if MP {
-                // Try moving the tail.
-                if let Err(t) = self.tail.compare_exchange_weak(
-                    tail,
-                    new_tail,
-                    Ordering::SeqCst,
-                    Ordering::Relaxed,
-                ) {
-                    return Err((stamp, Some(t)));
-                }
-            } else {
-                self.tail.store(new_tail, Ordering::SeqCst);
+            // Try moving the tail.
+            // NOTE: because the receiver side may disconnect the channel,
+            // we cannot store new_tail directly on SPSC, should use CAS.
+            if let Err(t) =
+                self.tail.compare_exchange_weak(tail, new_tail, Ordering::SeqCst, Ordering::Relaxed)
+            {
+                return Err((stamp, Some(t)));
             }
             // Write the value into the slot and update the stamp.
             unsafe {
@@ -237,29 +244,14 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     }
 
     #[inline(always)]
-    pub unsafe fn push_with_ptr(&self, value: *const T) -> bool {
+    pub unsafe fn try_send(&self, value: *const T) -> Result<(), TrySendErr> {
         let backoff = Backoff::new();
-        let mut tail =
-            if MP { self.tail.load(Ordering::Relaxed) } else { self.tail.load(Ordering::Acquire) };
-        macro_rules! check_full {
-            ($tail: expr) => {
-                let head = if MP || MC {
-                    // NOTE: The fence is preventing livestock
-                    atomic::fence(Ordering::SeqCst);
-                    self.head.load(Ordering::Relaxed)
-                } else {
-                    self.head.load(Ordering::SeqCst)
-                };
-                // If the head lags one lap behind the tail as well...
-                if head.wrapping_add(self.one_lap) == $tail {
-                    // ...then the queue is full.
-                    return false;
-                }
-            };
-        }
+        let order = if MP { Ordering::Relaxed } else { Ordering::Acquire };
+        let mut tail = self.tail.load(order);
         loop {
             match self._try_push(tail, value) {
-                Ok(res) => return res,
+                Ok(true) => return Ok(()),
+                Ok(false) => return Err(TrySendErr::Disconnected),
                 Err((stamp, new_tail)) => {
                     if let Some(_tail) = new_tail {
                         tail = _tail;
@@ -267,12 +259,23 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
                         continue;
                     }
                     if stamp.wrapping_add(self.one_lap) == tail + 1 {
-                        check_full!(tail);
+                        let head = if MP || MC {
+                            // NOTE: The fence is preventing live lock
+                            atomic::fence(Ordering::SeqCst);
+                            self.head.load(Ordering::Relaxed)
+                        } else {
+                            self.head.load(Ordering::SeqCst)
+                        };
+                        // If the head lags one lap behind the tail as well...
+                        if head.wrapping_add(self.one_lap) == tail {
+                            // ...then the queue is full.
+                            return Err(TrySendErr::Full);
+                        }
                     }
                     backoff.snooze();
-                    if MP {
-                        tail = self.tail.load(Ordering::Relaxed);
-                    }
+                    //if MP {
+                    tail = self.tail.load(Ordering::Relaxed);
+                    //}
                 }
             }
         }
@@ -294,14 +297,14 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     /// assert!(q.pop().is_none());
     /// ```
     #[inline(always)]
-    pub fn pop(&self) -> Option<T> {
+    pub fn pop(&self) -> Result<T, TryRecvError> {
         let backoff = Backoff::new();
-        let mut head =
-            if MC { self.head.load(Ordering::Relaxed) } else { self.head.load(Ordering::Acquire) };
+        let order = if MC { Ordering::Relaxed } else { Ordering::Acquire };
+        let mut head = self.head.load(order);
 
         loop {
             // Deconstruct the head.
-            let index = head & (self.one_lap - 1);
+            let index = head & (self.mark_bit - 1);
             let lap = head & !(self.one_lap - 1);
 
             // Inspect the corresponding slot.
@@ -338,9 +341,10 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
                 // Read the value from the slot and update the stamp.
                 let msg = unsafe { slot.value.get().read().assume_init() };
                 slot.stamp.store(head.wrapping_add(self.one_lap), Ordering::Release);
-                return Some(msg);
+                return Ok(msg);
             } else {
                 if stamp == head {
+                    // Check full
                     let tail = if MP || MC {
                         // NOTE: The fence is preventing livestock
                         atomic::fence(Ordering::SeqCst);
@@ -349,8 +353,11 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
                         self.tail.load(Ordering::SeqCst)
                     };
                     // If the tail equals the head, that means the channel is empty.
-                    if tail == head {
-                        return None;
+                    if (tail & !self.mark_bit) == head {
+                        if tail & self.mark_bit != 0 {
+                            return Err(TryRecvError::Disconnected);
+                        }
+                        return Err(TryRecvError::Empty);
                     }
                     backoff.spin();
                 } else {
@@ -403,7 +410,7 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
         //
         // Note: If the head changes just before we load the tail, that means there was a moment
         // when the channel was not empty, so it is safe to just return `false`.
-        tail == head
+        (tail & !self.mark_bit) == head
     }
 
     /// Returns `true` if the queue is full.
@@ -428,7 +435,7 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
         //
         // Note: If the tail changes just before we load the head, that means there was a moment
         // when the queue was not full, so it is safe to just return `false`.
-        head.wrapping_add(self.one_lap) == tail
+        head.wrapping_add(self.one_lap) == (tail & !self.mark_bit)
     }
 
     /// Returns the number of elements in the queue.
@@ -456,20 +463,29 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
 
             // If the tail didn't change, we've got consistent values to work with.
             if self.tail.load(Ordering::SeqCst) == tail {
-                let hix = head & (self.one_lap - 1);
-                let tix = tail & (self.one_lap - 1);
+                let hix = head & (self.mark_bit - 1);
+                let tix = tail & (self.mark_bit - 1);
 
                 return if hix < tix {
                     tix - hix
                 } else if hix > tix {
                     self.capacity() - hix + tix
-                } else if tail == head {
+                } else if (tail & !self.mark_bit) == head {
                     0
                 } else {
                     self.capacity()
                 };
             }
         }
+    }
+
+    /// Disconnects the channel and wakes up all blocked senders and receivers.
+    ///
+    /// Returns `true` if this call disconnected the channel.
+    #[inline]
+    pub(crate) fn disconnect(&self) -> bool {
+        let tail = self.tail.fetch_or(self.mark_bit, Ordering::SeqCst);
+        return tail & self.mark_bit == 0;
     }
 }
 
@@ -480,14 +496,14 @@ impl<T, const MP: bool, const MC: bool> Drop for ArrayQueue<T, MP, MC> {
             let head = *self.head.get_mut();
             let tail = *self.tail.get_mut();
 
-            let hix = head & (self.one_lap - 1);
-            let tix = tail & (self.one_lap - 1);
+            let hix = head & (self.mark_bit - 1);
+            let tix = tail & (self.mark_bit - 1);
 
             let len = if hix < tix {
                 tix - hix
             } else if hix > tix {
                 self.capacity() - hix + tix
-            } else if tail == head {
+            } else if (tail & !self.mark_bit) == head {
                 0
             } else {
                 self.capacity()

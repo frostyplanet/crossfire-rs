@@ -1,4 +1,4 @@
-use super::{Flavor, FlavorImpl, FlavorPrivate};
+use super::{Flavor, FlavorImpl, FlavorPrivate, TryRecvError, TrySendErr};
 use crate::backoff::*;
 use crate::waker_registry::*;
 use core::cell::UnsafeCell;
@@ -164,21 +164,29 @@ impl<T> FlavorImpl<T> for OneSize<T> {
     }
 
     #[inline(always)]
-    fn try_send(&self, item: &MaybeUninit<T>) -> bool {
-        // Will always double-check with is_full or try_send_oneshot()
-        let pos = self.pos.load(Relaxed);
-        unsafe { self.try_push(pos, item.as_ptr(), Relaxed).is_ok() }
+    fn try_send(&self, item: &MaybeUninit<T>) -> Result<(), TrySendErr> {
+        todo!();
+        //        // Will always double-check with is_full or try_send_oneshot()
+        //        let pos = self.pos.load(Relaxed);
+        //        unsafe { self.try_push(pos, item.as_ptr(), Relaxed).is_ok() }
     }
 
     #[inline(always)]
-    fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
-        let pos = self.pos.load(SeqCst);
-        Some(unsafe { self.try_push(pos, item, SeqCst).is_ok() })
+    fn try_send_oneshot(&self, _item: *const T) -> Option<Result<(), TrySendErr>> {
+        todo!();
+        //        let pos = self.pos.load(SeqCst);
+        //        Some(unsafe { self.try_push(pos, item, SeqCst).is_ok() })
     }
 
     #[inline(always)]
-    fn try_recv(&self) -> Option<T> {
-        self.pop()
+    fn try_recv(&self) -> Result<T, TryRecvError> {
+        todo!();
+        //        self.pop()
+    }
+
+    #[inline]
+    fn close(&self) -> bool {
+        todo!();
     }
 
     #[inline]
