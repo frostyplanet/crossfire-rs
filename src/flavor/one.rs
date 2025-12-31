@@ -185,6 +185,11 @@ impl<T> FlavorImpl<T> for OneSize<T> {
     fn backoff_limit(&self) -> u16 {
         crate::backoff::DEFAULT_LIMIT
     }
+
+    #[inline]
+    fn may_direct_copy(&self) -> bool {
+        false
+    }
 }
 
 impl<T> FlavorPrivate<T> for OneSize<T> {

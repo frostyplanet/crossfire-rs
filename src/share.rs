@@ -27,16 +27,10 @@ impl<T> ChannelShared<T> {
         inner: Flavor<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
     ) -> Arc<Self> {
         let mut large = false;
-        let may_direct_copy;
         if let Some(bound) = inner.capacity() {
             if bound >= 10 {
                 large = true;
-                may_direct_copy = true;
-            } else {
-                may_direct_copy = false;
             }
-        } else {
-            may_direct_copy = false;
         }
         Arc::new(Self {
             closed: AtomicBool::new(false),
@@ -47,7 +41,7 @@ impl<T> ChannelShared<T> {
             recvs,
             backoff_limit: inner.backoff_limit(),
             large,
-            may_direct_copy,
+            may_direct_copy: inner.may_direct_copy(),
             inner,
         })
     }
