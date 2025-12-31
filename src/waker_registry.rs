@@ -416,7 +416,8 @@ impl<P> RegistryMulti<P> {
     /// Call when waker is cancelled
     #[inline(always)]
     fn clear_wakers(&self, old_waker: &ChannelWaker<P>, oneshot: bool, _tag: &str) {
-        if self.is_empty.load(Ordering::SeqCst) {
+        // Don't need acurate, it's optional
+        if self.is_empty.load(Ordering::Acquire) {
             return;
         }
         let old_seq = old_waker.get_seq();
