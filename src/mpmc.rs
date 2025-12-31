@@ -16,8 +16,8 @@ macro_rules! init_share {
 
 macro_rules! init_array {
     ($bound: expr) => {{
-        if $bound == 1 {
-            init_share!(OneSize::<T>::new(true, true))
+        if $bound <= 1 {
+            init_share!(OneSize::<T>::new())
         } else {
             init_share!(Array::<T>::new($bound))
         }
