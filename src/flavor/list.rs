@@ -75,3 +75,24 @@ impl<T> FlavorPrivate<T> for List<T> {
         }
     }
 }
+
+impl<T> FlavorPrivate<T> for List<T> {
+    #[inline]
+    fn to_flavor(self) -> Flavor<T> {
+        Flavor::List(self)
+    }
+
+    #[inline]
+    fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T> {
+        RegistrySender::<T>::Dummy
+    }
+
+    #[inline]
+    fn new_reg_recv<const MC: bool>(&self) -> RegistryRecv {
+        if MC {
+            RegistryRecv::new_multi()
+        } else {
+            RegistryRecv::new_single()
+        }
+    }
+}

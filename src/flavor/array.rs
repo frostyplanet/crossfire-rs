@@ -101,3 +101,28 @@ impl<T> FlavorPrivate<T> for Array<T> {
         }
     }
 }
+
+impl<T> FlavorPrivate<T> for Array<T> {
+    #[inline]
+    fn to_flavor(self) -> Flavor<T> {
+        Flavor::Array(self)
+    }
+
+    #[inline]
+    fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T> {
+        if MP {
+            RegistrySender::<T>::new_multi()
+        } else {
+            RegistrySender::<T>::new_single()
+        }
+    }
+
+    #[inline]
+    fn new_reg_recv<const MC: bool>(&self) -> RegistryRecv {
+        if MC {
+            RegistryRecv::new_multi()
+        } else {
+            RegistryRecv::new_single()
+        }
+    }
+}
