@@ -1,13 +1,13 @@
-use enum_dispatch::enum_dispatch;
 use std::mem::MaybeUninit;
 
 mod array;
 pub use array::*;
 mod list;
+use crate::waker_registry::*;
 pub use list::*;
 
-#[enum_dispatch]
-pub trait FlavorImpl<T> {
+#[enum_dispatch::enum_dispatch]
+pub(crate) trait FlavorImpl<T> {
     fn len(&self) -> usize;
 
     fn capacity(&self) -> Option<usize>;
@@ -28,7 +28,15 @@ pub trait FlavorImpl<T> {
     fn backoff_limit(&self) -> u16;
 }
 
-#[enum_dispatch(FlavorImpl<T>)]
+pub(crate) trait FlavorPrivate<T> {
+    fn to_flavor(self) -> crate::flavor::Flavor<T>;
+
+    fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T>;
+
+    fn new_reg_recv<const MC: bool>(&self) -> RegistryRecv;
+}
+
+#[enum_dispatch::enum_dispatch(FlavorImpl<T>)]
 pub enum Flavor<T> {
     List(List<T>),
     Array(Array<T>),
