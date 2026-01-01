@@ -346,10 +346,15 @@ impl fmt::Display for RecvTimeoutError {
 impl error::Error for RecvTimeoutError {}
 
 impl From<RecvError> for RecvTimeoutError {
-    fn from(err: RecvError) -> Self {
-        match err {
-            RecvError => Self::Disconnected,
-        }
+    fn from(_err: RecvError) -> Self {
+        return Self::Disconnected;
+    }
+}
+
+impl From<TryRecvError> for RecvTimeoutError {
+    fn from(_err: TryRecvError) -> Self {
+        debug_assert_eq!(_err, TryRecvError::Disconnected);
+        return Self::Disconnected;
     }
 }
 

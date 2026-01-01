@@ -306,8 +306,8 @@ impl<P> RegistrySingle<P> {
 
     fn close(&self, _tag: &str) {
         if let Some(waker) = self.cell.pop() {
-            let _r = waker.close_wake();
-            trace_log!("close {} wake {:?} {}", _tag, waker, _r);
+            let _r = waker.wake();
+            trace_log!("close {} wake {:?} {:?}", _tag, waker, _r);
         }
     }
 
@@ -485,8 +485,8 @@ impl<P> RegistryMulti<P> {
         let mut guard = self.inner.lock();
         while let Some(weak) = guard.queue.pop_front() {
             if let Some(waker) = weak.upgrade() {
-                let _r = waker.close_wake();
-                trace_log!("close {} wake {:?} {}", _tag, waker, _r);
+                let _r = waker.wake();
+                trace_log!("close {} wake {:?} {:?}", _tag, waker, _r);
             }
         }
         self.is_empty.store(true, Ordering::SeqCst);

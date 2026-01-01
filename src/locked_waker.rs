@@ -17,8 +17,7 @@ pub enum WakerState {
     Waiting = 1,
     //Copy = 2, // Omit due to skipping direct copy on async or with deadline
     Woken = 3,
-    Closed = 4, // Channel closed, or timeout cancellation
-    Done = 5,
+    Done = 4,
 }
 
 #[derive(PartialEq, Debug, Clone, Copy)]
@@ -188,15 +187,13 @@ impl<P> WakerInner<P> {
         let _state = state as u8;
         #[cfg(all(test, not(feature = "trace_log")))]
         {
-            if _state != WakerState::Closed as u8 {
-                let __state = self.get_state_relaxed();
-                assert!(
-                    __state == WakerState::Woken as u8 || __state <= _state as u8,
-                    "unexpected set state {:?} on state: {}",
-                    _state,
-                    __state
-                );
-            }
+            let __state = self.get_state_relaxed();
+            assert!(
+                __state == WakerState::Woken as u8 || __state <= _state as u8,
+                "unexpected set state {:?} on state: {}",
+                _state,
+                __state
+            );
         }
         self.state.store(_state, Ordering::Relaxed);
     }
@@ -209,27 +206,16 @@ impl<P> WakerInner<P> {
     }
 
     /// Return current status,
-    /// Closed: might be channel closed, or future successfully cancelled, the future should drop message; try to clear its waker.
     /// Done: the message actually sent, nothing to DO
     /// Woken: the future should drop message, and wake another counterpart.
     #[inline(always)]
     pub fn abandon(&self) -> Result<(), u8> {
         // it will content with close(), on_recv(), on_send()
-        match self.change_state_smaller_eq(WakerState::Waiting, WakerState::Closed) {
+        match self.change_state_smaller_eq(WakerState::Waiting, WakerState::Woken) {
             Ok(_) => Ok(()),
             Err(state) => Err(state),
         }
         // NOTE: there's no Copy state, so we do not loop
-    }
-
-    #[inline(always)]
-    pub fn close_wake(&self) -> bool {
-        // should have lock because it will content with abandon()
-        if self.change_state_smaller_eq(WakerState::Waiting, WakerState::Closed).is_ok() {
-            self._wake_nolock();
-            return true;
-        }
-        return false;
     }
 
     // Return Ok(pre_state), otherwise return Err(current_state)

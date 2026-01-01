@@ -1,16 +1,14 @@
 use crate::backoff::*;
-pub(crate) use crate::crossbeam::err::*;
 pub(crate) use crate::flavor::*;
 pub(crate) use crate::locked_waker::*;
 use crate::trace_log;
 pub(crate) use crate::waker_registry::*;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct ChannelShared<T> {
-    closed: AtomicBool,
     tx_count: AtomicUsize,
     rx_count: AtomicUsize,
     pub(crate) congest: AtomicIsize,
@@ -33,7 +31,6 @@ impl<T> ChannelShared<T> {
             }
         }
         Arc::new(Self {
-            closed: AtomicBool::new(false),
             tx_count: AtomicUsize::new(1),
             rx_count: AtomicUsize::new(1),
             congest: AtomicIsize::new(0),
@@ -72,7 +69,7 @@ impl<T> ChannelShared<T> {
     /// Returns `true` if all senders or receivers have been dropped.
     #[inline(always)]
     pub fn is_disconnected(&self) -> bool {
-        self.closed.load(Ordering::SeqCst)
+        self.get_tx_count() == 0 || self.get_rx_count() == 0
     }
 
     /// Returns the number of senders for the channel.
@@ -116,7 +113,6 @@ impl<T> ChannelShared<T> {
         let old = self.tx_count.fetch_sub(1, Ordering::Release);
         if old <= 1 {
             trace_log!("closing from tx");
-            self.closed.store(true, Ordering::SeqCst); // serve as fence
             self._close_all();
         } else {
             trace_log!("drop tx {}", old - 1);
@@ -130,7 +126,6 @@ impl<T> ChannelShared<T> {
         let old = self.rx_count.fetch_sub(1, Ordering::Release);
         if old <= 1 {
             trace_log!("closing from rx");
-            self.closed.store(true, Ordering::SeqCst); // serve as fence
             self._close_all();
         } else {
             trace_log!("drop rx {}", old - 1);
@@ -139,6 +134,7 @@ impl<T> ChannelShared<T> {
 
     #[inline(always)]
     fn _close_all(&self) {
+        self.inner.close();
         self.senders.close();
         self.recvs.close();
     }
@@ -156,35 +152,30 @@ impl<T> ChannelShared<T> {
     #[inline]
     pub(crate) fn sender_reg_and_try(
         &self, item: &MaybeUninit<T>, waker: SendWaker<T>, sink: bool,
-    ) -> (u8, Option<SendWaker<T>>) {
+    ) -> Result<(u8, Option<SendWaker<T>>), ()> {
         self.senders.reg_waker(&waker);
         // Not allow Spurious wake and enter this function again;
-        if let Some(res) = self.inner.try_send_oneshot(item.as_ptr()) {
-            if res {
+        match self.inner.try_send_oneshot(item.as_ptr()) {
+            Some(Ok(())) => {
                 self.on_send();
-                return self.senders.cancel_reuse_waker(waker, WakerState::Done);
-            } else {
+                return Ok(self.senders.cancel_reuse_waker(waker, WakerState::Done));
+            }
+            Some(Err(e)) => {
+                if !e.is_full() {
+                    return Err(());
+                }
                 if sink {
-                    if self.is_disconnected() {
-                        return (WakerState::Closed as u8, None);
-                    } else {
-                        // outside logic only recognize Waiting
-                        return (WakerState::Waiting as u8, Some(waker));
-                    }
+                    // outside logic only recognize Waiting
+                    return Ok((WakerState::Waiting as u8, Some(waker)));
                 } else {
                     let state = self.senders.commit_waiting(&waker);
-                    // let on_recv do it's job,
-                    // is_disconnected == true means no receivers
-                    if self.is_disconnected() {
-                        return (WakerState::Closed as u8, None);
-                    } else {
-                        return (state, Some(waker));
-                    }
+                    return Ok((state, Some(waker)));
                 }
             }
-        } else {
-            // Unlikely to be disconnected,
-            return self.senders.cancel_reuse_waker(waker, WakerState::Woken);
+            None => {
+                // should retry again
+                return Ok(self.senders.cancel_reuse_waker(waker, WakerState::Woken));
+            }
         }
     }
 
@@ -221,7 +212,7 @@ impl<T> ChannelShared<T> {
     #[inline(always)]
     pub(crate) fn on_recv_try_send(&self, waker: &WakerInner<*const T>) -> WakeResult {
         waker.wake_or_copy(|p: *const T| -> u8 {
-            if let Some(true) = self.inner.try_send_oneshot(p) {
+            if let Some(Ok(())) = self.inner.try_send_oneshot(p) {
                 WakerState::Done as u8
             } else {
                 WakerState::Woken as u8
@@ -244,8 +235,6 @@ impl<T> ChannelShared<T> {
                 if state == WakerState::Woken as u8 {
                     // We are awake, but give up sending, should notify another sender for safety
                     self.on_recv();
-                    return true;
-                } else if state == WakerState::Closed as u8 {
                     return true;
                 } else if state == WakerState::Init as u8 {
                     // For dropping AsyncSink, clear only one
@@ -274,9 +263,6 @@ impl<T> ChannelShared<T> {
                 if state == WakerState::Woken as u8 {
                     // We are awake, but give up receiving, should notify another receiver for safety
                     self.on_send();
-                    return true;
-                } else if state == WakerState::Closed as u8 {
-                    // Closed
                     return true;
                 } else if state == WakerState::Init as u8 {
                     // For AsyncStream::poll_item, clear only one

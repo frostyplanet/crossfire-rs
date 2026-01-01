@@ -81,22 +81,38 @@ impl<T> Rx<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<T, RecvTimeoutError> {
+    pub(crate) fn _recv_blocking(
+        &self, deadline: Option<Instant>,
+    ) -> Result<T, Option<TryRecvError>> {
         let shared = &self.shared;
         macro_rules! try_recv {
             () => {
-                if let Some(item) = shared.inner.try_recv() {
-                    shared.on_recv();
-                    trace_log!("rx: recv");
-                    return Ok(item);
+                match shared.inner.try_recv() {
+                    Ok(item) => {
+                        shared.on_recv();
+                        trace_log!("rx: recv");
+                        return Ok(item);
+                    }
+                    Err(e) => {
+                        if !e.is_empty() {
+                            return Err(Some(e));
+                        }
+                    }
                 }
             };
             ($waker: expr) => {
-                if let Some(item) = shared.inner.try_recv() {
-                    shared.on_recv();
-                    trace_log!("rx: recv {:?}", $waker);
-                    self.waker_cache.push($waker);
-                    return Ok(item);
+                match shared.inner.try_recv() {
+                    Ok(item) => {
+                        trace_log!("rx: recv {:?}", $waker);
+                        shared.on_recv();
+                        self.waker_cache.push($waker);
+                        return Ok(item);
+                    }
+                    Err(e) => {
+                        if !e.is_empty() {
+                            return Err(Some(e));
+                        }
+                    }
                 }
             };
         }
@@ -120,21 +136,9 @@ impl<T> Rx<T> {
                 waker.reset_init();
             }
             shared.reg_recv(&waker);
-            if shared.is_empty() {
-                state = shared.recvs.commit_waiting(&waker);
-            } else {
-                if let Some(item) = shared.inner.try_recv() {
-                    shared.on_recv();
-                    trace_log!("rx: recv cancel {:?} Init", waker);
-                    self.recvs.cancel_waker(&waker);
-                    return Ok(item);
-                }
-                state = shared.recvs.commit_waiting(&waker);
-            }
+            try_recv!(waker);
+            state = shared.recvs.commit_waiting(&waker);
             trace_log!("rx: {:?} commit_waiting state={}", waker, state);
-            if shared.is_disconnected() {
-                break 'MAIN;
-            }
             while state < WakerState::Woken as u8 {
                 match check_timeout(deadline) {
                     Ok(None) => {
@@ -145,13 +149,10 @@ impl<T> Rx<T> {
                     }
                     Err(_) => {
                         let _ = shared.abandon_recv_waker(waker);
-                        return Err(RecvTimeoutError::Timeout);
+                        return Err(None);
                     }
                 }
                 state = waker.get_state();
-            }
-            if state == WakerState::Closed as u8 {
-                break 'MAIN;
             }
             backoff.reset();
             loop {
@@ -161,9 +162,6 @@ impl<T> Rx<T> {
                 }
             }
         }
-        try_recv!(waker);
-        // make sure all msgs received, since we have soonze
-        return Err(RecvTimeoutError::Disconnected);
     }
 
     /// Receives a message from the channel. This method will block until a message is received or the channel is closed.
@@ -173,10 +171,10 @@ impl<T> Rx<T> {
     /// Returns Err([RecvError]) if the sender has been dropped.
     #[inline]
     pub fn recv<'a>(&'a self) -> Result<T, RecvError> {
-        self._recv_blocking(None).map_err(|err| match err {
-            RecvTimeoutError::Disconnected => RecvError,
-            RecvTimeoutError::Timeout => unreachable!(),
-        })
+        if let Ok(item) = self._recv_blocking(None) {
+            return Ok(item);
+        }
+        Err(RecvError)
     }
 
     /// Attempts to receive a message from the channel without blocking.
@@ -188,15 +186,9 @@ impl<T> Rx<T> {
     /// Returns Err([TryRecvError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        if let Some(item) = self.shared.inner.try_recv() {
-            self.shared.on_recv();
-            return Ok(item);
-        } else {
-            if self.shared.is_disconnected() {
-                return Err(TryRecvError::Disconnected);
-            }
-            return Err(TryRecvError::Empty);
-        }
+        let item = self.shared.inner.try_recv()?;
+        self.shared.on_recv();
+        return Ok(item);
     }
 
     /// Receives a message from the channel with a timeout.
@@ -212,11 +204,12 @@ impl<T> Rx<T> {
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
-            Some(deadline) => self._recv_blocking(Some(deadline)),
-            None => self.try_recv().map_err(|e| match e {
-                TryRecvError::Disconnected => RecvTimeoutError::Disconnected,
-                TryRecvError::Empty => RecvTimeoutError::Timeout,
-            }),
+            Some(deadline) => match self._recv_blocking(Some(deadline)) {
+                Ok(item) => Ok(item),
+                Err(Some(e)) => Err(e.into()),
+                Err(None) => Err(RecvTimeoutError::Timeout),
+            },
+            None => self.try_recv().map_err(|e| e.into()),
         }
     }
 }

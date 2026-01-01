@@ -127,15 +127,13 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Returns Err([TrySendError::Disconnected]) if the receiver has been dropped.
     #[inline]
     pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        if self.shared.is_disconnected() {
-            return Err(TrySendError::Disconnected(item));
-        }
         let _item = MaybeUninit::new(item);
-        if self.shared.inner.try_send(&_item) {
-            self.shared.on_send();
-            return Ok(());
-        } else {
-            return unsafe { Err(TrySendError::Full(_item.assume_init())) };
+        match self.shared.inner.try_send(&_item) {
+            Ok(()) => {
+                self.shared.on_send();
+                return Ok(());
+            }
+            Err(e) => return Err(e.to_try_send(_item)),
         }
     }
 
@@ -231,23 +229,27 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         sink: bool,
     ) -> Poll<Result<(), ()>> {
         let shared = &self.shared;
-        if shared.is_disconnected() {
-            trace_log!("tx{:?}: closed {:?}", tokio_task_id!(), o_waker);
-            return Poll::Ready(Err(()));
-        }
         let mut state;
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
         loop {
-            if shared.inner.try_send(item) {
-                shared.on_send();
-                if let Some(_waker) = o_waker.take() {
-                    trace_log!("tx{:?}: send {:?}", tokio_task_id!(), _waker);
-                } else {
-                    trace_log!("tx{:?}: send", tokio_task_id!());
+            match shared.inner.try_send(item) {
+                Ok(_) => {
+                    shared.on_send();
+                    if let Some(_waker) = o_waker.take() {
+                        trace_log!("tx{:?}: send {:?}", tokio_task_id!(), _waker);
+                    } else {
+                        trace_log!("tx{:?}: send", tokio_task_id!());
+                    }
+                    return Poll::Ready(Ok(()));
                 }
-                return Poll::Ready(Ok(()));
+                Err(e) => {
+                    if !e.is_full() {
+                        let _ = o_waker.take();
+                        return Poll::Ready(Err(()));
+                    }
+                }
             }
             if let Some(waker) = o_waker.as_ref() {
                 match waker.try_change_state(WakerState::Woken, WakerState::Init) {
@@ -269,8 +271,6 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                                 trace_log!("tx{:?}: drop waker {:?}", tokio_task_id!(), waker);
                                 let _ = o_waker.take();
                             }
-                        } else if state == WakerState::Closed as u8 {
-                            return Poll::Ready(Err(()));
                         }
                     }
                 }
@@ -278,10 +278,18 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 if let Some(mut backoff) = shared.get_async_backoff() {
                     loop {
                         backoff.spin();
-                        if shared.inner.try_send(item) {
-                            shared.on_send();
-                            trace_log!("tx{:?}: send", tokio_task_id!());
-                            return Poll::Ready(Ok(()));
+                        match shared.inner.try_send(item) {
+                            Ok(()) => {
+                                shared.on_send();
+                                trace_log!("tx{:?}: send", tokio_task_id!());
+                                return Poll::Ready(Ok(()));
+                            }
+                            Err(e) => {
+                                if !e.is_full() {
+                                    let _ = o_waker.take();
+                                    return Poll::Ready(Err(()));
+                                }
+                            }
                         }
                         if backoff.is_completed() {
                             break;
@@ -289,26 +297,26 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     }
                 }
             }
-            (state, *o_waker) = if let Some(waker) = o_waker.take() {
+            let r = if let Some(waker) = o_waker.take() {
                 shared.sender_reg_and_try(item, waker, sink)
             } else {
                 let waker = SendWaker::<T>::new_async(ctx, std::ptr::null_mut());
                 shared.sender_reg_and_try(item, waker, sink)
             };
+            match r {
+                Err(()) => return Poll::Ready(Err(())),
+                Ok(_r) => {
+                    (state, *o_waker) = _r;
+                }
+            }
             trace_log!("tx{:?}: sender_reg_and_try {:?} {}", tokio_task_id!(), o_waker, state);
             if state < WakerState::Woken as u8 {
                 return Poll::Pending;
             } else if state > WakerState::Woken as u8 {
-                if state == WakerState::Done as u8 {
-                    trace_log!("tx{:?}: send {:?} done", o_waker, tokio_task_id!());
-                    let _ = o_waker.take();
-                    return Poll::Ready(Ok(()));
-                } else {
-                    debug_assert_eq!(state, WakerState::Closed as u8);
-                    trace_log!("tx{:?}: closed {:?}", o_waker, tokio_task_id!());
-                    let _ = o_waker.take();
-                    return Poll::Ready(Err(()));
-                }
+                debug_assert_eq!(state, WakerState::Done as u8);
+                trace_log!("tx{:?}: send {:?} done", o_waker, tokio_task_id!());
+                let _ = o_waker.take();
+                return Poll::Ready(Ok(()));
             }
             debug_assert_eq!(state, WakerState::Woken as u8);
             continue;
