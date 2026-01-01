@@ -48,7 +48,12 @@ impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
 
     #[inline(always)]
     fn try_recv(&self) -> Result<T, TryRecvError> {
-        self.0.pop()
+        self.0.pop(false)
+    }
+
+    #[inline]
+    fn try_recv_final(&self) -> Result<T, TryRecvError> {
+        self.0.pop(true)
     }
 
     #[inline]

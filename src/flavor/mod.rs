@@ -33,9 +33,10 @@ pub(crate) trait FlavorImpl<T> {
 
     fn try_recv(&self) -> Result<T, TryRecvError>;
 
+    /// try recv before park
     #[inline(always)]
-    fn try_recv_oneshot(&self) -> Option<Result<T, TryRecvError>> {
-        Some(self.try_recv())
+    fn try_recv_final(&self) -> Result<T, TryRecvError> {
+        self.try_recv()
     }
 
     fn close(&self) -> bool;
