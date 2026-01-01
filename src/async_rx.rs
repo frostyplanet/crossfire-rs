@@ -297,7 +297,7 @@ impl<T> AsyncRx<T> {
             }
             // NOTE: The other side put something whie reg_send and did not see the waker,
             // should check the channel again, otherwise might incur a dead lock.
-            try_recv!(try_recv =>{ on_recv_waker!(WakerState::Init)});
+            try_recv!(try_recv_final =>{ on_recv_waker!(WakerState::Init)});
             if !stream {
                 let _waker = o_waker.as_ref().unwrap();
                 let state = shared.recvs.commit_waiting(&_waker);

@@ -85,27 +85,24 @@ impl<T> Rx<T> {
         &self, deadline: Option<Instant>,
     ) -> Result<T, Option<TryRecvError>> {
         let shared = &self.shared;
+
+        macro_rules! on_recv_no_waker {
+            () => {{
+                trace_log!("rx: recv");
+            }};
+        }
+        macro_rules! on_recv_waker {
+            ($waker: expr) => {{
+                trace_log!("rx: recv {:?}", $waker);
+                self.waker_cache.push($waker);
+            }};
+        }
         macro_rules! try_recv {
-            () => {
+            ($recv_func: ident=>$handle_waker: block) => {
                 match shared.inner.try_recv() {
                     Ok(item) => {
                         shared.on_recv();
-                        trace_log!("rx: recv");
-                        return Ok(item);
-                    }
-                    Err(e) => {
-                        if !e.is_empty() {
-                            return Err(Some(e));
-                        }
-                    }
-                }
-            };
-            ($waker: expr) => {
-                match shared.inner.try_recv() {
-                    Ok(item) => {
-                        trace_log!("rx: recv {:?}", $waker);
-                        shared.on_recv();
-                        self.waker_cache.push($waker);
+                        $handle_waker
                         return Ok(item);
                     }
                     Err(e) => {
@@ -116,7 +113,7 @@ impl<T> Rx<T> {
                 }
             };
         }
-        try_recv!();
+        try_recv!(try_recv => {on_recv_no_waker!()});
         let mut cfg = BackoffConfig::default().limit(shared.backoff_limit);
         if shared.large {
             cfg = cfg.spin(2);
@@ -124,19 +121,19 @@ impl<T> Rx<T> {
         let mut backoff = Backoff::new(cfg);
         loop {
             let r = backoff.snooze();
-            try_recv!();
+            try_recv!(try_recv => {on_recv_no_waker!()});
             if r {
                 break;
             }
         }
         let waker = self.waker_cache.new_blocking(());
         let mut state;
-        'MAIN: loop {
+        loop {
             if waker.get_state() == WakerState::Woken as u8 {
                 waker.reset_init();
             }
             shared.reg_recv(&waker);
-            try_recv!(waker);
+            try_recv!(try_recv => {on_recv_waker!(waker)});
             state = shared.recvs.commit_waiting(&waker);
             trace_log!("rx: {:?} commit_waiting state={}", waker, state);
             while state < WakerState::Woken as u8 {
@@ -156,7 +153,7 @@ impl<T> Rx<T> {
             }
             backoff.reset();
             loop {
-                try_recv!(waker);
+                try_recv!(try_recv => {on_recv_waker!(waker)});
                 if backoff.snooze() {
                     break;
                 }
