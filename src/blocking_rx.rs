@@ -90,26 +90,28 @@ impl<T: Send + 'static> Rx<T> {
         }
     }
 
+    /// Return Err(true) for disconnect, Err(false) for timeout
     #[inline(always)]
     pub(crate) fn recv_blocking<F: FlavorImpl<T>>(
         shared: &ChannelShared<T>, flavor: &F, deadline: Option<Instant>,
         waker_cache: &WakerCache<()>,
     ) -> Result<T, bool> {
+        let mut o_waker = None;
         macro_rules! on_recv_no_waker {
             () => {{
                 trace_log!("rx: recv");
             }};
         }
         macro_rules! on_recv_waker {
-            ($waker: expr) => {{
-                trace_log!("rx: recv {:?}", $waker);
-                waker_cache.push($waker);
+            () => {{
+                trace_log!("rx: recv {:?}", o_waker);
+                shared.recvs.cache_waker(o_waker, waker_cache);
             }};
         }
         macro_rules! try_recv {
             ($handle_waker: block) => {
                 if let Some(item) = flavor.try_recv() {
-                    shared.on_recv_shim::<F>(flavor);
+                    shared.on_recv_direct_copy::<F>(flavor);
                     $handle_waker
                     return Ok(item);
                 }
@@ -128,23 +130,19 @@ impl<T: Send + 'static> Rx<T> {
                 break;
             }
         }
-        let waker = waker_cache.new_blocking(());
         let mut state;
         'MAIN: loop {
-            if waker.get_state() == WakerState::Woken as u8 {
-                waker.reset_init();
-            }
-            shared.reg_recv(&waker);
+            shared.recvs.reg_waker_blocking(&mut o_waker, waker_cache);
             // NOTE: special API before we park
             // because Miri is not happy about ArrayQueue pop ordering, which is not SeqCst
             if let Some(item) = flavor.try_recv_final() {
-                shared.on_recv_shim::<F>(flavor);
-                trace_log!("rx: recv cancel {:?} Init", waker);
-                shared.recvs.cancel_waker(&waker);
+                shared.on_recv_direct_copy::<F>(flavor);
+                trace_log!("rx: recv cancel {:?} Init", o_waker);
+                shared.recvs.cancel_waker(&mut o_waker);
                 return Ok(item);
             }
-            state = shared.recvs.commit_waiting(&waker);
-            trace_log!("rx: {:?} commit_waiting state={}", waker, state);
+            state = shared.recvs.commit_waiting(&o_waker);
+            trace_log!("rx: {:?} commit_waiting state={}", o_waker, state);
             if shared.is_tx_closed() {
                 break 'MAIN;
             }
@@ -157,24 +155,25 @@ impl<T: Send + 'static> Rx<T> {
                         std::thread::park_timeout(dur);
                     }
                     Err(_) => {
-                        let _ = shared.abandon_recv_waker(waker);
+                        shared.abandon_recv_waker(&mut o_waker);
                         return Err(false);
                     }
                 }
-                state = waker.get_state();
+                state = shared.recvs.get_waker_state(&o_waker);
+                trace_log!("rx: after park state={}", state);
             }
             if state == WakerState::Closed as u8 {
                 break 'MAIN;
             }
             backoff.reset();
             loop {
-                try_recv!({ on_recv_waker!(waker) });
+                try_recv!({ on_recv_waker!() });
                 if backoff.snooze() {
                     break;
                 }
             }
         }
-        try_recv!({ on_recv_waker!(waker) });
+        try_recv!({ on_recv_waker!() });
         // make sure all msgs received, since we have soonze
         return Err(true);
     }
@@ -202,8 +201,8 @@ impl<T: Send + 'static> Rx<T> {
     /// Returns Err([TryRecvError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        if let Some(item) = unsafe { (self._try_recv)(&self.shared, self.flavor) } {
-            // in try_recv_shim already call on_recv
+        if let Some(item) = unsafe { (self._try_recv)(self.flavor) } {
+            self.shared.on_recv();
             return Ok(item);
         } else {
             if self.shared.is_tx_closed() {

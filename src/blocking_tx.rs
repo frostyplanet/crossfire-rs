@@ -5,6 +5,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -99,6 +100,7 @@ impl<T: Send + 'static> Tx<T> {
 }
 
 impl<T: Send + 'static> Tx<T> {
+    /// Return Err(true) for disconnect, Err(false) for timeout
     #[inline(always)]
     pub(crate) fn send_blocking<F: FlavorImpl<T>>(
         shared: &ChannelShared<T>, flavor: &F, item: &MaybeUninit<T>, deadline: Option<Instant>,
@@ -152,31 +154,24 @@ impl<T: Send + 'static> Tx<T> {
         macro_rules! return_ok {
             () => {
                 trace_log!("tx: send {:?}", o_waker);
-                if let Some(waker) = o_waker.take() {
-                    waker_cache.push(waker);
-                }
                 if shared.is_full() {
                     // It's for 8x1, 16x1.
                     std::thread::yield_now();
+                    shared.senders.cache_waker(o_waker, waker_cache);
                 }
                 return Ok(())
             };
         }
         loop {
-            let waker = if let Some(w) = o_waker.take() {
-                w.reset_init();
-                w
-            } else {
-                waker_cache.new_blocking(direct_copy_ptr)
-            };
+            shared.senders.reg_waker_blocking(&mut o_waker, waker_cache, direct_copy_ptr);
             // For nx1 (more likely congest), need to reset backoff
             // to allow more yield to receivers.
             // For nxn (the backoff is already complete), wait a little bit.
-            (state, o_waker) = shared.sender_reg_and_try::<F>(flavor, &item, waker, false);
+            state = shared.sender_double_check::<F>(flavor, &item, &mut o_waker, false);
             trace_log!("tx: sender_reg_and_try {:?} state={}", o_waker, state);
             while state < WakerState::Woken as u8 {
                 if direct_copy_ptr != std::ptr::null_mut() {
-                    state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
+                    state = shared.sender_snooze(&o_waker, &mut backoff);
                 }
                 if state <= WakerState::Waiting as u8 {
                     match check_timeout(deadline) {
@@ -187,8 +182,8 @@ impl<T: Send + 'static> Tx<T> {
                             std::thread::park_timeout(dur);
                         }
                         Err(_) => {
-                            if shared.abandon_send_waker(o_waker.take().unwrap()) {
-                                return Err(false);
+                            if shared.abandon_send_waker(&mut o_waker) {
+                                return Err(false)
                             } else {
                                 // NOTE: Unlikely since we disable direct copy with deadline
                                 // state is WakerState::Done
@@ -196,12 +191,11 @@ impl<T: Send + 'static> Tx<T> {
                             }
                         }
                     }
-                    state = o_waker.as_ref().unwrap().get_state();
+                    state = shared.senders.get_waker_state(&o_waker, Ordering::SeqCst);
+                    trace_log!("tx: after park state={}", state);
                 }
             }
-            if state == WakerState::Done as u8 {
-                return_ok!();
-            } else if state == WakerState::Woken as u8 {
+            if state == WakerState::Woken as u8 {
                 backoff.reset();
                 loop {
                     if flavor.try_send(&item) {
@@ -213,8 +207,11 @@ impl<T: Send + 'static> Tx<T> {
                     }
                     backoff.snooze();
                 }
-            } else if state == WakerState::Closed as u8 {
-                return Err(true);
+            } else if state == WakerState::Done as u8 {
+                return_ok!();
+            } else {
+                debug_assert_eq!(state, WakerState::Closed as u8);
+                return Err(true)
             }
         }
     }
