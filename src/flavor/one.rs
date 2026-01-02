@@ -196,6 +196,11 @@ impl<T> FlavorImpl<T> for OneSize<T> {
 
     #[inline(always)]
     fn try_recv(&self) -> Option<T> {
+        self._pop(Relaxed)
+    }
+
+    #[inline(always)]
+    fn try_recv_final(&self) -> Option<T> {
         self._pop(SeqCst)
     }
 
