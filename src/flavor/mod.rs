@@ -38,6 +38,18 @@ pub(crate) trait FlavorImpl<T> {
     fn may_direct_copy(&self) -> bool {
         false
     }
+
+    #[inline(always)]
+    fn add_tx(&self) {}
+
+    #[inline(always)]
+    fn add_rx(&self) {}
+
+    #[inline(always)]
+    fn close_tx(&self) {}
+
+    #[inline(always)]
+    fn close_rx(&self) {}
 }
 
 pub(crate) trait FlavorPrivate<T> {

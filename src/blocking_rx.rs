@@ -132,7 +132,7 @@ impl<T> Rx<T> {
                 state = shared.recvs.commit_waiting(&waker);
             }
             trace_log!("rx: {:?} commit_waiting state={}", waker, state);
-            if shared.is_disconnected() {
+            if shared.is_tx_closed() {
                 break 'MAIN;
             }
             while state < WakerState::Woken as u8 {
@@ -192,7 +192,7 @@ impl<T> Rx<T> {
             self.shared.on_recv();
             return Ok(item);
         } else {
-            if self.shared.is_disconnected() {
+            if self.shared.is_tx_closed() {
                 return Err(TryRecvError::Disconnected);
             }
             return Err(TryRecvError::Empty);
@@ -218,6 +218,12 @@ impl<T> Rx<T> {
                 TryRecvError::Empty => RecvTimeoutError::Timeout,
             }),
         }
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.is_tx_closed()
     }
 }
 
@@ -339,7 +345,7 @@ pub trait BlockingRxTrait<T: Send + 'static>:
     /// Return true if the other side has closed
     #[inline(always)]
     fn is_disconnected(&self) -> bool {
-        self.as_ref().is_disconnected()
+        self.as_ref().is_tx_closed()
     }
 
     fn clone_to_vec(self, count: usize) -> Vec<Self>;

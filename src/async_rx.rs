@@ -194,7 +194,7 @@ impl<T> AsyncRx<T> {
             self.shared.on_recv();
             return Ok(item);
         } else {
-            if self.shared.is_disconnected() {
+            if self.shared.is_tx_closed() {
                 return Err(TryRecvError::Disconnected);
             }
             return Err(TryRecvError::Empty);
@@ -299,13 +299,19 @@ impl<T> AsyncRx<T> {
             }
             break;
         }
-        if shared.is_disconnected() {
+        if shared.is_tx_closed() {
             try_recv!(WakerState::Closed as u8);
             trace_log!("rx{:?}: disconnected {:?}", tokio_task_id!(), o_waker);
             return Err(TryRecvError::Disconnected);
         } else {
             return Err(TryRecvError::Empty);
         }
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.is_tx_closed()
     }
 
     #[inline]
@@ -484,7 +490,7 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
     /// Return true if the other side has closed
     #[inline(always)]
     fn is_disconnected(&self) -> bool {
-        self.as_ref().is_disconnected()
+        self.as_ref().is_tx_closed()
     }
 
     fn clone_to_vec(self, count: usize) -> Vec<Self>;

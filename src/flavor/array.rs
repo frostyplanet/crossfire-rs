@@ -2,8 +2,12 @@ use super::{Flavor, FlavorImpl, FlavorPrivate};
 use crate::crossbeam::array_queue::ArrayQueue;
 use crate::waker_registry::*;
 use std::mem::MaybeUninit;
+use std::sync::atomic::{AtomicIsize, Ordering};
 
-pub struct Array<T, const MP: bool, const MC: bool>(ArrayQueue<T, MP, MC>);
+pub struct Array<T, const MP: bool, const MC: bool> {
+    inner: ArrayQueue<T, MP, MC>,
+    congest: AtomicIsize,
+}
 
 impl<T, const MP: bool, const MC: bool> Array<T, MP, MC> {
     pub fn new(mut bound: usize) -> Self {
@@ -11,54 +15,54 @@ impl<T, const MP: bool, const MC: bool> Array<T, MP, MC> {
         if bound == 0 {
             bound = 1;
         }
-        Array(ArrayQueue::<T, MP, MC>::new(bound))
+        Self { inner: ArrayQueue::<T, MP, MC>::new(bound), congest: AtomicIsize::new(0) }
     }
 }
 
 impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
     #[inline(always)]
     fn len(&self) -> usize {
-        self.0.len()
+        self.inner.len()
     }
 
     #[inline(always)]
     fn capacity(&self) -> Option<usize> {
-        Some(self.0.capacity())
+        Some(self.inner.capacity())
     }
 
     #[inline(always)]
     fn is_large(&self) -> bool {
-        self.0.capacity() > 10
+        self.inner.capacity() > 10
     }
 
     #[inline(always)]
     fn is_full(&self) -> bool {
-        self.0.is_full()
+        self.inner.is_full()
     }
 
     #[inline(always)]
     fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.inner.is_empty()
     }
 
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
-        return unsafe { self.0.push_with_ptr(item.as_ptr()) };
+        return unsafe { self.inner.push_with_ptr(item.as_ptr()) };
     }
 
     #[inline(always)]
     fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
-        return unsafe { self.0.try_push_oneshot(item) };
+        return unsafe { self.inner.try_push_oneshot(item) };
     }
 
     #[inline(always)]
     fn try_recv(&self) -> Option<T> {
-        self.0.pop()
+        self.inner.pop()
     }
 
     #[inline]
     fn backoff_limit(&self) -> u16 {
-        if self.0.capacity() > 10 {
+        if self.inner.capacity() > 10 {
             crate::backoff::DEFAULT_LIMIT
         } else {
             #[cfg(target_arch = "x86_64")]
@@ -74,11 +78,35 @@ impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
 
     #[inline]
     fn may_direct_copy(&self) -> bool {
-        if self.0.capacity() > 10 {
-            true
+        if self.inner.capacity() > 10 {
+            if MP {
+                return self.congest.load(Ordering::Relaxed) > 0;
+            } else {
+                false
+            }
         } else {
             false
         }
+    }
+
+    #[inline(always)]
+    fn add_tx(&self) {
+        self.congest.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline(always)]
+    fn add_rx(&self) {
+        self.congest.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    #[inline(always)]
+    fn close_tx(&self) {
+        self.congest.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    #[inline(always)]
+    fn close_rx(&self) {
+        self.congest.fetch_add(1, Ordering::Relaxed);
     }
 }
 
