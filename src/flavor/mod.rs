@@ -27,6 +27,15 @@ pub(crate) trait FlavorImpl<T> {
 
     fn try_recv(&self) -> Option<T>;
 
+    #[inline(always)]
+    fn try_recv_final(&self) -> Option<T> {
+        if !self.is_empty() {
+            self.try_recv()
+        } else {
+            None
+        }
+    }
+
     fn backoff_limit(&self) -> u16;
 
     #[inline(always)]
