@@ -98,7 +98,7 @@ Some hidden bug (especially atomic ops on weaker ordering platform) might occur:
 <a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_tokio_arm.yml">cron_master_tokio_arm</a><br/>
 </td>
 <td> SHOULD UPGRADE tokio to 1.48<br/>
-CURRENT-THREAD runtime still verifying
+STABLE
  </td>
 </tr>
 <tr>
