@@ -285,6 +285,8 @@ impl<T> AsyncRx<T> {
             }
             // NOTE: The other side put something whie reg_send and did not see the waker,
             // should check the channel again, otherwise might incur a dead lock.
+            // NOTE: use is_empty here before try_recv,
+            // because Miri is not happy about ArrayQueue pop ordering, which is not SeqCst
             if !shared.is_empty() {
                 try_recv!(WakerState::Init as u8);
             }

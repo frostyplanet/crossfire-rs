@@ -120,6 +120,8 @@ impl<T> Rx<T> {
                 waker.reset_init();
             }
             shared.reg_recv(&waker);
+            // NOTE: use is_empty here before try_recv,
+            // because Miri is not happy about ArrayQueue pop ordering, which is not SeqCst
             if shared.is_empty() {
                 state = shared.recvs.commit_waiting(&waker);
             } else {
