@@ -293,7 +293,7 @@ impl<T> ChannelShared<T> {
 
     #[inline(always)]
     pub(crate) fn get_async_backoff(&self) -> Option<Backoff> {
-        if self.large {
+        if self.backoff_limit == 0 || self.large {
             return None;
         }
         let cfg = BackoffConfig::default();
