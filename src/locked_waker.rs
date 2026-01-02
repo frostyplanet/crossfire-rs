@@ -410,3 +410,16 @@ impl<P: Copy> WakerCache<P> {
         !self.0.exists()
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test_waker_size() {
+        use std::mem::size_of;
+        println!("wakertype {}", size_of::<WakerType>());
+        println!("waker inner {}", size_of::<WakerInner<()>>());
+    }
+}

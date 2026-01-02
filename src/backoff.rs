@@ -178,6 +178,7 @@ mod tests {
     fn test_backoff() {
         let backoff = Backoff::new(BackoffConfig { spin_limit: 1, limit: 0 });
         assert!(backoff.is_completed());
+        println!("Option<backoff> size {}", size_of::<Option<Backoff>>());
         println!("backoff size {}", size_of::<Backoff>());
         println!("BackoffConfig size {}", size_of::<BackoffConfig>());
         assert_eq!(size_of::<BackoffConfig>(), size_of::<u32>());
