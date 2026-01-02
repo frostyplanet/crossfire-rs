@@ -5,21 +5,18 @@ pub(crate) use crate::locked_waker::*;
 use crate::trace_log;
 pub(crate) use crate::waker_registry::*;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct ChannelShared<T> {
-    closed: AtomicBool,
+    pub(crate) inner: Flavor<T>,
     tx_count: AtomicUsize,
     rx_count: AtomicUsize,
-    pub(crate) congest: AtomicIsize,
-    pub(crate) inner: Flavor<T>,
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
     pub(crate) backoff_limit: u16,
     pub(crate) large: bool,
-    pub(crate) may_direct_copy: bool,
 }
 
 impl<T> ChannelShared<T> {
@@ -33,15 +30,12 @@ impl<T> ChannelShared<T> {
             }
         }
         Arc::new(Self {
-            closed: AtomicBool::new(false),
             tx_count: AtomicUsize::new(1),
             rx_count: AtomicUsize::new(1),
-            congest: AtomicIsize::new(0),
             senders,
             recvs,
             backoff_limit: inner.backoff_limit(),
             large,
-            may_direct_copy: inner.may_direct_copy(),
             inner,
         })
     }
@@ -69,12 +63,6 @@ impl<T> ChannelShared<T> {
         self.inner.is_full()
     }
 
-    /// Returns `true` if all senders or receivers have been dropped.
-    #[inline(always)]
-    pub fn is_disconnected(&self) -> bool {
-        self.closed.load(Ordering::SeqCst)
-    }
-
     /// Returns the number of senders for the channel.
     #[inline(always)]
     pub fn get_tx_count(&self) -> usize {
@@ -89,7 +77,7 @@ impl<T> ChannelShared<T> {
 
     #[inline(always)]
     pub(crate) fn sender_direct_copy(&self) -> bool {
-        self.may_direct_copy && self.senders.use_direct_copy(self)
+        self.inner.may_direct_copy() && self.senders.is_congest()
     }
 
     /// Returns the number of wakers for senders and receivers. For debugging purposes.
@@ -98,49 +86,57 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
+    pub(crate) fn is_tx_closed(&self) -> bool {
+        self.tx_count.load(Ordering::SeqCst) == 0
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_rx_closed(&self) -> bool {
+        self.rx_count.load(Ordering::SeqCst) == 0
+    }
+
+    #[inline(always)]
     pub(crate) fn add_tx(&self) {
-        let _ = self.tx_count.fetch_add(1, Ordering::Acquire);
-        let _ = self.congest.fetch_add(1, Ordering::Acquire);
+        // The drop will close_tx, which has release fence
+        let _ = self.tx_count.fetch_add(1, Ordering::Relaxed);
+        self.inner.add_tx();
     }
 
     #[inline(always)]
     pub(crate) fn add_rx(&self) {
-        let _ = self.rx_count.fetch_add(1, Ordering::Acquire);
-        let _ = self.congest.fetch_sub(1, Ordering::Acquire);
+        // The drop will close_rx, which has release fence
+        let _ = self.rx_count.fetch_add(1, Ordering::Relaxed);
+        self.inner.add_rx();
     }
 
     /// This method is called when a sender is dropped.
     #[inline(always)]
     pub(crate) fn close_tx(&self) {
-        let _ = self.congest.fetch_sub(1, Ordering::Relaxed);
         let old = self.tx_count.fetch_sub(1, Ordering::Release);
         if old <= 1 {
             trace_log!("closing from tx");
-            self.closed.store(true, Ordering::SeqCst); // serve as fence
-            self._close_all();
+            // There's SeqCst fence inside RegistryRecv::close
+            self.recvs.close();
         } else {
             trace_log!("drop tx {}", old - 1);
+            // just a hint, not acurate
+            self.inner.close_tx();
         }
     }
 
     /// This method is called when a receiver is dropped.
     #[inline(always)]
     pub(crate) fn close_rx(&self) {
-        let _ = self.congest.fetch_add(1, Ordering::Relaxed);
         let old = self.rx_count.fetch_sub(1, Ordering::Release);
         if old <= 1 {
             trace_log!("closing from rx");
-            self.closed.store(true, Ordering::SeqCst); // serve as fence
-            self._close_all();
+            // There's SeqCst fence inside RegistrySender::close
+            self.senders.close();
         } else {
             trace_log!("drop rx {}", old - 1);
+            // just a hint, not acurate
+            self.inner.close_rx();
         }
-    }
-
-    #[inline(always)]
-    fn _close_all(&self) {
-        self.senders.close();
-        self.recvs.close();
     }
 
     /// Register waker for current rx
@@ -165,7 +161,7 @@ impl<T> ChannelShared<T> {
                 return self.senders.cancel_reuse_waker(waker, WakerState::Done);
             } else {
                 if sink {
-                    if self.is_disconnected() {
+                    if self.is_rx_closed() {
                         return (WakerState::Closed as u8, None);
                     } else {
                         // outside logic only recognize Waiting
@@ -174,8 +170,7 @@ impl<T> ChannelShared<T> {
                 } else {
                     let state = self.senders.commit_waiting(&waker);
                     // let on_recv do it's job,
-                    // is_disconnected == true means no receivers
-                    if self.is_disconnected() {
+                    if self.is_rx_closed() {
                         return (WakerState::Closed as u8, None);
                     } else {
                         return (state, Some(waker));

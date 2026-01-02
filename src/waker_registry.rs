@@ -27,16 +27,11 @@ impl<T> RegistrySender<T> {
     }
 
     #[inline(always)]
-    pub fn use_direct_copy(&self, channel: &ChannelShared<T>) -> bool {
-        match self {
-            Self::Multi(inner) => {
-                if channel.congest.load(Ordering::Relaxed) > 0 {
-                    return true;
-                }
-                return !inner.is_empty();
-            }
-            Self::Single(_) => true,
-            Self::Dummy => false,
+    pub fn is_congest(&self) -> bool {
+        if let Self::Multi(inner) = self {
+            !inner.is_empty()
+        } else {
+            false
         }
     }
 

@@ -9,6 +9,7 @@ pub struct ArcCell<T> {
 }
 
 impl<T> Drop for ArcCell<T> {
+    #[inline]
     fn drop(&mut self) {
         self.clear();
     }
@@ -73,6 +74,7 @@ unsafe impl<T> Send for WeakCell<T> {}
 unsafe impl<T> Sync for WeakCell<T> {}
 
 impl<T> Drop for WeakCell<T> {
+    #[inline]
     fn drop(&mut self) {
         self.clear();
     }
