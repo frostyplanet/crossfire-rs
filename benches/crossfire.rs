@@ -593,6 +593,34 @@ fn crossfire_unbounded_async_mpmc(c: &mut Criterion) {
     group.finish();
 }
 
+fn crossfire_oneshot_async(c: &mut Criterion) {
+    detect_backoff_cfg();
+    init_logger();
+    let mut group = c.benchmark_group("crossfire_oneshot_async");
+    let count = TEN_THOUSAND;
+    group.throughput(Throughput::Elements(count as u64));
+    group.bench_function("spawn", |b| {
+        b.to_async(BenchExecutor()).iter(|| async move {
+            let mut txs = Vec::with_capacity(count);
+            let mut rxs = Vec::with_capacity(count);
+            for _i in 0..count {
+                let (tx, rx) = crossfire::oneshot::new_async();
+                txs.push(tx);
+                rxs.push(rx);
+            }
+            async_spawn!(async move {
+                for tx in txs {
+                    tx.send(0);
+                }
+            });
+            for rx in rxs {
+                let _ = rx.await;
+            }
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     crossfire_bounded_1_blocking_1_1,
@@ -613,5 +641,6 @@ criterion_group!(
     crossfire_unbounded_async_1_1,
     crossfire_unbounded_async_mpsc,
     crossfire_unbounded_async_mpmc,
+    crossfire_oneshot_async,
 );
 criterion_main!(benches);
