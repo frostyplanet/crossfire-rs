@@ -241,7 +241,6 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             trace_log!("tx{:?}: closed {:?}", tokio_task_id!(), o_waker);
             return Poll::Ready(Err(()));
         }
-        let mut state;
         // When the result is not TrySendError::Full,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
@@ -255,32 +254,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 }
                 return Poll::Ready(Ok(()));
             }
-            if let Some(waker) = o_waker.as_ref() {
-                match waker.try_change_state(WakerState::Woken, WakerState::Init) {
-                    Ok(_) => {
-                        if !waker.will_wake(ctx) {
-                            let _ = o_waker.take();
-                        }
-                    }
-                    Err(state) => {
-                        if state < WakerState::Woken as u8 {
-                            if waker.will_wake(ctx) {
-                                trace_log!("tx{:?}: will_wake {:?}", tokio_task_id!(), waker);
-                                // Normally only selection or multiplex future will get here.
-                                // No need to reg again, since waker is not consumed.
-                                return Poll::Pending;
-                            } else {
-                                // Spurious woken by runtime, waker can not be re-used (issue 38)
-                                self.senders.cancel_waker(waker);
-                                trace_log!("tx{:?}: drop waker {:?}", tokio_task_id!(), waker);
-                                let _ = o_waker.take();
-                            }
-                        } else if state == WakerState::Closed as u8 {
-                            return Poll::Ready(Err(()));
-                        }
-                    }
-                }
-            } else {
+            if o_waker.is_none() {
                 if let Some(mut backoff) = shared.get_async_backoff() {
                     loop {
                         backoff.spin();
@@ -295,13 +269,13 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                     }
                 }
             }
-            (state, *o_waker) = if let Some(waker) = o_waker.take() {
-                shared.sender_reg_and_try(item, waker, sink)
-            } else {
-                let waker = SendWaker::<T>::new_async(ctx, std::ptr::null_mut());
-                shared.sender_reg_and_try(item, waker, sink)
-            };
-            trace_log!("tx{:?}: sender_reg_and_try {:?} {}", tokio_task_id!(), o_waker, state);
+            match shared.senders.reg_waker_async(ctx, o_waker) {
+                Some(Poll::Pending) => return Poll::Pending,
+                Some(Poll::Ready(())) => return Poll::Ready(Err(())),
+                _ => {}
+            }
+            let state = shared.sender_double_check(item, o_waker, sink);
+            trace_log!("tx{:?}: sender_double_check {:?} {}", tokio_task_id!(), o_waker, state);
             if state < WakerState::Woken as u8 {
                 return Poll::Pending;
             } else if state > WakerState::Woken as u8 {
@@ -334,12 +308,10 @@ unsafe impl<T: Unpin + Send> Send for SendFuture<'_, T> {}
 
 impl<T: Unpin> Drop for SendFuture<'_, T> {
     fn drop(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            // Cancelling the future, poll is not ready
-            if self.tx.shared.abandon_send_waker(waker) {
-                if needs_drop::<T>() {
-                    unsafe { self.item.assume_init_drop() };
-                }
+        // Cancelling the future, poll is not ready
+        if self.tx.shared.abandon_send_waker(&mut self.waker) {
+            if needs_drop::<T>() {
+                unsafe { self.item.assume_init_drop() };
             }
         }
     }
@@ -377,12 +349,10 @@ unsafe impl<T: Unpin + Send, R> Send for SendTimeoutFuture<'_, T, R> {}
 
 impl<T: Unpin, R> Drop for SendTimeoutFuture<'_, T, R> {
     fn drop(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            // Cancelling the future, poll is not ready
-            if self.tx.shared.abandon_send_waker(waker) {
-                if needs_drop::<T>() {
-                    unsafe { self.item.assume_init_drop() };
-                }
+        // Cancelling the future, poll is not ready
+        if self.tx.shared.abandon_send_waker(&mut self.waker) {
+            if needs_drop::<T>() {
+                unsafe { self.item.assume_init_drop() };
             }
         }
     }
@@ -406,17 +376,13 @@ impl<T: Unpin + Send + 'static, R> Future for SendTimeoutFuture<'_, T, R> {
             }
             Poll::Pending => {
                 if let Poll::Ready(_) = _self.sleep.as_mut().poll(ctx) {
-                    if let Some(waker) = _self.waker.take() {
-                        if _self.tx.shared.abandon_send_waker(waker) {
-                            return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
-                                _self.item.assume_init_read()
-                            })));
-                        } else {
-                            // Message already sent in background (on_recv).
-                            return Poll::Ready(Ok(()));
-                        }
+                    if _self.tx.shared.abandon_send_waker(&mut _self.waker) {
+                        return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
+                            _self.item.assume_init_read()
+                        })));
                     } else {
-                        unreachable!();
+                        // Message already sent in background (on_recv).
+                        return Poll::Ready(Ok(()));
                     }
                 }
                 return Poll::Pending;

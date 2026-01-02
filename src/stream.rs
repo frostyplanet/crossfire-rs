@@ -120,9 +120,7 @@ where
 
 impl<T> Drop for AsyncStream<T> {
     fn drop(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            self.rx.shared.abandon_recv_waker(waker);
-        }
+        self.rx.shared.abandon_recv_waker(&mut self.waker);
     }
 }
 
