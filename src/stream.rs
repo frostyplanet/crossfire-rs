@@ -62,7 +62,7 @@ where
     /// Returns Err([TryRecvError::Disconnected]) if all `Tx` have been dropped and the channel is empty.
     #[inline]
     pub fn poll_item(&mut self, ctx: &mut Context) -> Poll<Option<T>> {
-        match self.rx.poll_item(ctx, &mut self.waker, true) {
+        match AsyncRx::poll_item(&self.rx, ctx, &mut self.waker, true) {
             Ok(item) => Poll::Ready(Some(item)),
             Err(e) => {
                 if e.is_empty() {
@@ -96,7 +96,7 @@ where
         if _self.ended {
             return Poll::Ready(None);
         }
-        match _self.rx.poll_item(ctx, &mut _self.waker, false) {
+        match AsyncRx::poll_item(&_self.rx, ctx, &mut _self.waker, false) {
             Ok(item) => Poll::Ready(Some(item)),
             Err(e) => {
                 if e.is_empty() {

@@ -137,7 +137,7 @@ impl<T> Drop for TxOneshot<T> {
 /// speciallized sender for oneshot channel
 #[must_use]
 pub struct RxOneshot<T> {
-    rx: AsyncRx<T>,
+    shared: Arc<ChannelShared<T>>,
     waker: Option<RecvWaker>,
 }
 
@@ -147,7 +147,9 @@ impl<T> Future for RxOneshot<T> {
     #[inline]
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match _self.rx.poll_item(ctx, &mut _self.waker, true) {
+        // Because the TxOneshot is nonblocking, we do not need to trigger
+        // close_rx on Rx drop. which is a hot path for oneshot, so use shared directly
+        match AsyncRx::poll_item(&_self.shared, ctx, &mut _self.waker, true) {
             Err(e) => {
                 if !e.is_empty() {
                     return Poll::Ready(Err(RecvError {}));
@@ -172,12 +174,12 @@ fn init<T>() -> Arc<ChannelShared<T>> {
 
 #[inline]
 pub fn new_blocking<T>() -> (TxOneshot<T>, Rx<T>) {
-    let share = init();
-    (TxOneshot(share.clone()), Rx::new(share))
+    let shared = init();
+    (TxOneshot(shared.clone()), Rx::new(shared))
 }
 
 #[inline]
 pub fn new_async<T>() -> (TxOneshot<T>, RxOneshot<T>) {
-    let share = init();
-    (TxOneshot(share.clone()), RxOneshot { rx: AsyncRx::new(share), waker: None })
+    let shared = init();
+    (TxOneshot(shared.clone()), RxOneshot { shared, waker: None })
 }
