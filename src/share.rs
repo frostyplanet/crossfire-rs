@@ -5,7 +5,7 @@ pub(crate) use crate::locked_waker::*;
 use crate::trace_log;
 pub(crate) use crate::waker_registry::*;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{fence, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -115,7 +115,7 @@ impl<T> ChannelShared<T> {
         let old = self.tx_count.fetch_sub(1, Ordering::Release);
         if old <= 1 {
             trace_log!("closing from tx");
-            // There's SeqCst fence inside RegistryRecv::close
+            fence(Ordering::SeqCst);
             self.recvs.close();
         } else {
             trace_log!("drop tx {}", old - 1);
@@ -130,6 +130,7 @@ impl<T> ChannelShared<T> {
         let old = self.rx_count.fetch_sub(1, Ordering::Release);
         if old <= 1 {
             trace_log!("closing from rx");
+            fence(Ordering::SeqCst);
             // There's SeqCst fence inside RegistrySender::close
             self.senders.close();
         } else {
