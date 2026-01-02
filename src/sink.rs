@@ -99,8 +99,6 @@ impl<F: Flavor> AsyncSink<F> {
 
 impl<F: Flavor> Drop for AsyncSink<F> {
     fn drop(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            self.tx.shared.abandon_send_waker(waker);
-        }
+        self.tx.shared.abandon_send_waker(&mut self.waker);
     }
 }
