@@ -26,6 +26,17 @@ impl<T> OneShot<T> {
     pub fn new() -> Self {
         Self { value: UnsafeCell::new(MaybeUninit::uninit()), exist: AtomicBool::new(false) }
     }
+
+    #[inline(always)]
+    fn _try_recv(&self, order: Ordering) -> Option<T> {
+        if self.exist.load(order) {
+            let msg = unsafe { self.value.get().read().assume_init() };
+            self.exist.store(false, Ordering::Release);
+            Some(msg)
+        } else {
+            None
+        }
+    }
 }
 
 impl<T> Drop for OneShot<T> {
@@ -75,13 +86,12 @@ impl<T> FlavorImpl<T> for OneShot<T> {
 
     #[inline(always)]
     fn try_recv(&self) -> Option<T> {
-        if self.exist.load(Ordering::Acquire) {
-            let msg = unsafe { self.value.get().read().assume_init() };
-            self.exist.store(false, Ordering::Release);
-            Some(msg)
-        } else {
-            None
-        }
+        self._try_recv(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    fn try_recv_final(&self) -> Option<T> {
+        self._try_recv(Ordering::SeqCst)
     }
 
     #[inline]

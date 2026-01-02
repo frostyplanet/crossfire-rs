@@ -111,8 +111,8 @@ impl<T> OneSize<T> {
     }
 
     #[inline(always)]
-    fn pop(&self) -> Option<T> {
-        let mut pos = self.pos.load(Acquire);
+    fn pop(&self, order: Ordering) -> Option<T> {
+        let mut pos = self.pos.load(order);
         loop {
             let (head, tail) = Self::unpack(pos);
             if head == tail {
@@ -183,7 +183,12 @@ impl<T> FlavorImpl<T> for OneSize<T> {
 
     #[inline(always)]
     fn try_recv(&self) -> Option<T> {
-        self.pop()
+        self.pop(Ordering::Relaxed)
+    }
+
+    #[inline(always)]
+    fn try_recv_final(&self) -> Option<T> {
+        self.pop(Ordering::SeqCst)
     }
 
     #[inline]

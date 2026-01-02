@@ -83,24 +83,27 @@ impl<T> Rx<T> {
     #[inline(always)]
     pub(crate) fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<T, RecvTimeoutError> {
         let shared = &self.shared;
+        macro_rules! on_recv_no_waker {
+            () => {{
+                trace_log!("rx: recv");
+            }};
+        }
+        macro_rules! on_recv_waker {
+            ($waker: expr) => {{
+                trace_log!("rx: recv {:?}", $waker);
+                self.waker_cache.push($waker);
+            }};
+        }
         macro_rules! try_recv {
-            () => {
+            ($handle_waker: block) => {
                 if let Some(item) = shared.inner.try_recv() {
                     shared.on_recv();
-                    trace_log!("rx: recv");
-                    return Ok(item);
-                }
-            };
-            ($waker: expr) => {
-                if let Some(item) = shared.inner.try_recv() {
-                    shared.on_recv();
-                    trace_log!("rx: recv {:?}", $waker);
-                    self.waker_cache.push($waker);
+                    $handle_waker
                     return Ok(item);
                 }
             };
         }
-        try_recv!();
+        try_recv!({ on_recv_no_waker!() });
         let mut cfg = BackoffConfig::default().limit(shared.backoff_limit);
         if shared.large {
             cfg = cfg.spin(2);
@@ -108,7 +111,7 @@ impl<T> Rx<T> {
         let mut backoff = Backoff::new(cfg);
         loop {
             let r = backoff.snooze();
-            try_recv!();
+            try_recv!({ on_recv_no_waker!() });
             if r {
                 break;
             }
@@ -120,19 +123,15 @@ impl<T> Rx<T> {
                 waker.reset_init();
             }
             shared.reg_recv(&waker);
-            // NOTE: use is_empty here before try_recv,
+            // NOTE: special API before we park
             // because Miri is not happy about ArrayQueue pop ordering, which is not SeqCst
-            if shared.is_empty() {
-                state = shared.recvs.commit_waiting(&waker);
-            } else {
-                if let Some(item) = shared.inner.try_recv() {
-                    shared.on_recv();
-                    trace_log!("rx: recv cancel {:?} Init", waker);
-                    self.recvs.cancel_waker(&waker);
-                    return Ok(item);
-                }
-                state = shared.recvs.commit_waiting(&waker);
+            if let Some(item) = shared.inner.try_recv_final() {
+                shared.on_recv();
+                trace_log!("rx: recv cancel {:?} Init", waker);
+                self.recvs.cancel_waker(&waker);
+                return Ok(item);
             }
+            state = shared.recvs.commit_waiting(&waker);
             trace_log!("rx: {:?} commit_waiting state={}", waker, state);
             if shared.is_tx_closed() {
                 break 'MAIN;
@@ -157,13 +156,13 @@ impl<T> Rx<T> {
             }
             backoff.reset();
             loop {
-                try_recv!(waker);
+                try_recv!({ on_recv_waker!(waker) });
                 if backoff.snooze() {
                     break;
                 }
             }
         }
-        try_recv!(waker);
+        try_recv!({ on_recv_waker!(waker) });
         // make sure all msgs received, since we have soonze
         return Err(RecvTimeoutError::Disconnected);
     }

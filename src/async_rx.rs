@@ -215,25 +215,35 @@ impl<T> AsyncRx<T> {
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
-        macro_rules! try_recv {
-            ($state: expr) => {
-                if let Some(item) = shared.inner.try_recv() {
-                    shared.on_recv();
-                    if let Some(waker) = o_waker.take() {
-                        trace_log!("rx{:?}: recv {:?} {}", tokio_task_id!(), waker, $state);
-                        if $state < WakerState::Woken as u8 {
-                            shared.recvs.cancel_waker(&waker);
-                        }
-                    } else {
-                        trace_log!("rx{:?}: recv", tokio_task_id!());
+        macro_rules! on_recv_no_waker {
+            () => {{
+                trace_log!("rx{:?}: recv", tokio_task_id!());
+            }};
+        }
+        macro_rules! on_recv_waker {
+            ($state: expr) => {{
+                if let Some(waker) = o_waker.take() {
+                    trace_log!("rx{:?}: recv {:?} {:?}", tokio_task_id!(), waker, $state);
+                    if ($state as u8) < (WakerState::Woken as u8) {
+                        shared.recvs.cancel_waker(&waker);
                     }
+                } else {
+                    trace_log!("rx{:?}: recv", tokio_task_id!());
+                }
+            }};
+        }
+        macro_rules! try_recv {
+            ($recv_func: ident => $waker_handle: block) => {
+                if let Some(item) = shared.inner.$recv_func() {
+                    shared.on_recv();
+                    $waker_handle
                     return Ok(item);
                 }
             };
         }
         loop {
-            try_recv!(WakerState::Woken as u8);
             if let Some(waker) = o_waker.as_ref() {
+                try_recv!(try_recv => {on_recv_waker!(WakerState::Woken)});
                 match waker.try_change_state(WakerState::Woken, WakerState::Init) {
                     Ok(_) => {
                         if !waker.will_wake(ctx) {
@@ -260,16 +270,13 @@ impl<T> AsyncRx<T> {
                     }
                 }
             } else {
+                try_recv!(try_recv=>{ on_recv_no_waker!()});
                 // First call
                 if let Some(mut backoff) = shared.get_async_backoff() {
                     loop {
-                        backoff.spin();
-                        if let Some(item) = shared.inner.try_recv() {
-                            shared.on_recv();
-                            trace_log!("rx{:?}: recv", tokio_task_id!());
-                            return Ok(item);
-                        }
-                        if backoff.is_completed() {
+                        let complete = backoff.spin();
+                        try_recv!(try_recv=>{ on_recv_no_waker!()});
+                        if complete {
                             break;
                         }
                     }
@@ -285,11 +292,9 @@ impl<T> AsyncRx<T> {
             }
             // NOTE: The other side put something whie reg_send and did not see the waker,
             // should check the channel again, otherwise might incur a dead lock.
-            // NOTE: use is_empty here before try_recv,
+            // NOTE: special API before we park
             // because Miri is not happy about ArrayQueue pop ordering, which is not SeqCst
-            if !shared.is_empty() {
-                try_recv!(WakerState::Init as u8);
-            }
+            try_recv!(try_recv_final =>{ on_recv_waker!(WakerState::Init)});
             if !stream {
                 let _waker = o_waker.as_ref().unwrap();
                 let state = shared.recvs.commit_waiting(&_waker);
@@ -301,7 +306,7 @@ impl<T> AsyncRx<T> {
             break;
         }
         if shared.is_tx_closed() {
-            try_recv!(WakerState::Closed as u8);
+            try_recv!(try_recv =>{ on_recv_waker!(WakerState::Closed)});
             trace_log!("rx{:?}: disconnected {:?}", tokio_task_id!(), o_waker);
             return Err(TryRecvError::Disconnected);
         } else {
