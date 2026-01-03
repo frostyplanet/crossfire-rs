@@ -8,6 +8,8 @@ pub(crate) use list::*;
 mod one;
 pub(crate) use one::*;
 
+pub(crate) mod one_spmc;
+
 #[enum_dispatch::enum_dispatch]
 pub(crate) trait FlavorImpl<T: Send + 'static>: Send + Sync + 'static {
     fn len(&self) -> usize;
@@ -63,6 +65,7 @@ pub enum Flavor<T: Send + 'static> {
     ArraySPSC(Array<T, false, false>),
     List(List<T>),
     One(OneSize<T>),
+    OneSpmc(one_spmc::OneSizeSpmc<T>),
 }
 
 #[cfg(test)]
