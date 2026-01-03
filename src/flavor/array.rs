@@ -31,6 +31,11 @@ impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
     }
 
     #[inline(always)]
+    fn is_large(&self) -> bool {
+        self.inner.capacity() > 10
+    }
+
+    #[inline(always)]
     fn is_full(&self) -> bool {
         self.inner.is_full()
     }

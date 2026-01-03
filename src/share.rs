@@ -15,27 +15,17 @@ pub struct ChannelShared<T> {
     rx_count: AtomicUsize,
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
-    pub(crate) backoff_limit: u16,
-    pub(crate) large: bool,
 }
 
 impl<T> ChannelShared<T> {
     pub(crate) fn new(
         inner: Flavor<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
     ) -> Arc<Self> {
-        let mut large = false;
-        if let Some(bound) = inner.capacity() {
-            if bound >= 10 {
-                large = true;
-            }
-        }
         Arc::new(Self {
             tx_count: AtomicUsize::new(1),
             rx_count: AtomicUsize::new(1),
             senders,
             recvs,
-            backoff_limit: inner.backoff_limit(),
-            large,
             inner,
         })
     }
@@ -289,7 +279,8 @@ impl<T> ChannelShared<T> {
 
     #[inline(always)]
     pub(crate) fn get_async_backoff(&self) -> Option<Backoff> {
-        if self.backoff_limit == 0 || self.large {
+        let backoff = self.inner.backoff_limit();
+        if backoff == 0 {
             return None;
         }
         let cfg = BackoffConfig::default();

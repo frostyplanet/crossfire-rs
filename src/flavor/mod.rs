@@ -14,6 +14,11 @@ pub(crate) trait FlavorImpl<T> {
 
     fn capacity(&self) -> Option<usize>;
 
+    #[inline(always)]
+    fn is_large(&self) -> bool {
+        false
+    }
+
     fn is_full(&self) -> bool;
 
     fn is_empty(&self) -> bool;
