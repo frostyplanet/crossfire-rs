@@ -1,0 +1,38 @@
+name: cron-master-compio-arm
+
+on:
+  schedule: [cron: "0 */5 * * *"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_and_test:
+
+    runs-on: "macos-15"
+
+    steps:
+    - uses: actions/checkout@v2
+
+      # We use cargo-nextest because cargo test does not forward cancellation signal
+    - uses: taiki-e/install-action@nextest
+
+    - name: Run tests with smol
+      run: env WORKFLOW=1 make test_compio
+
+    - name: Run test with compio release
+      run: env WORKFLOW=1 make test_compio_release
+
+    - name: Run test with compio release and trace_log
+      run: WORKFLOW=1 exec cargo nextest run -F="compio,trace_log" --hide-progress-bar -j 1 --no-capture -r
+
+    - name: Run tests with smol
+      run: env WORKFLOW=1 make test_compio_dispatcher
+
+    - name: Run test with compio_dispatcher release
+      run: env WORKFLOW=1 make test_compio_dispatcher_release
+
+    - name: Run test with compio_dispatcher release and trace_log
+      run: WORKFLOW=1 exec cargo nextest run -F="compio_dispatcher,trace_log" --hide-progress-bar -j 1 --no-capture -r
+

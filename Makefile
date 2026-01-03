@@ -104,6 +104,39 @@ test_smol_release:
 test_log_smol_release:
 	@${RUNRELEASECASE}; FEATURE_FLAG="-F smol,trace_log"; _run_test_release_case
 
+.PHONY: test_compio
+test_compio:
+	@${RUNTESTCASE}; FEATURE_FLAG="-F compio"; _run_test_case
+
+.PHONY: test_log_compio
+test_log_compio:
+	@${RUNTESTCASE}; FEATURE_FLAG="-F compio,trace_log"; _run_test_case
+	
+.PHONY: test_compio_release
+test_compio_release:
+	@${RUNTESTCASE}; FEATURE_FLAG="-F compio"; _run_test_release_case
+
+.PHONY: test_log_compio_release
+test_log_compio_release:
+	@${RUNTESTCASE}; FEATURE_FLAG="-F compio,trace_log"; _run_test_release_case
+
+.PHONY: test_compio_dispatcher
+test_compio_dispatcher:
+	@${RUNTESTCASE}; FEATURE_FLAG="-F compio_dispatcher"; _run_test_case
+
+.PHONY: test_log_compio_dispatcher
+test_log_compio_dispatcher:
+	@${RUNTESTCASE}; FEATURE_FLAG="-F compio_dispatcher,trace_log"; _run_test_case
+	
+.PHONY: test_compio_dispatcher_release
+test_compio_dispatcher_release:
+	@${RUNTESTCASE}; FEATURE_FLAG="-F compio_dispatcher"; _run_test_release_case
+
+.PHONY: test_log_compio_dispatcher_release
+test_log_compio_dispatcher_release:
+	@${RUNTESTCASE}; FEATURE_FLAG="-F compio_dispatcher,trace_log"; _run_test_release_case
+
+
 .PHONY: build
 build: init
 	cargo build
