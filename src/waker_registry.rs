@@ -371,7 +371,7 @@ impl RegistrySingle {
     /// return is_skip
     #[inline(always)]
     fn reg_waker(&self, waker: ThinWaker) {
-        self.cell.replace(waker).expect("reg_waker");
+        self.cell.replace(waker);
     }
 
     //    /// return true when clear the waker in registry, false when nothing
