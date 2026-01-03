@@ -52,7 +52,7 @@ macro_rules! init_share {
 macro_rules! init_array {
     ($bound: expr) => {{
         if $bound <= 1 {
-            init_share!(OneSize::<T>::new())
+            init_share!(crate::spsc::one_spmc::OneSizeSpmc::<T>::new())
         } else {
             init_share!(Array::<T, false, false>::new($bound))
         }

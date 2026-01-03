@@ -8,6 +8,8 @@ pub(crate) use list::*;
 mod one;
 pub(crate) use one::*;
 
+pub(crate) mod one_spmc;
+
 #[enum_dispatch::enum_dispatch]
 pub(crate) trait FlavorImpl<T> {
     fn len(&self) -> usize;
@@ -72,7 +74,8 @@ pub(crate) trait FlavorPrivate<T> {
 #[enum_dispatch::enum_dispatch(FlavorImpl<T>)]
 pub enum Flavor<T> {
     List(List<T>),
-    One(OneSize<T>),
-    ArraySPSC(Array<T, false, false>),
     ArrayMPMC(Array<T, true, true>),
+    ArraySPSC(Array<T, false, false>),
+    One(OneSize<T>),
+    OneSpmc(one_spmc::OneSizeSpmc<T>),
 }
