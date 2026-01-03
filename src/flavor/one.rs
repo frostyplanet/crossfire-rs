@@ -39,6 +39,12 @@ impl<T> Slot<T> {
     }
 
     #[inline(always)]
+    fn overwrite(&self, tail: u16, value: *const T) {
+        unsafe { (*self.value.get()).write(ptr::read(value)) };
+        self.stamp.store(tail.wrapping_add(1), Release);
+    }
+
+    #[inline(always)]
     fn read(&self, head: u16) -> T {
         let mut stamp = self.stamp.load(Acquire);
         if stamp != head {
@@ -149,7 +155,7 @@ impl<T> OneSize<T> {
 
     #[inline]
     pub(crate) fn replace(&self, item: T) {
-        let mut pos = self.pos.load(Ordering::Relaxed);
+        let mut pos = self.pos.load(Ordering::Acquire);
         let _item = MaybeUninit::new(item);
         loop {
             let (head, tail) = Self::unpack(pos);
