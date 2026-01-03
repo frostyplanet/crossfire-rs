@@ -102,6 +102,7 @@ impl<T> OneSize<T> {
                     }
                     Err(_pos) => {
                         pos = _pos;
+                        std::hint::spin_loop();
                     }
                 }
             } else {
@@ -110,8 +111,13 @@ impl<T> OneSize<T> {
         }
     }
 
+    #[inline]
+    pub fn pop(&self) -> Option<T> {
+        self._pop(Ordering::SeqCst)
+    }
+
     #[inline(always)]
-    fn pop(&self, order: Ordering) -> Option<T> {
+    fn _pop(&self, order: Ordering) -> Option<T> {
         let mut pos = self.pos.load(order);
         loop {
             let (head, tail) = Self::unpack(pos);
@@ -129,6 +135,36 @@ impl<T> OneSize<T> {
                     return Some(self.slots[index as usize].read(next_head));
                 }
             }
+        }
+    }
+
+    #[inline]
+    pub fn replace(&self, item: T) -> Result<(), T> {
+        let mut pos = self.pos.load(Ordering::SeqCst);
+        loop {
+            let (head, tail) = Self::unpack(pos);
+            if head == tail {
+                break;
+            }
+            let next_head = head.wrapping_add(1);
+            let new_pos = Self::pack(next_head, tail);
+            match self.pos.compare_exchange_weak(pos, new_pos, SeqCst, Acquire) {
+                Err(_pos) => {
+                    pos = _pos;
+                }
+                Ok(_) => {
+                    let index = head & 0x1;
+                    let _ = self.slots[index as usize].read(next_head);
+                    pos = new_pos;
+                    break;
+                }
+            }
+        }
+        let _item = MaybeUninit::new(item);
+        if unsafe { self.try_push(pos, _item.as_ptr(), Ordering::Acquire).is_err() } {
+            Err(unsafe { _item.assume_init_read() })
+        } else {
+            Ok(())
         }
     }
 }
@@ -183,12 +219,12 @@ impl<T> FlavorImpl<T> for OneSize<T> {
 
     #[inline(always)]
     fn try_recv(&self) -> Option<T> {
-        self.pop(Ordering::Relaxed)
+        self._pop(Ordering::Relaxed)
     }
 
     #[inline(always)]
     fn try_recv_final(&self) -> Option<T> {
-        self.pop(Ordering::SeqCst)
+        self._pop(Ordering::SeqCst)
     }
 
     #[inline]
