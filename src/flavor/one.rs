@@ -56,6 +56,13 @@ impl<T> Slot<T> {
         self.stamp.store(head.wrapping_add(1), Release);
         msg
     }
+
+    #[inline(always)]
+    fn drop(&self, head: u16) {
+        unsafe { self.value.get().read().assume_init_drop() };
+        // there might be slow reader, update the stamp to allow writer reuse the slot
+        self.stamp.store(head.wrapping_add(1), Release);
+    }
 }
 
 /// A simplify ArrayQueue specialized for size=1
@@ -101,8 +108,10 @@ impl<T> OneSize<T> {
                         return Ok(());
                     }
                     Err(_pos) => {
-                        pos = _pos;
-                        std::hint::spin_loop();
+                        if pos != _pos {
+                            pos = _pos;
+                            std::hint::spin_loop();
+                        }
                     }
                 }
             } else {
@@ -139,32 +148,41 @@ impl<T> OneSize<T> {
     }
 
     #[inline]
-    pub fn replace(&self, item: T) -> Result<(), T> {
-        let mut pos = self.pos.load(Ordering::SeqCst);
+    pub(crate) fn replace(&self, item: T) {
+        let mut pos = self.pos.load(Ordering::Relaxed);
+        let _item = MaybeUninit::new(item);
         loop {
             let (head, tail) = Self::unpack(pos);
             if head == tail {
-                break;
-            }
-            let next_head = head.wrapping_add(1);
-            let new_pos = Self::pack(next_head, tail);
-            match self.pos.compare_exchange_weak(pos, new_pos, SeqCst, Acquire) {
-                Err(_pos) => {
-                    pos = _pos;
+                let new_pos = Self::pack(head, tail.wrapping_add(1));
+                match self.pos.compare_exchange_weak(pos, new_pos, SeqCst, Relaxed) {
+                    Ok(_) => {
+                        let index = tail & 0x1;
+                        self.slots[index as usize].write(tail, _item.as_ptr());
+                        return;
+                    }
+                    Err(_pos) => {
+                        pos = _pos;
+                        continue;
+                    }
                 }
-                Ok(_) => {
-                    let index = head & 0x1;
-                    let _ = self.slots[index as usize].read(next_head);
-                    pos = new_pos;
-                    break;
+            } else {
+                debug_assert_eq!(head.wrapping_add(1), tail);
+                let next_head = head.wrapping_add(1);
+                let new_pos = Self::pack(next_head, tail.wrapping_add(1));
+                match self.pos.compare_exchange_weak(pos, new_pos, SeqCst, Relaxed) {
+                    Err(_pos) => {
+                        pos = _pos;
+                    }
+                    Ok(_) => {
+                        let new_index = tail & 0x1;
+                        self.slots[new_index as usize].write(tail, _item.as_ptr());
+                        let old_index = head & 0x1;
+                        self.slots[old_index as usize].drop(next_head);
+                        return;
+                    }
                 }
             }
-        }
-        let _item = MaybeUninit::new(item);
-        if unsafe { self.try_push(pos, _item.as_ptr(), Ordering::Acquire).is_err() } {
-            Err(unsafe { _item.assume_init_read() })
-        } else {
-            Ok(())
         }
     }
 }
