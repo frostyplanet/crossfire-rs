@@ -33,15 +33,32 @@ pub enum WakeResult {
 impl WakeResult {
     #[inline(always)]
     pub fn is_done(&self) -> bool {
-        (*self as u8) & 0x1 == 0x1
+        (*self as u8) & (WakeResult::Woken as u8) > 0
     }
 }
 
+pub enum WakerHanle<P> {
+    Multi(ArcWaker<P>),
+    Single, // it's only use on async sender
+}
+
+pub type SendWaker<T> = WakerHanle<*const T>;
+pub type RecvWaker = WakerHanle<()>;
+
 /// Although removing direct copy feature of the payload pointer is not used,
 /// leave it to unbuffer channel in the future
-pub struct ChannelWaker<P>(Arc<WakerInner<P>>);
+pub struct ArcWaker<P>(Arc<WakerInner<P>>);
 
-impl<P> fmt::Debug for ChannelWaker<P> {
+impl<P> fmt::Debug for WakerHanle<P> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Single => write!(f, "waker"),
+            Self::Multi(inner) => inner.fmt(f),
+        }
+    }
+}
+
+impl<P> fmt::Debug for ArcWaker<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
     }
@@ -53,7 +70,7 @@ impl<P> fmt::Debug for WakerInner<P> {
     }
 }
 
-impl<P> Deref for ChannelWaker<P> {
+impl<P> Deref for ArcWaker<P> {
     type Target = WakerInner<P>;
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -61,13 +78,13 @@ impl<P> Deref for ChannelWaker<P> {
     }
 }
 
-impl<P> ChannelWaker<P> {
+impl<P> ArcWaker<P> {
     #[inline(always)]
     pub fn new_async(ctx: &Context, payload: P) -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicU32::new(0),
             state: AtomicU8::new(WakerState::Init as u8),
-            waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
+            waker: UnsafeCell::new(ThinWaker::Async(ctx.waker().clone())),
             payload: UnsafeCell::new(payload),
         }))
     }
@@ -77,13 +94,13 @@ impl<P> ChannelWaker<P> {
         Self(Arc::new(WakerInner {
             seq: AtomicU32::new(0),
             state: AtomicU8::new(WakerState::Init as u8),
-            waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
+            waker: UnsafeCell::new(ThinWaker::Blocking(thread::current())),
             payload: UnsafeCell::new(payload),
         }))
     }
 }
 
-impl<P> ChannelWaker<P> {
+impl<P> ArcWaker<P> {
     #[inline(always)]
     pub fn from_arc(inner: Arc<WakerInner<P>>) -> Self {
         Self(inner)
@@ -100,19 +117,25 @@ impl<P> ChannelWaker<P> {
     }
 }
 
-pub type RecvWaker = ChannelWaker<()>;
-
-pub type SendWaker<T> = ChannelWaker<*const T>;
-
-enum WakerType {
+#[derive(Debug)]
+pub(crate) enum ThinWaker {
     Async(Waker),
     Blocking(thread::Thread),
+}
+
+impl ThinWaker {
+    pub(crate) fn wake(&self) {
+        match self {
+            ThinWaker::Async(w) => w.wake_by_ref(),
+            ThinWaker::Blocking(th) => th.unpark(),
+        }
+    }
 }
 
 pub struct WakerInner<P> {
     state: AtomicU8,
     seq: AtomicU32,
-    waker: UnsafeCell<WakerType>,
+    waker: UnsafeCell<ThinWaker>,
     #[allow(dead_code)]
     payload: UnsafeCell<P>,
 }
@@ -122,12 +145,12 @@ unsafe impl<P> Sync for WakerInner<P> {}
 
 impl<P> WakerInner<P> {
     #[inline(always)]
-    fn get_waker(&self) -> &WakerType {
+    fn get_waker(&self) -> &ThinWaker {
         unsafe { transmute(self.waker.get()) }
     }
 
     #[inline(always)]
-    fn get_waker_mut(&self) -> &mut WakerType {
+    fn get_waker_mut(&self) -> &mut ThinWaker {
         unsafe { transmute(self.waker.get()) }
     }
 
@@ -157,7 +180,7 @@ impl<P> WakerInner<P> {
     #[inline(always)]
     fn update_thread_handle(&self) {
         let _waker = self.get_waker_mut();
-        *_waker = WakerType::Blocking(thread::current());
+        *_waker = ThinWaker::Blocking(thread::current());
     }
 
     #[inline(always)]
@@ -180,25 +203,6 @@ impl<P> WakerInner<P> {
             return Err(s);
         }
         return Ok(());
-    }
-
-    /// Only used in cancel_wake, it's ok to use Relaxed
-    #[inline(always)]
-    pub fn set_state_relaxed(&self, state: WakerState) {
-        let _state = state as u8;
-        #[cfg(all(test, not(feature = "trace_log")))]
-        {
-            if _state != WakerState::Closed as u8 {
-                let __state = self.get_state_relaxed();
-                assert!(
-                    __state == WakerState::Woken as u8 || __state <= _state as u8,
-                    "unexpected set state {:?} on state: {}",
-                    _state,
-                    __state
-                );
-            }
-        }
-        self.state.store(_state, Ordering::Relaxed);
     }
 
     #[inline(always)]
@@ -261,6 +265,11 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
+    pub fn _get_state(&self, order: Ordering) -> u8 {
+        self.state.load(order)
+    }
+
+    #[inline(always)]
     pub fn get_state(&self) -> u8 {
         self.state.load(Ordering::SeqCst)
     }
@@ -308,7 +317,7 @@ impl<P> WakerInner<P> {
         // There might be situation like spurious wakeup, poll() again under no waking up ever
         // happened, waker still exists in registry but cannot be used to wake the current future.
         let o_waker = self.get_waker();
-        if let WakerType::Async(_waker) = o_waker {
+        if let ThinWaker::Async(_waker) = o_waker {
             return _waker.will_wake(ctx.waker());
         } else {
             unreachable!();
@@ -318,10 +327,7 @@ impl<P> WakerInner<P> {
     // Assume the state change have proper fence
     #[inline(always)]
     fn _wake_nolock(&self) {
-        match self.get_waker() {
-            WakerType::Async(w) => w.wake_by_ref(),
-            WakerType::Blocking(th) => th.unpark(),
-        }
+        self.get_waker().wake();
     }
 }
 
@@ -386,17 +392,17 @@ impl<P: Copy> WakerCache<P> {
     }
 
     #[inline(always)]
-    pub fn new_blocking(&self, payload: P) -> ChannelWaker<P> {
+    pub fn new_blocking(&self, payload: P) -> ArcWaker<P> {
         if let Some(inner) = self.0.pop() {
             inner.update_thread_handle();
             inner.reset(payload);
-            return ChannelWaker::<P>::from_arc(inner);
+            return ArcWaker::<P>::from_arc(inner);
         }
-        return ChannelWaker::new_blocking(payload);
+        return ArcWaker::new_blocking(payload);
     }
 
     #[inline(always)]
-    pub(crate) fn push(&self, waker: ChannelWaker<P>) {
+    pub(crate) fn push(&self, waker: ArcWaker<P>) {
         debug_assert!(waker.get_state() >= WakerState::Woken as u8);
         let a = waker.to_arc();
         if Arc::weak_count(&a) == 0 && Arc::strong_count(&a) == 1 {
@@ -419,7 +425,7 @@ mod tests {
     #[test]
     fn test_waker_size() {
         use std::mem::size_of;
-        println!("wakertype {}", size_of::<WakerType>());
+        println!("wakertype {}", size_of::<ThinWaker>());
         println!("waker inner {}", size_of::<WakerInner<()>>());
     }
 }

@@ -221,7 +221,7 @@ mod backoff;
 pub use backoff::detect_backoff_cfg;
 
 mod collections;
-mod locked_waker;
+mod waker;
 mod waker_registry;
 
 pub mod mpmc;

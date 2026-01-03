@@ -5,6 +5,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -125,31 +126,24 @@ impl<T: Send + 'static> Tx<T> {
         macro_rules! return_ok {
             () => {
                 trace_log!("tx: send {:?}", o_waker);
-                if let Some(waker) = o_waker.take() {
-                    self.waker_cache.push(waker);
-                }
                 if shared.is_full() {
                     // It's for 8x1, 16x1.
                     std::thread::yield_now();
+                    self.senders.cache_waker(o_waker, &self.waker_cache);
                 }
                 return Ok(())
             };
         }
         loop {
-            let waker = if let Some(w) = o_waker.take() {
-                w.reset_init();
-                w
-            } else {
-                self.waker_cache.new_blocking(direct_copy_ptr)
-            };
+            self.senders.reg_waker_blocking(&mut o_waker, &self.waker_cache, direct_copy_ptr);
             // For nx1 (more likely congest), need to reset backoff
             // to allow more yield to receivers.
             // For nxn (the backoff is already complete), wait a little bit.
-            (state, o_waker) = shared.sender_reg_and_try(&item, waker, false);
+            state = shared.sender_double_check(&item, &mut o_waker, false);
             trace_log!("tx: sender_reg_and_try {:?} state={}", o_waker, state);
             while state < WakerState::Woken as u8 {
                 if direct_copy_ptr != std::ptr::null_mut() {
-                    state = shared.sender_snooze(o_waker.as_ref().unwrap(), &mut backoff);
+                    state = shared.sender_snooze(&o_waker, &mut backoff);
                 }
                 if state <= WakerState::Waiting as u8 {
                     match check_timeout(deadline) {
@@ -160,7 +154,7 @@ impl<T: Send + 'static> Tx<T> {
                             std::thread::park_timeout(dur);
                         }
                         Err(_) => {
-                            if shared.abandon_send_waker(o_waker.take().unwrap()) {
+                            if shared.abandon_send_waker(&mut o_waker) {
                                 return Err(SendTimeoutError::Timeout(unsafe {
                                     item.assume_init_read()
                                 }));
@@ -171,12 +165,11 @@ impl<T: Send + 'static> Tx<T> {
                             }
                         }
                     }
-                    state = o_waker.as_ref().unwrap().get_state();
+                    state = self.senders.get_waker_state(&o_waker, Ordering::SeqCst);
+                    trace_log!("tx: after park state={}", state);
                 }
             }
-            if state == WakerState::Done as u8 {
-                return_ok!();
-            } else if state == WakerState::Woken as u8 {
+            if state == WakerState::Woken as u8 {
                 backoff.reset();
                 loop {
                     if shared.inner.try_send(&item) {
@@ -188,7 +181,10 @@ impl<T: Send + 'static> Tx<T> {
                     }
                     backoff.snooze();
                 }
-            } else if state == WakerState::Closed as u8 {
+            } else if state == WakerState::Done as u8 {
+                return_ok!();
+            } else {
+                debug_assert_eq!(state, WakerState::Closed as u8);
                 return Err(SendTimeoutError::Disconnected(unsafe { item.assume_init_read() }));
             }
         }
