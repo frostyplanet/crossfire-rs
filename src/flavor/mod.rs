@@ -6,6 +6,8 @@ mod list;
 pub(crate) use list::*;
 mod one;
 pub(crate) use one::*;
+mod one_spmc;
+pub(crate) use one_spmc::*;
 
 pub trait Flavor: Send + 'static {
     type Item: Send + 'static + Unpin;

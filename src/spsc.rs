@@ -51,14 +51,14 @@ pub type List<T> = crate::flavor::List<T>;
 /// Flavor Type alias for bounded SPSC channel wrapped with specified One impl
 pub enum Array<T> {
     Array(crate::flavor::Array<T, false, false>),
-    One(crate::flavor::One<T>),
+    One(crate::flavor::OneSpmc<T>),
 }
 
 impl<T: Send + Unpin + 'static> Array<T> {
     #[inline]
     pub fn new(size: usize) -> Self {
         if size <= 1 {
-            Self::One(crate::flavor::One::new())
+            Self::One(crate::flavor::OneSpmc::new())
         } else {
             Self::Array(crate::flavor::Array::<T, false, false>::new(size))
         }
