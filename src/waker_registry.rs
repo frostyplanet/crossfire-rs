@@ -315,7 +315,7 @@ impl<P> RegistrySingle<P> {
 
 struct RegistryMultiInner<P> {
     queue: VecDeque<Weak<WakerInner<P>>>,
-    seq: usize,
+    seq: u32,
 }
 
 pub struct RegistryMulti<P> {
@@ -353,7 +353,7 @@ impl<P> RegistryMulti<P> {
     }
 
     #[inline(always)]
-    fn pop(&self) -> Option<(ChannelWaker<P>, usize)> {
+    fn pop(&self) -> Option<(ChannelWaker<P>, u32)> {
         if self.is_empty.load(Ordering::SeqCst) {
             return None;
         }

@@ -4,7 +4,7 @@ use std::fmt;
 use std::mem::transmute;
 use std::ops::Deref;
 use std::sync::{
-    atomic::{AtomicU8, AtomicUsize, Ordering},
+    atomic::{AtomicU32, AtomicU8, Ordering},
     Arc, Weak,
 };
 use std::task::*;
@@ -65,7 +65,7 @@ impl<P> ChannelWaker<P> {
     #[inline(always)]
     pub fn new_async(ctx: &Context, payload: P) -> Self {
         Self(Arc::new(WakerInner {
-            seq: AtomicUsize::new(0),
+            seq: AtomicU32::new(0),
             state: AtomicU8::new(WakerState::Init as u8),
             waker: UnsafeCell::new(WakerType::Async(ctx.waker().clone())),
             payload: UnsafeCell::new(payload),
@@ -75,7 +75,7 @@ impl<P> ChannelWaker<P> {
     #[inline(always)]
     pub fn new_blocking(payload: P) -> Self {
         Self(Arc::new(WakerInner {
-            seq: AtomicUsize::new(0),
+            seq: AtomicU32::new(0),
             state: AtomicU8::new(WakerState::Init as u8),
             waker: UnsafeCell::new(WakerType::Blocking(thread::current())),
             payload: UnsafeCell::new(payload),
@@ -111,7 +111,7 @@ enum WakerType {
 
 pub struct WakerInner<P> {
     state: AtomicU8,
-    seq: AtomicUsize,
+    seq: AtomicU32,
     waker: UnsafeCell<WakerType>,
     #[allow(dead_code)]
     payload: UnsafeCell<P>,
@@ -145,12 +145,12 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
-    pub fn get_seq(&self) -> usize {
+    pub fn get_seq(&self) -> u32 {
         self.seq.load(Ordering::Relaxed)
     }
 
     #[inline(always)]
-    pub fn set_seq(&self, seq: usize) {
+    pub fn set_seq(&self, seq: u32) {
         self.seq.store(seq, Ordering::Relaxed);
     }
 
