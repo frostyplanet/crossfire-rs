@@ -6,6 +6,15 @@ pub const ROUND: usize = 10000;
 #[cfg(miri)]
 pub const ROUND: usize = 20;
 
+#[cfg(feature = "compio_dispatcher")]
+use std::sync::OnceLock;
+
+#[cfg(feature = "compio_dispatcher")]
+use compio::dispatcher::Dispatcher;
+
+#[cfg(feature = "compio_dispatcher")]
+pub static COMPIO_DISPTACHER: OnceLock<Dispatcher> = OnceLock::new();
+
 pub fn _setup_log() {
     #[cfg(feature = "trace_log")]
     {
@@ -57,25 +66,29 @@ macro_rules! runtime_block_on {
             log::info!("run with smol");
             smol::block_on($f)
         }
-        #[cfg(not(feature = "smol"))]
+        #[cfg(feature = "async_std")]
         {
-            #[cfg(feature = "async_std")]
-            {
-                log::info!("run with async_std");
-                async_std::task::block_on($f)
-            }
-            #[cfg(any(feature = "tokio", not(feature = "async_std")))]
-            {
-                let runtime_flag = std::env::var("SINGLE_THREAD_RUNTIME").unwrap_or("".to_string());
-                let mut rt = if runtime_flag.len() > 0 {
-                    log::info!("run with tokio current thread");
-                    tokio::runtime::Builder::new_current_thread()
-                } else {
-                    log::info!("run with tokio multi thread");
-                    tokio::runtime::Builder::new_multi_thread()
-                };
-                rt.enable_all().build().unwrap().block_on($f)
-            }
+            log::info!("run with async_std");
+            async_std::task::block_on($f)
+        }
+        #[cfg(feature = "tokio")]
+        {
+            let runtime_flag = std::env::var("SINGLE_THREAD_RUNTIME").unwrap_or("".to_string());
+            let mut rt = if runtime_flag.len() > 0 {
+                log::info!("run with tokio current thread");
+                tokio::runtime::Builder::new_current_thread()
+            } else {
+                log::info!("run with tokio multi thread");
+                tokio::runtime::Builder::new_multi_thread()
+            };
+            rt.enable_all().build().unwrap().block_on($f)
+        }
+        #[cfg(any(feature = "compio", feature = "compio_dispatcher"))]
+        {
+            log::info!("run with compio");
+
+            let rt = compio::runtime::Runtime::new().unwrap();
+            rt.block_on($f)
         }
     }};
 }
@@ -88,16 +101,24 @@ macro_rules! async_spawn {
         {
             smol::spawn($f)
         }
-        #[cfg(not(feature = "smol"))]
+        #[cfg(feature = "async_std")]
         {
-            #[cfg(feature = "async_std")]
-            {
-                async_std::task::spawn($f)
-            }
-            #[cfg(any(feature = "tokio", not(feature = "async_std")))]
-            {
-                tokio::spawn($f)
-            }
+            async_std::task::spawn($f)
+        }
+        #[cfg(feature = "tokio")]
+        {
+            tokio::spawn($f)
+        }
+        #[cfg(feature = "compio")]
+        {
+            compio::runtime::spawn($f)
+        }
+        #[cfg(feature = "compio_dispatcher")]
+        {
+            let disp = crate::tests::common::COMPIO_DISPTACHER.get_or_init(|| {
+                compio::dispatcher::Dispatcher::new().expect("create dispatcher")
+            });
+            disp.dispatch(move || $f).expect("dispatch")
         }
     }};
 }
@@ -106,20 +127,17 @@ pub(super) use async_spawn;
 #[allow(dead_code)]
 macro_rules! async_join_result {
     ($th: expr) => {{
-        #[cfg(feature = "smol")]
+        #[cfg(any(feature = "async_std", feature = "smol"))]
         {
             $th.await
         }
-        #[cfg(not(feature = "smol"))]
+        #[cfg(any(feature = "compio", feature = "tokio"))]
         {
-            #[cfg(feature = "async_std")]
-            {
-                $th.await
-            }
-            #[cfg(not(feature = "async_std"))]
-            {
-                $th.await.expect("join")
-            }
+            $th.await.expect("join")
+        }
+        #[cfg(feature = "compio_dispatcher")]
+        {
+            $th.await.expect("join")
         }
     }};
 }
@@ -182,16 +200,17 @@ pub async fn sleep(duration: std::time::Duration) {
     {
         smol::Timer::after(duration).await;
     }
-    #[cfg(not(feature = "smol"))]
+    #[cfg(feature = "async_std")]
     {
-        #[cfg(feature = "async_std")]
-        {
-            async_std::task::sleep(duration).await;
-        }
-        #[cfg(not(feature = "async_std"))]
-        {
-            tokio::time::sleep(duration).await;
-        }
+        async_std::task::sleep(duration).await;
+    }
+    #[cfg(feature = "tokio")]
+    {
+        tokio::time::sleep(duration).await;
+    }
+    #[cfg(any(feature = "compio", feature = "compio_dispatcher"))]
+    {
+        compio::time::sleep(duration).await;
     }
 }
 
@@ -206,9 +225,15 @@ where
             .await
             .map_err(|_| format!("Test timed out after {:?}", duration))
     }
-    #[cfg(not(feature = "async_std"))]
+    #[cfg(feature = "tokio")]
     {
         tokio::time::timeout(duration, future)
+            .await
+            .map_err(|_| format!("Test timed out after {:?}", duration))
+    }
+    #[cfg(any(feature = "compio", feature = "compio_dispatcher"))]
+    {
+        compio::time::timeout(duration, future)
             .await
             .map_err(|_| format!("Test timed out after {:?}", duration))
     }
