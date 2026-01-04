@@ -500,6 +500,16 @@ mod tests {
 
     use super::*;
     use crate::locked_waker::RecvWaker;
+
+    #[test]
+    fn print_waker_registry_size() {
+        use std::mem::size_of;
+        println!("RegistrySender size {}", size_of::<RegistrySender<usize>>());
+        println!("RegistryRecv size {}", size_of::<RegistryRecv>());
+        println!("RegistrySingle size {}", size_of::<RegistrySingle<()>>());
+        println!("RegistryMulti size {}", size_of::<RegistryMulti<()>>());
+    }
+
     #[test]
     fn test_registry_multi_pop() {
         let reg = RegistryMulti::new();
