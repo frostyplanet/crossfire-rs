@@ -59,3 +59,17 @@ pub enum Flavor<T> {
     List(List<T>),
     One(OneSize<T>),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn print_flavor_size() {
+        println!("Flavor size {}", size_of::<Flavor<usize>>());
+        println!("one size {}", size_of::<OneSize<usize>>());
+        println!("array size {}", size_of::<Array<usize, true, true>>());
+        println!("list size {}", size_of::<List<usize>>());
+    }
+}
