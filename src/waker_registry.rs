@@ -1,4 +1,4 @@
-use crate::flavor::{Flavor, One};
+use crate::flavor::{Flavor, OneSpmc};
 use crate::shared::ChannelShared;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
@@ -344,28 +344,27 @@ impl RegistryRecv {
 }
 
 pub struct RegistrySingle {
-    cell: One<ThinWaker>,
+    cell: OneSpmc<ThinWaker>,
 }
 
 impl RegistrySingle {
     #[inline(always)]
     pub fn new() -> Self {
-        Self { cell: One::new() }
+        Self { cell: OneSpmc::new() }
     }
 
     /// return is_skip
     #[inline(always)]
     fn reg_waker(&self, waker: ThinWaker) {
-        todo!();
+        self.cell.replace(waker);
     }
 
     #[inline(always)]
     fn fire(&self, _tag: &str) {
-        todo!();
-//        if let Some(waker) = self.cell.pop() {
-//            waker.wake();
-//            trace_log!("{} wake", _tag);
-//        }
+        if let Some(waker) = self.cell.try_recv_final() {
+            waker.wake();
+            trace_log!("{} wake", _tag);
+        }
     }
 
     #[inline]
