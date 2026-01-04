@@ -56,9 +56,6 @@ smol = ["dep:smol"]
 # This only switch runtime in benchmark and test workflow.
 compio = ["dep:compio"]
 
-# This only switch runtime in benchmark and test workflow.
-compio_dispatcher = ["dep:compio"]
-
 # for test workflow debugging
 trace_log = ["dep:log"]
 

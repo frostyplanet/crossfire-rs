@@ -6,14 +6,14 @@ pub const ROUND: usize = 10000;
 #[cfg(miri)]
 pub const ROUND: usize = 20;
 
-#[cfg(feature = "compio_dispatcher")]
+#[cfg(feature = "compio")]
 use std::sync::OnceLock;
 
-#[cfg(feature = "compio_dispatcher")]
+#[cfg(feature = "compio")]
 use compio::dispatcher::Dispatcher;
 
-#[cfg(feature = "compio_dispatcher")]
-pub static COMPIO_DISPTACHER: OnceLock<Dispatcher> = OnceLock::new();
+#[cfg(feature = "compio")]
+pub static COMPIO_DISPATCHER: OnceLock<Dispatcher> = OnceLock::new();
 
 pub fn _setup_log() {
     #[cfg(feature = "trace_log")]
@@ -83,7 +83,7 @@ macro_rules! runtime_block_on {
             };
             rt.enable_all().build().unwrap().block_on($f)
         }
-        #[cfg(any(feature = "compio", feature = "compio_dispatcher"))]
+        #[cfg(feature = "compio")]
         {
             log::info!("run with compio");
 
@@ -111,12 +111,14 @@ macro_rules! async_spawn {
         }
         #[cfg(feature = "compio")]
         {
-            compio::runtime::spawn($f)
-        }
-        #[cfg(feature = "compio_dispatcher")]
-        {
-            let disp = crate::tests::common::COMPIO_DISPTACHER.get_or_init(|| {
-                compio::dispatcher::Dispatcher::new().expect("create dispatcher")
+            let disp = crate::tests::common::COMPIO_DISPATCHER.get_or_init(|| {
+                let mut dispatcher = compio::dispatcher::DispatcherBuilder::new();
+                if std::env::var("SINGLE_THREAD_RUNTIME").is_ok() {
+                    dispatcher = dispatcher.worker_threads(std::num::NonZero::new(1).unwrap());
+                } else {
+                    dispatcher = dispatcher.worker_threads(std::num::NonZero::new(8).unwrap());
+                }
+                dispatcher.build().expect("create dispatcher")
             });
             disp.dispatch(move || $f).expect("dispatch")
         }
@@ -132,10 +134,6 @@ macro_rules! async_join_result {
             $th.await
         }
         #[cfg(any(feature = "compio", feature = "tokio"))]
-        {
-            $th.await.expect("join")
-        }
-        #[cfg(feature = "compio_dispatcher")]
         {
             $th.await.expect("join")
         }
@@ -208,7 +206,7 @@ pub async fn sleep(duration: std::time::Duration) {
     {
         tokio::time::sleep(duration).await;
     }
-    #[cfg(any(feature = "compio", feature = "compio_dispatcher"))]
+    #[cfg(feature = "compio")]
     {
         compio::time::sleep(duration).await;
     }
@@ -231,7 +229,7 @@ where
             .await
             .map_err(|_| format!("Test timed out after {:?}", duration))
     }
-    #[cfg(any(feature = "compio", feature = "compio_dispatcher"))]
+    #[cfg(feature = "compio")]
     {
         compio::time::timeout(duration, future)
             .await

@@ -18,21 +18,27 @@ jobs:
       # We use cargo-nextest because cargo test does not forward cancellation signal
     - uses: taiki-e/install-action@nextest
 
-    - name: Run tests with smol
-      run: env WORKFLOW=1 make test_compio
+    - name: Run tests with compio multi-thread
+      run: WORKFLOW=1 make test_compio
 
-    - name: Run test with compio release
-      run: env WORKFLOW=1 make test_compio_release
+    - name: Run tests with compio multi-thread --release with trace log
+      run: WORKFLOW=1 make test_log_compio_release
 
-    - name: Run test with compio release and trace_log
-      run: WORKFLOW=1 exec cargo nextest run -F="compio,trace_log" --hide-progress-bar -j 1 --no-capture -r
+    - name: Run tests with compio multi-thread --release
+      run: WORKFLOW=1 make test_log_release
 
-    - name: Run tests with smol
-      run: env WORKFLOW=1 make test_compio_dispatcher
+    - name: Run tests with compio single-thread
+      run: WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 make test_compio
 
-    - name: Run test with compio_dispatcher release
-      run: env WORKFLOW=1 make test_compio_dispatcher_release
+    - name: Run tests with compio single-thread --release with trace log
+      run: WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 make test_log_compio_release
 
-    - name: Run test with compio_dispatcher release and trace_log
-      run: WORKFLOW=1 exec cargo nextest run -F="compio_dispatcher,trace_log" --hide-progress-bar -j 1 --no-capture -r
+    - name: Run tests with compio single-thread --release
+      run: WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 make test_log_release
 
+    - name: Dump log on cancel
+      if: ${{ cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+          name: crossfire_ring
+          path: /tmp/crossfire_ring.log
