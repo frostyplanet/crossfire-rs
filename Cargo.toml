@@ -16,6 +16,10 @@ rust-version = "1.61"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# Because cargo-show-asm cannot match local crossfire package
+#[patch.crates-io]
+#crossfire = { path = "." }
+
 [dependencies]
 crossbeam-queue = "0.3.12"
 crossbeam-utils = "0.8"
