@@ -225,6 +225,7 @@ mod waker_registry;
 
 pub mod mpmc;
 pub mod mpsc;
+pub mod oneshot;
 pub mod spsc;
 
 mod blocking_tx;

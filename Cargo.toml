@@ -28,7 +28,7 @@ smol = {version = "2", optional=true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
-rand = "0.9"
+rand = "0"
 rstest = "0"
 captains-log = {version="0.13", features = ["ringfile", "tracing"] }
 log = "0"
@@ -39,6 +39,8 @@ flume = {version="0.11", features= ["async"] }
 kanal = {version="0.1"}
 async-channel = {version="2.5.0"}
 futures-util = {version="0.3", default-features = false}
+async-oneshot = "0.5"
+oneshot = "0.1"
 
 [features]
 default = []
@@ -85,4 +87,8 @@ harness = false
 
 [[bench]]
 name = "async_channel"
+harness = false
+
+[[bench]]
+name = "extra"
 harness = false

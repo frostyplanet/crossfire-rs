@@ -77,5 +77,31 @@ fn bench_tokio_unbounded(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_tokio_bounded, bench_tokio_unbounded);
+fn bench_tokio_oneshot(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tokio_oneshot");
+    let count = TEN_THOUSAND;
+    group.throughput(Throughput::Elements(count as u64));
+    group.bench_function("oneshot", |b| {
+        b.to_async(BenchExecutor()).iter(|| async move {
+            let mut txs = Vec::with_capacity(count);
+            let mut rxs = Vec::with_capacity(count);
+            for _i in 0..count {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                txs.push(tx);
+                rxs.push(rx);
+            }
+            async_spawn!(async move {
+                for tx in txs {
+                    let _ = tx.send(0);
+                }
+            });
+            for rx in rxs {
+                let _ = rx.await;
+            }
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_tokio_bounded, bench_tokio_unbounded, bench_tokio_oneshot);
 criterion_main!(benches);
