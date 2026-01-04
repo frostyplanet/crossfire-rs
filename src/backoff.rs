@@ -127,6 +127,9 @@ impl Backoff {
 
     #[inline(always)]
     pub fn snooze(&mut self) -> bool {
+        if self.step >= self.config.limit {
+            return true;
+        }
         if self.step < self.config.spin_limit {
             for _ in 0..1 << self.step {
                 std::hint::spin_loop();
@@ -134,24 +137,19 @@ impl Backoff {
         } else {
             std::thread::yield_now();
         }
-        if self.step < self.config.limit {
-            self.step += 1;
-            false
-        } else {
-            true
-        }
+        self.step += 1;
+        false
     }
 
     #[allow(dead_code)]
     #[inline(always)]
     pub fn yield_now(&mut self) -> bool {
-        std::thread::yield_now();
-        if self.step < self.config.limit {
-            self.step += 1;
-            false
-        } else {
-            false
+        if self.step >= self.config.limit {
+            return true;
         }
+        std::thread::yield_now();
+        self.step += 1;
+        false
     }
 
     #[inline(always)]
