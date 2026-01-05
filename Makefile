@@ -7,9 +7,9 @@ RUNTESTCASE = _run_test_case() {                                                
         export LOG_FILE="/tmp/test_crossfire.log"; \
     fi; \
     if [ -n "$${case}" ]; then                                                    \
-        RUST_BACKTRACE=full cargo test $${case} $${FEATURE_FLAG} $${TEST_FLAG};    \
+        RUST_BACKTRACE=full cargo test -p crossfire-test $${case} $${FEATURE_FLAG} $${TEST_FLAG};    \
     else  \
-        RUST_BACKTRACE=full cargo test $${FEATURE_FLAG} $${TEST_FLAG};           \
+        RUST_BACKTRACE=full cargo test -p crossfire-test $${FEATURE_FLAG} $${TEST_FLAG};           \
     fi;  \
 }
 
@@ -22,9 +22,9 @@ RUNRELEASECASE = _run_test_release_case() {                                     
         export TEST_FLAG=" --release -- --nocapture --test-threads=1"; \
     fi; \
     if [ -n "$${case}" ]; then                                                    \
-        RUST_BACKTRACE=full cargo test $${case} $${FEATURE_FLAG} $${TEST_FLAG};  \
+        RUST_BACKTRACE=full cargo test -p crossfire-test $${case} $${FEATURE_FLAG} $${TEST_FLAG};  \
     else                                                                          \
-        RUST_BACKTRACE=full cargo test $${FEATURE_FLAG} $${TEST_FLAG};                                            \
+        RUST_BACKTRACE=full cargo test -p crossfire-test $${FEATURE_FLAG} $${TEST_FLAG};                                            \
     fi  \
 }
 
@@ -54,19 +54,20 @@ test: init
 	@${RUNTESTCASE}; FEATURE_FLAG="-F tokio"; _run_test_case
 	@echo "Done"
 
-.PHONY: test
+# test with ringfile for deadlog
+.PHONY: test_log
 test_log: init
 	@echo "Run test"
 	@${RUNTESTCASE}; FEATURE_FLAG="-F tokio,trace_log"; _run_test_case
 	@echo "Done"
 
-.PHONY: test
+.PHONY: test_async_std
 test_async_std: init
 	@echo "Run test"
 	@${RUNTESTCASE}; FEATURE_FLAG="-F async_std"; _run_test_case
 	@echo "Done"
 
-.PHONY: test
+.PHONY: test_log_async_std
 test_log_async_std: init
 	@echo "Run test"
 	@${RUNTESTCASE}; FEATURE_FLAG="-F async_std,trace_log"; _run_test_case
@@ -76,6 +77,7 @@ test_log_async_std: init
 test_release:
 	@${RUNRELEASECASE}; FEATURE_FLAG="-F tokio"; _run_test_release_case
 
+# test with ringfile for deadlog
 .PHONY: test_log_release
 test_log_release:
 	@${RUNRELEASECASE}; FEATURE_FLAG="-F tokio,trace_log"; _run_test_release_case
@@ -84,6 +86,7 @@ test_log_release:
 test_async_std_release:
 	@${RUNRELEASECASE}; FEATURE_FLAG="-F async_std"; _run_test_release_case
 
+# test with ringfile for deadlog
 .PHONY: test_log_async_std_release
 test_log_async_std_release:
 	@${RUNRELEASECASE}; FEATURE_FLAG="-F async_std,trace_log"; _run_test_release_case
@@ -92,6 +95,7 @@ test_log_async_std_release:
 test_smol:
 	@${RUNTESTCASE}; FEATURE_FLAG="-F smol"; _run_test_case
 
+# test with ringfile for deadlog
 .PHONY: test_log_smol
 test_log_smol:
 	@${RUNTESTCASE}; FEATURE_FLAG="-F smol,trace_log"; _run_test_case
@@ -100,6 +104,7 @@ test_log_smol:
 test_smol_release:
 	@${RUNRELEASECASE}; FEATURE_FLAG="-F smol"; _run_test_release_case
 
+# test with ringfile for deadlog
 .PHONY: test_log_smol_release
 test_log_smol_release:
 	@${RUNRELEASECASE}; FEATURE_FLAG="-F smol,trace_log"; _run_test_release_case
@@ -108,14 +113,16 @@ test_log_smol_release:
 test_compio:
 	@${RUNTESTCASE}; FEATURE_FLAG="-F compio"; _run_test_case
 
+# test with ringfile for deadlog
 .PHONY: test_log_compio
 test_log_compio:
 	@${RUNTESTCASE}; FEATURE_FLAG="-F compio,trace_log"; _run_test_case
-	
+
 .PHONY: test_compio_release
 test_compio_release:
 	@${RUNTESTCASE}; FEATURE_FLAG="-F compio"; _run_test_release_case
 
+# test with ringfile for deadlog
 .PHONY: test_log_compio_release
 test_log_compio_release:
 	@${RUNTESTCASE}; FEATURE_FLAG="-F compio,trace_log"; _run_test_release_case
@@ -124,14 +131,16 @@ test_log_compio_release:
 test_compio_dispatcher:
 	@${RUNTESTCASE}; FEATURE_FLAG="-F compio_dispatcher"; _run_test_case
 
+# test with ringfile for deadlog
 .PHONY: test_log_compio_dispatcher
 test_log_compio_dispatcher:
 	@${RUNTESTCASE}; FEATURE_FLAG="-F compio_dispatcher,trace_log"; _run_test_case
-	
+
 .PHONY: test_compio_dispatcher_release
 test_compio_dispatcher_release:
 	@${RUNTESTCASE}; FEATURE_FLAG="-F compio_dispatcher"; _run_test_release_case
 
+# test with ringfile for deadlog
 .PHONY: test_log_compio_dispatcher_release
 test_log_compio_dispatcher_release:
 	@${RUNTESTCASE}; FEATURE_FLAG="-F compio_dispatcher,trace_log"; _run_test_release_case

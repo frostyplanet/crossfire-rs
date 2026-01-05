@@ -52,10 +52,17 @@ multi-core systems, but not friendly to single-core systems (like virtual machin
 So we provide a function `detect_backoff_cfg()` to detect the running platform.
 Calling it within the initialization section of your code, will get a 2x performance boost on VPS.
 
-The benchmark is written in the criterion framework. You can run the benchmark by:
+The benchmark is written in the criterion framework, in test-suite sub-directory. You can run the benchmark by:
 
 ```
+cd test-suite
+
 cargo bench --bench crossfire
+
+# To test with other async runtime, eg smol:
+
+cargo bench --bench crossfire -F smol
+
 ```
 
 ## Test status
@@ -63,6 +70,12 @@ cargo bench --bench crossfire
 **NOTE**: Because v2.1 has push the speed to a level no one has gone before,
 it can put a pure pressure to the async runtime.
 Some hidden bug (especially atomic ops on weaker ordering platform) might occur:
+
+The test is placed in test-suite directory, run with:
+
+```
+make test
+```
 
 <table cellpadding="30">
 <tr><th>arch</th><th>runtime</th><th>workflow</th><th>status</th></tr>

@@ -266,6 +266,3 @@ macro_rules! tokio_task_id {
         }
     }};
 }
-
-#[cfg(test)]
-mod tests;

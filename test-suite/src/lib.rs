@@ -1,3 +1,19 @@
+#[cfg(test)]
+mod test_async;
+#[cfg(test)]
+mod test_async_blocking;
+#[cfg(test)]
+mod test_blocking_async;
+#[cfg(test)]
+mod test_blocking_context;
+#[cfg(test)]
+mod test_oneshot;
+
+// we don't want to import smol-timeout
+#[cfg(test)]
+#[cfg(not(feature = "smol"))]
+mod test_type_switch;
+
 use captains_log::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -58,7 +74,7 @@ pub fn _setup_log() {
     }
 }
 
-#[allow(dead_code)]
+#[macro_export]
 macro_rules! runtime_block_on {
     ($f: expr) => {{
         #[cfg(feature = "smol")]
@@ -71,7 +87,19 @@ macro_rules! runtime_block_on {
             log::info!("run with async_std");
             async_std::task::block_on($f)
         }
-        #[cfg(feature = "tokio")]
+        #[cfg(any(feature = "compio", feature = "compio_dispatcher"))]
+        {
+            log::info!("run with compio");
+
+            let rt = compio::runtime::Runtime::new().unwrap();
+            rt.block_on($f)
+        }
+        #[cfg(not(any(
+            feature = "compio",
+            feature = "compio_dispatcher",
+            feature = "async_std",
+            feature = "smol"
+        )))]
         {
             let runtime_flag = std::env::var("SINGLE_THREAD_RUNTIME").unwrap_or("".to_string());
             let mut rt = if runtime_flag.len() > 0 {
@@ -83,18 +111,10 @@ macro_rules! runtime_block_on {
             };
             rt.enable_all().build().unwrap().block_on($f)
         }
-        #[cfg(any(feature = "compio", feature = "compio_dispatcher"))]
-        {
-            log::info!("run with compio");
-
-            let rt = compio::runtime::Runtime::new().unwrap();
-            rt.block_on($f)
-        }
     }};
 }
-pub(super) use runtime_block_on;
 
-#[allow(dead_code)]
+#[macro_export]
 macro_rules! async_spawn {
     ($f: expr) => {{
         #[cfg(feature = "smol")]
@@ -105,17 +125,13 @@ macro_rules! async_spawn {
         {
             async_std::task::spawn($f)
         }
-        #[cfg(feature = "tokio")]
-        {
-            tokio::spawn($f)
-        }
         #[cfg(feature = "compio")]
         {
             compio::runtime::spawn($f)
         }
         #[cfg(feature = "compio_dispatcher")]
         {
-            let disp = crate::tests::common::COMPIO_DISPATCHER.get_or_init(|| {
+            let disp = COMPIO_DISPATCHER.get_or_init(|| {
                 compio::dispatcher::DispatcherBuilder::new()
                     .worker_threads(std::num::NonZero::new(8).unwrap())
                     .build()
@@ -123,28 +139,32 @@ macro_rules! async_spawn {
             });
             disp.dispatch(move || $f).expect("dispatch")
         }
+        #[cfg(not(any(
+            feature = "compio",
+            feature = "compio_dispatcher",
+            feature = "async_std",
+            feature = "smol"
+        )))]
+        {
+            tokio::spawn($f)
+        }
     }};
 }
-pub(super) use async_spawn;
 
-#[allow(dead_code)]
+#[macro_export]
 macro_rules! async_join_result {
     ($th: expr) => {{
         #[cfg(any(feature = "async_std", feature = "smol"))]
         {
             $th.await
         }
-        #[cfg(any(feature = "compio", feature = "tokio"))]
+        #[cfg(not(any(feature = "async_std", feature = "smol")))]
         {
-            $th.await.expect("join")
-        }
-        #[cfg(feature = "compio_dispatcher")]
-        {
+            // compio and tokio are the same
             $th.await.expect("join")
         }
     }};
 }
-pub(super) use async_join_result;
 
 static DROP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -207,13 +227,18 @@ pub async fn sleep(duration: std::time::Duration) {
     {
         async_std::task::sleep(duration).await;
     }
-    #[cfg(feature = "tokio")]
-    {
-        tokio::time::sleep(duration).await;
-    }
     #[cfg(any(feature = "compio", feature = "compio_dispatcher"))]
     {
         compio::time::sleep(duration).await;
+    }
+    #[cfg(not(any(
+        feature = "compio",
+        feature = "compio_dispatcher",
+        feature = "async_std",
+        feature = "smol"
+    )))]
+    {
+        tokio::time::sleep(duration).await;
     }
 }
 
@@ -224,20 +249,25 @@ where
 {
     #[cfg(feature = "async_std")]
     {
-        async_std::future::timeout(duration, future)
+        return async_std::future::timeout(duration, future)
             .await
-            .map_err(|_| format!("Test timed out after {:?}", duration))
-    }
-    #[cfg(feature = "tokio")]
-    {
-        tokio::time::timeout(duration, future)
-            .await
-            .map_err(|_| format!("Test timed out after {:?}", duration))
+            .map_err(|_| format!("Test timed out after {:?}", duration));
     }
     #[cfg(any(feature = "compio", feature = "compio_dispatcher"))]
     {
-        compio::time::timeout(duration, future)
+        return compio::time::timeout(duration, future)
             .await
-            .map_err(|_| format!("Test timed out after {:?}", duration))
+            .map_err(|_| format!("Test timed out after {:?}", duration));
+    }
+    #[cfg(not(any(
+        feature = "compio",
+        feature = "compio_dispatcher",
+        feature = "async_std",
+        feature = "smol"
+    )))]
+    {
+        return tokio::time::timeout(duration, future)
+            .await
+            .map_err(|_| format!("Test timed out after {:?}", duration));
     }
 }

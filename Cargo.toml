@@ -1,3 +1,6 @@
+[workspace]
+members = ["test-suite"]
+
 [package]
 name = "crossfire"
 version = "2.1.9"
@@ -28,42 +31,19 @@ parking_lot = "0"
 tokio = { version = "1", features = ["time", "rt"], optional=true }
 async-std = {version = "1", optional=true}
 log = { version="0", optional=true}
-smol = {version = "2", optional=true }
-compio = { version = "0.17", optional = true, features = ["runtime", "time", "dispatcher", "polling"], default-features = false}
 
 [dev-dependencies]
-tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
-rand = "0"
-rstest = "0"
-captains-log = {version="0.13", features = ["ringfile", "tracing"] }
 log = "0"
-criterion2 = { version="3.0.2", features = ["async"]}
-crossbeam-channel = "0.5"
-
-flume = {version="0.11", features= ["async"] }
-kanal = {version="0.1"}
-async-channel = {version="2.5.0"}
-futures-util = {version="0.3", default-features = false}
-async-oneshot = "0.5"
-oneshot = "0.1"
+tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
 
 [features]
 default = []
 
-# This will enable timeout function, and tokio is the default runtime in benchmark and test workflow
+# This will enable timeout function
 tokio = ["dep:tokio"]
 
-# This will enable timeout function, switch runtime in benchmark and test workflow.
+# This will enable timeout function
 async_std = ["dep:async-std"]
-
-# This only switch runtime in benchmark and test workflow.
-smol = ["dep:smol"]
-
-# This only switch runtime in benchmark and test workflow.
-compio = ["dep:compio"]
-
-# This only switch runtime in benchmark and test workflow.
-compio_dispatcher = ["dep:compio"]
 
 # for test workflow debugging
 trace_log = ["dep:log"]
@@ -72,34 +52,3 @@ trace_log = ["dep:log"]
 all-features = true
 # enable features in the documentation
 rustdoc-args = ["--cfg", "docsrs"]
-
-[package.metadata.playground]
-features = ["tokio"]
-
-[[bench]]
-name = "crossfire"
-harness = false
-
-[[bench]]
-name = "crossbeam"
-harness = false
-
-[[bench]]
-name = "flume"
-harness = false
-
-[[bench]]
-name = "kanal"
-harness = false
-
-[[bench]]
-name = "tokio"
-harness = false
-
-[[bench]]
-name = "async_channel"
-harness = false
-
-[[bench]]
-name = "extra"
-harness = false

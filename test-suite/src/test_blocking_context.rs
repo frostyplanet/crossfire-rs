@@ -1,6 +1,6 @@
-use super::common::*;
 use crate::*;
 use captains_log::{logfn, *};
+use crossfire::*;
 use rstest::*;
 use std::sync::Arc;
 use std::thread;
@@ -484,8 +484,8 @@ fn test_pressure_bounded_timeout_blocking(
 ) {
     #[cfg(not(feature = "async_std"))]
     {
-        use parking_lot::Mutex;
         use std::collections::HashMap;
+        use std::sync::Mutex;
         let (tx, rx) = _channel;
 
         assert_eq!(
@@ -511,7 +511,7 @@ fn test_pressure_bounded_timeout_blocking(
                 let mut local_timeout_counter = 0;
                 for i in 0..ROUND {
                     {
-                        let mut guard = _recv_map.lock();
+                        let mut guard = _recv_map.lock().unwrap();
                         guard.insert(i, ());
                     }
                     if i & 2 == 0 {
@@ -552,7 +552,7 @@ fn test_pressure_bounded_timeout_blocking(
                         Ok(item) => {
                             local_recv_counter += 1;
                             {
-                                let mut guard = _recv_map.lock();
+                                let mut guard = _recv_map.lock().unwrap();
                                 guard.remove(&item);
                             }
                         }
@@ -581,7 +581,7 @@ fn test_pressure_bounded_timeout_blocking(
             total_recv_timeout += local_timeout_counter;
         }
         {
-            let guard = recv_map.lock();
+            let guard = recv_map.lock().unwrap();
             assert!(guard.is_empty());
         }
         assert_eq!(ROUND * tx_count, total_recv_count);

@@ -1,0 +1,71 @@
+[package]
+name = "crossfire-test"
+version = "0.0.1"
+authors = ["plan <frostyplanet@gmail.com>"]
+edition = "2021"
+license = "Apache-2.0"
+readme = "README.md"
+
+[dependencies]
+crossfire = {path="../"}
+async-std = {version = "1", optional=true}
+log = { version="0"}
+smol = {version = "2", optional=true }
+compio = { version = "0.17", optional = true, features = ["runtime", "time", "dispatcher", "polling"], default-features = false}
+tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
+rand = "0"
+rstest = "0"
+captains-log = {version="0.13", features = ["ringfile", "tracing"] }
+criterion2 = { version="3.0.2", features = ["async"]}
+crossbeam-channel = "0.5"
+flume = {version="0.11", features= ["async"] }
+kanal = {version="0.1"}
+async-channel = {version="2.5.0"}
+futures-util = {version="0.3", default-features = false}
+async-oneshot = "0.5"
+oneshot = "0.1"
+
+[features]
+default = []
+
+tokio = []
+
+async_std = ["dep:async-std"]
+
+smol = ["dep:smol"]
+
+compio = ["dep:compio"]
+
+# This switch on multi thread test for compio
+compio_dispatcher = ["dep:compio"]
+
+# for test workflow debugging
+trace_log = ["crossfire/trace_log"]
+
+[[bench]]
+name = "crossfire"
+harness = false
+
+[[bench]]
+name = "crossbeam"
+harness = false
+
+[[bench]]
+name = "flume"
+harness = false
+
+[[bench]]
+name = "kanal"
+harness = false
+
+[[bench]]
+name = "tokio"
+harness = false
+
+[[bench]]
+name = "async_channel"
+harness = false
+
+[[bench]]
+name = "extra"
+harness = false

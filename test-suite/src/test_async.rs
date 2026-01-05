@@ -1,12 +1,12 @@
-use super::common::*;
-use crate::{sink::*, stream::*, *};
+use crate::*;
 use captains_log::{logfn, *};
-use futures_core::stream::FusedStream;
-use futures_util::{pin_mut, select, stream::StreamExt, FutureExt};
+use crossfire::{sink::*, stream::*, *};
+use futures_util::{pin_mut, select, stream::FusedStream, stream::StreamExt, FutureExt};
 use rstest::*;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::task::*;
 use std::thread;
 use std::time::Duration;
@@ -532,7 +532,6 @@ fn test_basic_send_timeout_async<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>
 fn test_pressure_bounded_timeout_async(
     setup_log: (), #[case] _channel: (MAsyncTx<usize>, MAsyncRx<usize>),
 ) {
-    use parking_lot::Mutex;
     use std::collections::HashMap;
     let (tx, rx) = _channel;
     let tx_count: usize = 3;
@@ -566,7 +565,7 @@ fn test_pressure_bounded_timeout_async(
                         return local_send_timeout_count;
                     }
                     {
-                        let mut guard = _recv_map.lock();
+                        let mut guard = _recv_map.lock().unwrap();
                         guard.insert(i, ());
                     }
                     if i & 2 == 0 {
@@ -610,7 +609,7 @@ fn test_pressure_bounded_timeout_async(
                         Ok(item) => {
                             local_recv_count += 1;
                             {
-                                let mut guard = _recv_map.lock();
+                                let mut guard = _recv_map.lock().unwrap();
                                 guard.remove(&item);
                             }
                         }
@@ -639,7 +638,7 @@ fn test_pressure_bounded_timeout_async(
             total_recv_timeout_count += recv_timeout_count;
         }
         {
-            let guard = recv_map.lock();
+            let guard = recv_map.lock().unwrap();
             assert!(guard.is_empty());
         }
         assert_eq!(ROUND * tx_count, total_recv_count);
@@ -907,7 +906,6 @@ fn test_pressure_bounded_mixed_async_blocking_conversion(
 
 #[test]
 fn test_conversion() {
-    use crate::stream::AsyncStream;
     let (mtx, mrx) = mpmc::bounded_async(1);
     let _tx: AsyncTx<usize> = mtx.into();
     let _rx: AsyncRx<usize> = mrx.into();
