@@ -120,12 +120,12 @@ test_log_compio:
 
 .PHONY: test_compio_release
 test_compio_release:
-	@${RUNTESTCASE}; FEATURE_FLAG="-F compio"; _run_test_release_case
+	@${RUNRELEASECASE}; FEATURE_FLAG="-F compio"; _run_test_release_case
 
 # test with ringfile for deadlog
 .PHONY: test_log_compio_release
 test_log_compio_release:
-	@${RUNTESTCASE}; FEATURE_FLAG="-F compio,trace_log"; _run_test_release_case
+	@${RUNRELEASECASE}; FEATURE_FLAG="-F compio,trace_log"; _run_test_release_case
 
 .PHONY: test_compio_dispatcher
 test_compio_dispatcher:
@@ -138,12 +138,12 @@ test_log_compio_dispatcher:
 
 .PHONY: test_compio_dispatcher_release
 test_compio_dispatcher_release:
-	@${RUNTESTCASE}; FEATURE_FLAG="-F compio_dispatcher"; _run_test_release_case
+	@${RUNRELEASECASE}; FEATURE_FLAG="-F compio_dispatcher"; _run_test_release_case
 
 # test with ringfile for deadlog
 .PHONY: test_log_compio_dispatcher_release
 test_log_compio_dispatcher_release:
-	@${RUNTESTCASE}; FEATURE_FLAG="-F compio_dispatcher,trace_log"; _run_test_release_case
+	@${RUNRELEASECASE}; FEATURE_FLAG="-F compio_dispatcher,trace_log"; _run_test_release_case
 
 
 .PHONY: build
