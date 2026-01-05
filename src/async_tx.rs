@@ -100,6 +100,12 @@ impl<T> AsyncTx<T> {
     pub fn into_blocking(self) -> Tx<T> {
         self.into()
     }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.is_rx_closed()
+    }
 }
 
 impl<T: Unpin + Send + 'static> AsyncTx<T> {
@@ -127,7 +133,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// Returns Err([TrySendError::Disconnected]) if the receiver has been dropped.
     #[inline]
     pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        if self.shared.is_disconnected() {
+        if self.shared.is_rx_closed() {
             return Err(TrySendError::Disconnected(item));
         }
         let _item = MaybeUninit::new(item);
@@ -231,7 +237,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         sink: bool,
     ) -> Poll<Result<(), ()>> {
         let shared = &self.shared;
-        if shared.is_disconnected() {
+        if shared.is_rx_closed() {
             trace_log!("tx{:?}: closed {:?}", tokio_task_id!(), o_waker);
             return Poll::Ready(Err(()));
         }
@@ -459,7 +465,7 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
     /// Return true if the other side has closed
     #[inline(always)]
     fn is_disconnected(&self) -> bool {
-        self.as_ref().is_disconnected()
+        self.as_ref().is_rx_closed()
     }
 
     fn clone_to_vec(self, count: usize) -> Vec<Self>

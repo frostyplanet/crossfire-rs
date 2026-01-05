@@ -203,7 +203,7 @@ impl<T: Send + 'static> Tx<T> {
     #[inline]
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
         let shared = &self.shared;
-        if shared.is_disconnected() {
+        if shared.is_rx_closed() {
             return Err(SendError(item));
         }
         let _item = MaybeUninit::new(item);
@@ -228,7 +228,7 @@ impl<T: Send + 'static> Tx<T> {
     #[inline]
     pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
         let shared = &self.shared;
-        if shared.is_disconnected() {
+        if shared.is_rx_closed() {
             return Err(TrySendError::Disconnected(item));
         }
         let _item = MaybeUninit::new(item);
@@ -253,7 +253,7 @@ impl<T: Send + 'static> Tx<T> {
     #[inline]
     pub fn send_timeout(&self, item: T, timeout: Duration) -> Result<(), SendTimeoutError<T>> {
         let shared = &self.shared;
-        if shared.is_disconnected() {
+        if shared.is_rx_closed() {
             return Err(SendTimeoutError::Disconnected(item));
         }
         match Instant::now().checked_add(timeout) {
@@ -280,6 +280,12 @@ impl<T> Tx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
         Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.is_rx_closed()
     }
 }
 
@@ -401,7 +407,7 @@ pub trait BlockingTxTrait<T: Send + 'static>:
     /// Return true if the other side has closed
     #[inline(always)]
     fn is_disconnected(&self) -> bool {
-        self.as_ref().is_disconnected()
+        self.as_ref().is_rx_closed()
     }
 
     fn clone_to_vec(self, count: usize) -> Vec<Self>
