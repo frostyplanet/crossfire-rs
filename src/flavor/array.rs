@@ -70,7 +70,11 @@ impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
     #[inline]
     fn may_direct_copy(&self) -> bool {
         if self.0.capacity() > 10 {
-            true
+            if MP {
+                true
+            } else {
+                false
+            }
         } else {
             false
         }
