@@ -25,4 +25,4 @@ jobs:
       run: env WORKFLOW=1 make test_smol_release
 
     - name: Run test with smol release and trace_log
-      run: WORKFLOW=1 exec cargo nextest run -F="smol,trace_log" --hide-progress-bar -j 1 --no-capture -r
+      run: cd test-suite; WORKFLOW=1 exec cargo nextest run -F="smol,trace_log" --hide-progress-bar -j 1 --no-capture -r

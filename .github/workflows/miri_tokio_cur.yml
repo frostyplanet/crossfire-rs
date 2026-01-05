@@ -19,7 +19,7 @@ jobs:
       run:  rustup component add --toolchain nightly-x86_64-unknown-linux-gnu miri
 
     - name: Run miri tests with log (tokio current thread)
-      run: WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 scripts/miri.sh --features trace_log,tokio
+      run: cd test-suite; WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 scripts/miri.sh --features trace_log,tokio
 
     - name: collect log
       if: ${{ failure() }}
@@ -29,4 +29,4 @@ jobs:
           path: /tmp/crossfire_miri.log
 
     - name: Run miri tests without log (tokio current thread)
-      run: WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 scripts/miri.sh
+      run: cd test-suite; WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 scripts/miri.sh

@@ -28,13 +28,13 @@ jobs:
     - uses: taiki-e/install-action@nextest
 
     - name: Run tests with tokio multi-thread
-      run: RUSTFLAGS="--cfg tokio_unstable" WORKFLOW=1 exec cargo nextest run -F="tokio,trace_log" --hide-progress-bar -j 1 --no-capture
+      run: cd test-suite; RUSTFLAGS="--cfg tokio_unstable" WORKFLOW=1 exec cargo nextest run -F="tokio,trace_log" --hide-progress-bar -j 1 --no-capture
 
     - name: Run tests with tokio multi thread --release
-      run: RUSTFLAGS="--cfg tokio_unstable" WORKFLOW=1 exec cargo nextest run -F="tokio,trace_log" --hide-progress-bar -j 1 --no-capture -r
+      run: cd test-suite; RUSTFLAGS="--cfg tokio_unstable" WORKFLOW=1 exec cargo nextest run -F="tokio,trace_log" --hide-progress-bar -j 1 --no-capture -r
 
     - name: Run tests with tokio single-thread --release
-      run: RUSTFLAGS="--cfg tokio_unstable" WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 exec cargo nextest run -F="tokio,trace_log" --hide-progress-bar -j 1 --no-capture -r
+      run: cd test-suite; RUSTFLAGS="--cfg tokio_unstable" WORKFLOW=1 SINGLE_THREAD_RUNTIME=1 exec cargo nextest run -F="tokio,trace_log" --hide-progress-bar -j 1 --no-capture -r
 
     - name: Dump log on cancel
       if: ${{ cancelled() || failure() }}
