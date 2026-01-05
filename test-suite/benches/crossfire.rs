@@ -636,7 +636,7 @@ fn crossfire_oneshot_async(c: &mut Criterion) {
                 txs.push(tx);
                 rxs.push(rx);
             }
-            async_spawn!(async move {
+            let th = async_spawn!(async move {
                 for tx in txs {
                     tx.send(0);
                 }
@@ -644,6 +644,7 @@ fn crossfire_oneshot_async(c: &mut Criterion) {
             for rx in rxs {
                 let _ = rx.await;
             }
+            let _ = async_join_result!(th);
         })
     });
     group.finish();
