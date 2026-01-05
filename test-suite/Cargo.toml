@@ -42,6 +42,7 @@ compio_dispatcher = ["dep:compio"]
 # for test workflow debugging
 trace_log = ["crossfire/trace_log"]
 
+
 [[bench]]
 name = "crossfire"
 harness = false
