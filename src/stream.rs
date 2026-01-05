@@ -9,19 +9,19 @@ use std::task::*;
 /// Constructed by [AsyncRx::into_stream()](crate::AsyncRx::into_stream())
 ///
 /// Implements `futures_core::stream::Stream`.
-pub struct AsyncStream<T> {
+pub struct AsyncStream<T: Send + 'static> {
     rx: AsyncRx<T>,
     waker: Option<RecvWaker>,
     ended: bool,
 }
 
-impl<T> fmt::Debug for AsyncStream<T> {
+impl<T: Send + 'static> fmt::Debug for AsyncStream<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncStream")
     }
 }
 
-impl<T> fmt::Display for AsyncStream<T> {
+impl<T: Send + 'static> fmt::Display for AsyncStream<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncStream")
     }
@@ -75,7 +75,7 @@ where
     }
 }
 
-impl<T> Deref for AsyncStream<T> {
+impl<T: Send + 'static> Deref for AsyncStream<T> {
     type Target = AsyncRx<T>;
 
     #[inline]
@@ -118,7 +118,7 @@ where
     }
 }
 
-impl<T> Drop for AsyncStream<T> {
+impl<T: Send + 'static> Drop for AsyncStream<T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             self.rx.shared.abandon_recv_waker(waker);

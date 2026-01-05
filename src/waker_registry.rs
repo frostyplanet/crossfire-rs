@@ -1,6 +1,5 @@
 use crate::collections::WeakCell;
 use crate::locked_waker::*;
-use crate::shared::ChannelShared;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
 use crate::trace_log;
@@ -15,7 +14,7 @@ pub enum RegistrySender<T> {
     Dummy,
 }
 
-impl<T> RegistrySender<T> {
+impl<T: Send + 'static> RegistrySender<T> {
     #[inline(always)]
     pub fn new_single() -> Self {
         Self::Single(RegistrySingle::<*const T>::new())
@@ -133,14 +132,17 @@ impl<T> RegistrySender<T> {
     }
 
     #[inline(always)]
-    pub fn fire(&self, shared: &ChannelShared<T>) -> WakeResult {
+    pub fn fire<F>(&self, handle: F) -> WakeResult
+    where
+        F: Fn(&ChannelWaker<*const T>) -> WakeResult,
+    {
         match self {
             Self::Multi(inner) => {
-                return inner.fire(|waker| shared.on_recv_try_send(waker), "tx");
+                return inner.fire(handle, "tx");
             }
             Self::Single(inner) => {
                 if let Some(waker) = inner.pop() {
-                    let _r = shared.on_recv_try_send(&waker);
+                    let _r = (handle)(&ChannelWaker::from_arc(waker));
                     trace_log!("wake tx {:?} {:?}", waker, _r);
                     return _r;
                 }

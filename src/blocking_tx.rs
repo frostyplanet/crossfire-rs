@@ -41,34 +41,37 @@ use std::time::{Duration, Instant};
 /// });
 /// drop(rx);
 /// ```
-pub struct Tx<T> {
+pub struct Tx<T: Send + 'static> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
     waker_cache: WakerCache<*const T>,
+    flavor: *const (),
+    _try_send: TrySendFunc<T>,
+    _send_blocking: SendBlocking<T>,
 }
 
 unsafe impl<T: Send> Send for Tx<T> {}
 
-impl<T> fmt::Debug for Tx<T> {
+impl<T: Send + 'static> fmt::Debug for Tx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Tx")
     }
 }
 
-impl<T> fmt::Display for Tx<T> {
+impl<T: Send + 'static> fmt::Display for Tx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Tx")
     }
 }
 
-impl<T> Drop for Tx<T> {
+impl<T: Send + 'static> Drop for Tx<T> {
     fn drop(&mut self) {
         self.shared.close_tx();
     }
 }
 
-impl<T> From<AsyncTx<T>> for Tx<T> {
+impl<T: Send + 'static> From<AsyncTx<T>> for Tx<T> {
     fn from(value: AsyncTx<T>) -> Self {
         value.add_tx();
         Self::new(value.shared.clone())
@@ -76,11 +79,35 @@ impl<T> From<AsyncTx<T>> for Tx<T> {
 }
 
 impl<T: Send + 'static> Tx<T> {
+    #[inline]
+    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+        Self {
+            waker_cache: WakerCache::new(),
+            _phan: Default::default(),
+            flavor: shared.get_flavor_ptr(),
+            _try_send: shared._try_send,
+            _send_blocking: shared._send_blocking,
+            shared,
+        }
+    }
+
+    /// Return true if the other side has closed
     #[inline(always)]
-    pub(crate) fn _send_bounded(
-        &self, item: &MaybeUninit<T>, deadline: Option<Instant>,
-    ) -> Result<(), SendTimeoutError<T>> {
-        let shared = &self.shared;
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.is_rx_closed()
+    }
+}
+
+impl<T: Send + 'static> Tx<T> {
+    #[inline(always)]
+    pub(crate) fn send_blocking<F: FlavorImpl<T>>(
+        shared: &ChannelShared<T>, flavor: &F, item: &MaybeUninit<T>, deadline: Option<Instant>,
+        waker_cache: &WakerCache<*const T>,
+    ) -> Result<(), bool> {
+        if flavor.try_send(&item) {
+            shared.on_send();
+            return Ok(());
+        }
         let large = shared.large;
         let backoff_cfg = BackoffConfig::default().spin(2).limit(shared.backoff_limit);
         let mut backoff = Backoff::new(backoff_cfg);
@@ -91,7 +118,7 @@ impl<T: Send + 'static> Tx<T> {
         loop {
             let r = if large { backoff.yield_now() } else { backoff.spin() };
             if direct_copy && large {
-                match shared.inner.try_send_oneshot(item.as_ptr()) {
+                match flavor.try_send_oneshot(item.as_ptr()) {
                     Some(false) => break,
                     None => {
                         if r {
@@ -107,7 +134,7 @@ impl<T: Send + 'static> Tx<T> {
                     }
                 }
             } else {
-                if false == shared.inner.try_send(&item) {
+                if false == flavor.try_send(&item) {
                     if r {
                         break;
                     }
@@ -126,7 +153,7 @@ impl<T: Send + 'static> Tx<T> {
             () => {
                 trace_log!("tx: send {:?}", o_waker);
                 if let Some(waker) = o_waker.take() {
-                    self.waker_cache.push(waker);
+                    waker_cache.push(waker);
                 }
                 if shared.is_full() {
                     // It's for 8x1, 16x1.
@@ -140,12 +167,12 @@ impl<T: Send + 'static> Tx<T> {
                 w.reset_init();
                 w
             } else {
-                self.waker_cache.new_blocking(direct_copy_ptr)
+                waker_cache.new_blocking(direct_copy_ptr)
             };
             // For nx1 (more likely congest), need to reset backoff
             // to allow more yield to receivers.
             // For nxn (the backoff is already complete), wait a little bit.
-            (state, o_waker) = shared.sender_reg_and_try(&item, waker, false);
+            (state, o_waker) = shared.sender_reg_and_try::<F>(flavor, &item, waker, false);
             trace_log!("tx: sender_reg_and_try {:?} state={}", o_waker, state);
             while state < WakerState::Woken as u8 {
                 if direct_copy_ptr != std::ptr::null_mut() {
@@ -161,9 +188,7 @@ impl<T: Send + 'static> Tx<T> {
                         }
                         Err(_) => {
                             if shared.abandon_send_waker(o_waker.take().unwrap()) {
-                                return Err(SendTimeoutError::Timeout(unsafe {
-                                    item.assume_init_read()
-                                }));
+                                return Err(false);
                             } else {
                                 // NOTE: Unlikely since we disable direct copy with deadline
                                 // state is WakerState::Done
@@ -179,7 +204,7 @@ impl<T: Send + 'static> Tx<T> {
             } else if state == WakerState::Woken as u8 {
                 backoff.reset();
                 loop {
-                    if shared.inner.try_send(&item) {
+                    if flavor.try_send(&item) {
                         shared.on_send();
                         return_ok!();
                     }
@@ -189,7 +214,7 @@ impl<T: Send + 'static> Tx<T> {
                     backoff.snooze();
                 }
             } else if state == WakerState::Closed as u8 {
-                return Err(SendTimeoutError::Disconnected(unsafe { item.assume_init_read() }));
+                return Err(true);
             }
         }
     }
@@ -207,14 +232,13 @@ impl<T: Send + 'static> Tx<T> {
             return Err(SendError(item));
         }
         let _item = MaybeUninit::new(item);
-        if shared.inner.try_send(&_item) {
-            shared.on_send();
-            return Ok(());
-        }
-        match self._send_bounded(&_item, None) {
+        match unsafe { (self._send_blocking)(shared, self.flavor, &_item, None, &self.waker_cache) }
+        {
             Ok(_) => return Ok(()),
-            Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
-            Err(SendTimeoutError::Timeout(_)) => unreachable!(),
+            Err(true) => {
+                return Err(SendError(unsafe { _item.assume_init_read() }));
+            }
+            Err(false) => unreachable!(),
         }
     }
 
@@ -232,7 +256,7 @@ impl<T: Send + 'static> Tx<T> {
             return Err(TrySendError::Disconnected(item));
         }
         let _item = MaybeUninit::new(item);
-        if shared.inner.try_send(&_item) {
+        if unsafe { (self._try_send)(self.flavor, &_item) } {
             shared.on_send();
             return Ok(());
         } else {
@@ -263,29 +287,27 @@ impl<T: Send + 'static> Tx<T> {
             }),
             Some(deadline) => {
                 let _item = MaybeUninit::new(item);
-                if shared.inner.try_send(&_item) {
-                    shared.on_send();
-                    return Ok(());
-                }
-                match self._send_bounded(&_item, Some(deadline)) {
+                match unsafe {
+                    (self._send_blocking)(
+                        shared,
+                        self.flavor,
+                        &_item,
+                        Some(deadline),
+                        &self.waker_cache,
+                    )
+                } {
                     Ok(_) => return Ok(()),
-                    Err(e) => return Err(e),
+                    Err(true) => {
+                        return Err(SendTimeoutError::Disconnected(unsafe {
+                            _item.assume_init_read()
+                        }));
+                    }
+                    Err(false) => {
+                        return Err(SendTimeoutError::Timeout(unsafe { _item.assume_init_read() }));
+                    }
                 }
             }
         }
-    }
-}
-
-impl<T> Tx<T> {
-    #[inline]
-    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
-    }
-
-    /// Return true if the other side has closed
-    #[inline(always)]
-    pub fn is_disconnected(&self) -> bool {
-        self.shared.is_rx_closed()
     }
 }
 
@@ -295,27 +317,27 @@ impl<T> Tx<T> {
 /// Additional methods can be accessed through `Deref<Target=[ChannelShared]>`.
 ///
 /// You can use `into()` to convert it to `Tx<T>`.
-pub struct MTx<T>(pub(crate) Tx<T>);
+pub struct MTx<T: Send + 'static>(pub(crate) Tx<T>);
 
-impl<T> fmt::Debug for MTx<T> {
+impl<T: Send + 'static> fmt::Debug for MTx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MTx")
     }
 }
 
-impl<T> fmt::Display for MTx<T> {
+impl<T: Send + 'static> fmt::Display for MTx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MTx")
     }
 }
 
-impl<T> From<MTx<T>> for Tx<T> {
+impl<T: Send + 'static> From<MTx<T>> for Tx<T> {
     fn from(tx: MTx<T>) -> Self {
         tx.0
     }
 }
 
-impl<T> From<MAsyncTx<T>> for MTx<T> {
+impl<T: Send + 'static> From<MAsyncTx<T>> for MTx<T> {
     fn from(value: MAsyncTx<T>) -> Self {
         value.add_tx();
         Self::new(value.shared.clone())
@@ -324,14 +346,14 @@ impl<T> From<MAsyncTx<T>> for MTx<T> {
 
 unsafe impl<T: Send> Sync for MTx<T> {}
 
-impl<T> MTx<T> {
+impl<T: Send + 'static> MTx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
         Self(Tx::new(shared))
     }
 }
 
-impl<T> Clone for MTx<T> {
+impl<T: Send + 'static> Clone for MTx<T> {
     #[inline]
     fn clone(&self) -> Self {
         let inner = &self.0;
@@ -340,7 +362,7 @@ impl<T> Clone for MTx<T> {
     }
 }
 
-impl<T> Deref for MTx<T> {
+impl<T: Send + 'static> Deref for MTx<T> {
     type Target = Tx<T>;
 
     /// Inherits all the functions of [Tx].
@@ -463,7 +485,7 @@ impl<T: Send + 'static> BlockingTxTrait<T> for MTx<T> {
     }
 }
 
-impl<T> Deref for Tx<T> {
+impl<T: Send + 'static> Deref for Tx<T> {
     type Target = ChannelShared<T>;
     #[inline(always)]
     fn deref(&self) -> &ChannelShared<T> {
@@ -471,14 +493,14 @@ impl<T> Deref for Tx<T> {
     }
 }
 
-impl<T> AsRef<ChannelShared<T>> for Tx<T> {
+impl<T: Send + 'static> AsRef<ChannelShared<T>> for Tx<T> {
     #[inline(always)]
     fn as_ref(&self) -> &ChannelShared<T> {
         &self.shared
     }
 }
 
-impl<T> AsRef<ChannelShared<T>> for MTx<T> {
+impl<T: Send + 'static> AsRef<ChannelShared<T>> for MTx<T> {
     #[inline(always)]
     fn as_ref(&self) -> &ChannelShared<T> {
         &self.0.shared

@@ -40,49 +40,61 @@ use std::time::{Duration, Instant};
 /// });
 /// drop(tx);
 /// ```
-pub struct Rx<T> {
+pub struct Rx<T: Send + 'static> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
     waker_cache: WakerCache<()>,
+    flavor: *const (),
+    _try_recv: TryRecvFunc<T>,
+    _recv_blocking: RecvBlocking<T>,
 }
 
 unsafe impl<T: Send> Send for Rx<T> {}
 
-impl<T> fmt::Debug for Rx<T> {
+impl<T: Send + 'static> fmt::Debug for Rx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Rx")
     }
 }
 
-impl<T> fmt::Display for Rx<T> {
+impl<T: Send + 'static> fmt::Display for Rx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Rx")
     }
 }
 
-impl<T> Drop for Rx<T> {
+impl<T: Send + 'static> Drop for Rx<T> {
     fn drop(&mut self) {
         self.shared.close_rx();
     }
 }
 
-impl<T> From<AsyncRx<T>> for Rx<T> {
+impl<T: Send + 'static> From<AsyncRx<T>> for Rx<T> {
     fn from(value: AsyncRx<T>) -> Self {
         value.add_rx();
         Self::new(value.shared.clone())
     }
 }
 
-impl<T> Rx<T> {
+impl<T: Send + 'static> Rx<T> {
     #[inline(always)]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
+        Self {
+            waker_cache: WakerCache::new(),
+            _phan: Default::default(),
+            flavor: shared.get_flavor_ptr(),
+            _try_recv: shared._try_recv,
+            _recv_blocking: shared._recv_blocking,
+            shared,
+        }
     }
 
     #[inline(always)]
-    pub(crate) fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<T, RecvTimeoutError> {
-        let shared = &self.shared;
+    pub(crate) fn recv_blocking<F: FlavorImpl<T>>(
+        shared: &ChannelShared<T>, flavor: &F, deadline: Option<Instant>,
+        waker_cache: &WakerCache<()>,
+    ) -> Result<T, bool> {
         macro_rules! on_recv_no_waker {
             () => {{
                 trace_log!("rx: recv");
@@ -91,13 +103,13 @@ impl<T> Rx<T> {
         macro_rules! on_recv_waker {
             ($waker: expr) => {{
                 trace_log!("rx: recv {:?}", $waker);
-                self.waker_cache.push($waker);
+                waker_cache.push($waker);
             }};
         }
         macro_rules! try_recv {
             ($handle_waker: block) => {
-                if let Some(item) = shared.inner.try_recv() {
-                    shared.on_recv();
+                if let Some(item) = flavor.try_recv() {
+                    shared.on_recv_shim::<F>(flavor);
                     $handle_waker
                     return Ok(item);
                 }
@@ -116,7 +128,7 @@ impl<T> Rx<T> {
                 break;
             }
         }
-        let waker = self.waker_cache.new_blocking(());
+        let waker = waker_cache.new_blocking(());
         let mut state;
         'MAIN: loop {
             if waker.get_state() == WakerState::Woken as u8 {
@@ -125,10 +137,10 @@ impl<T> Rx<T> {
             shared.reg_recv(&waker);
             // NOTE: special API before we park
             // because Miri is not happy about ArrayQueue pop ordering, which is not SeqCst
-            if let Some(item) = shared.inner.try_recv_final() {
-                shared.on_recv();
+            if let Some(item) = flavor.try_recv_final() {
+                shared.on_recv_shim::<F>(flavor);
                 trace_log!("rx: recv cancel {:?} Init", waker);
-                self.recvs.cancel_waker(&waker);
+                shared.recvs.cancel_waker(&waker);
                 return Ok(item);
             }
             state = shared.recvs.commit_waiting(&waker);
@@ -146,7 +158,7 @@ impl<T> Rx<T> {
                     }
                     Err(_) => {
                         let _ = shared.abandon_recv_waker(waker);
-                        return Err(RecvTimeoutError::Timeout);
+                        return Err(false);
                     }
                 }
                 state = waker.get_state();
@@ -164,7 +176,7 @@ impl<T> Rx<T> {
         }
         try_recv!({ on_recv_waker!(waker) });
         // make sure all msgs received, since we have soonze
-        return Err(RecvTimeoutError::Disconnected);
+        return Err(true);
     }
 
     /// Receives a message from the channel. This method will block until a message is received or the channel is closed.
@@ -174,10 +186,11 @@ impl<T> Rx<T> {
     /// Returns Err([RecvError]) if the sender has been dropped.
     #[inline]
     pub fn recv<'a>(&'a self) -> Result<T, RecvError> {
-        self._recv_blocking(None).map_err(|err| match err {
-            RecvTimeoutError::Disconnected => RecvError,
-            RecvTimeoutError::Timeout => unreachable!(),
-        })
+        match unsafe { (self._recv_blocking)(&self.shared, self.flavor, None, &self.waker_cache) } {
+            Ok(item) => Ok(item),
+            Err(true) => Err(RecvError),
+            Err(false) => unreachable!(),
+        }
     }
 
     /// Attempts to receive a message from the channel without blocking.
@@ -189,8 +202,8 @@ impl<T> Rx<T> {
     /// Returns Err([TryRecvError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        if let Some(item) = self.shared.inner.try_recv() {
-            self.shared.on_recv();
+        if let Some(item) = unsafe { (self._try_recv)(&self.shared, self.flavor) } {
+            // in try_recv_shim already call on_recv
             return Ok(item);
         } else {
             if self.shared.is_tx_closed() {
@@ -213,11 +226,24 @@ impl<T> Rx<T> {
     #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
-            Some(deadline) => self._recv_blocking(Some(deadline)),
             None => self.try_recv().map_err(|e| match e {
                 TryRecvError::Disconnected => RecvTimeoutError::Disconnected,
                 TryRecvError::Empty => RecvTimeoutError::Timeout,
             }),
+            Some(deadline) => {
+                match unsafe {
+                    (self._recv_blocking)(
+                        &self.shared,
+                        self.flavor,
+                        Some(deadline),
+                        &self.waker_cache,
+                    )
+                } {
+                    Ok(item) => Ok(item),
+                    Err(true) => Err(RecvTimeoutError::Disconnected),
+                    Err(false) => Err(RecvTimeoutError::Timeout),
+                }
+            }
         }
     }
 
@@ -234,15 +260,15 @@ impl<T> Rx<T> {
 /// Additional methods can be accessed through `Deref<Target=[ChannelShared]>`.
 ///
 /// You can use `into()` to convert it to `Rx<T>`.
-pub struct MRx<T>(pub(crate) Rx<T>);
+pub struct MRx<T: Send + 'static>(pub(crate) Rx<T>);
 
-impl<T> fmt::Debug for MRx<T> {
+impl<T: Send + 'static> fmt::Debug for MRx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MRx")
     }
 }
 
-impl<T> fmt::Display for MRx<T> {
+impl<T: Send + 'static> fmt::Display for MRx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MRx")
     }
@@ -250,14 +276,14 @@ impl<T> fmt::Display for MRx<T> {
 
 unsafe impl<T: Send> Sync for MRx<T> {}
 
-impl<T> MRx<T> {
+impl<T: Send + 'static> MRx<T> {
     #[inline(always)]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
         Self(Rx::new(shared))
     }
 }
 
-impl<T> Clone for MRx<T> {
+impl<T: Send + 'static> Clone for MRx<T> {
     #[inline(always)]
     fn clone(&self) -> Self {
         let inner = &self.0;
@@ -266,7 +292,7 @@ impl<T> Clone for MRx<T> {
     }
 }
 
-impl<T> Deref for MRx<T> {
+impl<T: Send + 'static> Deref for MRx<T> {
     type Target = Rx<T>;
 
     /// Inherits all the functions of [Rx].
@@ -276,13 +302,13 @@ impl<T> Deref for MRx<T> {
     }
 }
 
-impl<T> From<MRx<T>> for Rx<T> {
+impl<T: Send + 'static> From<MRx<T>> for Rx<T> {
     fn from(rx: MRx<T>) -> Self {
         rx.0
     }
 }
 
-impl<T> From<MAsyncRx<T>> for MRx<T> {
+impl<T: Send + 'static> From<MAsyncRx<T>> for MRx<T> {
     fn from(value: MAsyncRx<T>) -> Self {
         value.add_rx();
         Self::new(value.shared.clone())
@@ -402,7 +428,7 @@ impl<T: Send + 'static> BlockingRxTrait<T> for MRx<T> {
     }
 }
 
-impl<T> Deref for Rx<T> {
+impl<T: Send + 'static> Deref for Rx<T> {
     type Target = ChannelShared<T>;
 
     #[inline(always)]
@@ -411,14 +437,14 @@ impl<T> Deref for Rx<T> {
     }
 }
 
-impl<T> AsRef<ChannelShared<T>> for Rx<T> {
+impl<T: Send + 'static> AsRef<ChannelShared<T>> for Rx<T> {
     #[inline(always)]
     fn as_ref(&self) -> &ChannelShared<T> {
         &self.shared
     }
 }
 
-impl<T> AsRef<ChannelShared<T>> for MRx<T> {
+impl<T: Send + 'static> AsRef<ChannelShared<T>> for MRx<T> {
     #[inline(always)]
     fn as_ref(&self) -> &ChannelShared<T> {
         &self.0.shared

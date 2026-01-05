@@ -7,31 +7,31 @@ use std::ops::Deref;
 use std::task::*;
 
 /// An async sink that allows you to write custom futures with `poll_send(ctx)`.
-pub struct AsyncSink<T> {
+pub struct AsyncSink<T: Send + 'static> {
     tx: AsyncTx<T>,
     waker: Option<SendWaker<T>>,
 }
 
-impl<T> fmt::Debug for AsyncSink<T> {
+impl<T: Send + 'static> fmt::Debug for AsyncSink<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncSink")
     }
 }
 
-impl<T> fmt::Display for AsyncSink<T> {
+impl<T: Send + 'static> fmt::Display for AsyncSink<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncSink")
     }
 }
 
-impl<T> AsyncSink<T> {
+impl<T: Send + 'static> AsyncSink<T> {
     #[inline]
     pub fn new(tx: AsyncTx<T>) -> Self {
         Self { tx, waker: None }
     }
 }
 
-impl<T> Deref for AsyncSink<T> {
+impl<T: Send + 'static> Deref for AsyncSink<T> {
     type Target = AsyncTx<T>;
 
     #[inline]
@@ -82,11 +82,6 @@ impl<T: Send + Unpin + 'static> AsyncSink<T> {
     #[inline]
     pub fn poll_send(&mut self, ctx: &mut Context, item: T) -> Result<(), TrySendError<T>> {
         let _item = MaybeUninit::new(item);
-        let shared = &self.tx.shared;
-        if shared.inner.try_send(&_item) {
-            shared.on_send();
-            return Ok(());
-        }
         match self.tx.poll_send(ctx, &_item, &mut self.waker, true) {
             Poll::Ready(Ok(())) => Ok(()),
             Poll::Ready(Err(())) => Err(TrySendError::Disconnected(unsafe { _item.assume_init() })),
@@ -95,7 +90,7 @@ impl<T: Send + Unpin + 'static> AsyncSink<T> {
     }
 }
 
-impl<T> Drop for AsyncSink<T> {
+impl<T: Send + 'static> Drop for AsyncSink<T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             self.tx.shared.abandon_send_waker(waker);

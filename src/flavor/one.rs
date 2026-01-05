@@ -156,7 +156,7 @@ impl<T> Drop for OneSize<T> {
     }
 }
 
-impl<T> FlavorImpl<T> for OneSize<T> {
+impl<T: Send + 'static> FlavorImpl<T> for OneSize<T> {
     #[inline(always)]
     fn len(&self) -> usize {
         if self.is_full() {
@@ -210,7 +210,7 @@ impl<T> FlavorImpl<T> for OneSize<T> {
     }
 }
 
-impl<T> FlavorPrivate<T> for OneSize<T> {
+impl<T: Send + 'static> FlavorPrivate<T> for OneSize<T> {
     #[inline]
     fn to_flavor(self) -> Flavor<T> {
         Flavor::One(self)

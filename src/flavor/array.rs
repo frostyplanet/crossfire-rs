@@ -15,7 +15,7 @@ impl<T, const MP: bool, const MC: bool> Array<T, MP, MC> {
     }
 }
 
-impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
+impl<T: Send + 'static, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
     #[inline(always)]
     fn len(&self) -> usize {
         self.0.len()
@@ -86,7 +86,7 @@ impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
     }
 }
 
-impl<T> FlavorPrivate<T> for Array<T, true, true> {
+impl<T: Send + 'static> FlavorPrivate<T> for Array<T, true, true> {
     #[inline]
     fn to_flavor(self) -> Flavor<T> {
         Flavor::ArrayMPMC(self)
@@ -108,7 +108,7 @@ impl<T> FlavorPrivate<T> for Array<T, true, true> {
     }
 }
 
-impl<T> FlavorPrivate<T> for Array<T, false, false> {
+impl<T: Send + 'static> FlavorPrivate<T> for Array<T, false, false> {
     #[inline]
     fn to_flavor(self) -> Flavor<T> {
         Flavor::ArraySPSC(self)

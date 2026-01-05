@@ -53,43 +53,52 @@ use std::task::{Context, Poll};
 ///     drop(tx);
 /// }
 /// ```
-pub struct AsyncRx<T> {
+pub struct AsyncRx<T: Send + 'static> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    flavor: *const (),
+    _try_recv: TryRecvFunc<T>,
+    _poll_item: PollItemFunc<T>,
 }
 
 unsafe impl<T: Send> Send for AsyncRx<T> {}
 
-impl<T> fmt::Debug for AsyncRx<T> {
+impl<T: Send + 'static> fmt::Debug for AsyncRx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncRx")
     }
 }
 
-impl<T> fmt::Display for AsyncRx<T> {
+impl<T: Send + 'static> fmt::Display for AsyncRx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncRx")
     }
 }
 
-impl<T> Drop for AsyncRx<T> {
+impl<T: Send + 'static> Drop for AsyncRx<T> {
     fn drop(&mut self) {
         self.shared.close_rx();
     }
 }
 
-impl<T> From<Rx<T>> for AsyncRx<T> {
+impl<T: Send + 'static> From<Rx<T>> for AsyncRx<T> {
     fn from(value: Rx<T>) -> Self {
         value.add_rx();
         Self::new(value.shared.clone())
     }
 }
 
-impl<T> AsyncRx<T> {
+impl<T: Send + 'static> AsyncRx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self {
+            _phan: Default::default(),
+            flavor: shared.get_flavor_ptr(),
+            _try_recv: shared._try_recv,
+            _poll_item: shared._poll_item,
+            shared,
+        }
     }
 
     /// Receives a message from the channel. This method will await until a message is received or the channel is closed.
@@ -190,8 +199,8 @@ impl<T> AsyncRx<T> {
     /// Returns Err([TryRecvError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline(always)]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        if let Some(item) = self.shared.inner.try_recv() {
-            self.shared.on_recv();
+        if let Some(item) = unsafe { (self._try_recv)(&self.shared, self.flavor) } {
+            // in try_recv_shim already call on_recv
             return Ok(item);
         } else {
             if self.shared.is_tx_closed() {
@@ -212,7 +221,21 @@ impl<T> AsyncRx<T> {
     pub(crate) fn poll_item(
         &self, ctx: &mut Context, o_waker: &mut Option<RecvWaker>, stream: bool,
     ) -> Result<T, TryRecvError> {
-        let shared = &self.shared;
+        unsafe { (self._poll_item)(&self.shared, self.flavor, ctx, o_waker, stream) }
+    }
+
+    /// Internal function might change in the future. For public version, use AsyncStream::poll_item() instead
+    ///
+    /// Returns `Ok(T)` on successful.
+    ///
+    /// Return Err([TryRecvError::Empty]) for Poll::Pending case.
+    ///
+    /// Return Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
+    #[inline(always)]
+    pub(crate) fn _poll_item<F: FlavorImpl<T>>(
+        shared: &ChannelShared<T>, flavor: &F, ctx: &mut Context, o_waker: &mut Option<RecvWaker>,
+        stream: bool,
+    ) -> Result<T, TryRecvError> {
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
@@ -235,8 +258,8 @@ impl<T> AsyncRx<T> {
         }
         macro_rules! try_recv {
             ($recv_func: ident => $waker_handle: block) => {
-                if let Some(item) = shared.inner.$recv_func() {
-                    shared.on_recv();
+                if let Some(item) = flavor.$recv_func() {
+                    shared.on_recv_shim::<F>(flavor);
                     $waker_handle
                     return Ok(item);
                 }
@@ -337,14 +360,14 @@ impl<T> AsyncRx<T> {
 
 /// A fixed-sized future object constructed by [AsyncRx::recv()]
 #[must_use]
-pub struct RecvFuture<'a, T> {
+pub struct RecvFuture<'a, T: Send + 'static> {
     rx: &'a AsyncRx<T>,
     waker: Option<RecvWaker>,
 }
 
 unsafe impl<T: Send> Send for RecvFuture<'_, T> {}
 
-impl<T> Drop for RecvFuture<'_, T> {
+impl<T: Send + 'static> Drop for RecvFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // cancelled
@@ -353,7 +376,7 @@ impl<T> Drop for RecvFuture<'_, T> {
     }
 }
 
-impl<T> Future for RecvFuture<'_, T> {
+impl<T: Send + 'static> Future for RecvFuture<'_, T> {
     type Output = Result<T, RecvError>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
@@ -377,7 +400,7 @@ impl<T> Future for RecvFuture<'_, T> {
 
 /// A fixed-sized future object constructed by [AsyncRx::recv_timeout()]
 #[must_use]
-pub struct RecvTimeoutFuture<'a, T, R> {
+pub struct RecvTimeoutFuture<'a, T: Send + 'static, R> {
     rx: &'a AsyncRx<T>,
     waker: Option<RecvWaker>,
     sleep: Pin<Box<dyn Future<Output = R>>>,
@@ -385,7 +408,7 @@ pub struct RecvTimeoutFuture<'a, T, R> {
 
 unsafe impl<T: Unpin + Send, R> Send for RecvTimeoutFuture<'_, T, R> {}
 
-impl<T, R> Drop for RecvTimeoutFuture<'_, T, R> {
+impl<T: Send + 'static, R> Drop for RecvTimeoutFuture<'_, T, R> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // cancelled
@@ -394,7 +417,7 @@ impl<T, R> Drop for RecvTimeoutFuture<'_, T, R> {
     }
 }
 
-impl<T, R> Future for RecvTimeoutFuture<'_, T, R> {
+impl<T: Send + 'static, R> Future for RecvTimeoutFuture<'_, T, R> {
     type Output = Result<T, RecvTimeoutError>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
@@ -547,15 +570,15 @@ impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for AsyncRx<T> {
 /// which means you can have two types of receivers, both within async and
 /// blocking contexts, for the same channel.
 
-pub struct MAsyncRx<T>(pub(crate) AsyncRx<T>);
+pub struct MAsyncRx<T: Send + 'static>(pub(crate) AsyncRx<T>);
 
-impl<T> fmt::Debug for MAsyncRx<T> {
+impl<T: Send + 'static> fmt::Debug for MAsyncRx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MAsyncRx")
     }
 }
 
-impl<T> fmt::Display for MAsyncRx<T> {
+impl<T: Send + 'static> fmt::Display for MAsyncRx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MAsyncRx")
     }
@@ -563,7 +586,7 @@ impl<T> fmt::Display for MAsyncRx<T> {
 
 unsafe impl<T: Send> Sync for MAsyncRx<T> {}
 
-impl<T> Clone for MAsyncRx<T> {
+impl<T: Send + 'static> Clone for MAsyncRx<T> {
     #[inline]
     fn clone(&self) -> Self {
         let inner = &self.0;
@@ -572,13 +595,13 @@ impl<T> Clone for MAsyncRx<T> {
     }
 }
 
-impl<T> From<MAsyncRx<T>> for AsyncRx<T> {
+impl<T: Send + 'static> From<MAsyncRx<T>> for AsyncRx<T> {
     fn from(rx: MAsyncRx<T>) -> Self {
         rx.0
     }
 }
 
-impl<T> MAsyncRx<T> {
+impl<T: Send + 'static> MAsyncRx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
         Self(AsyncRx::new(shared))
@@ -598,7 +621,7 @@ impl<T> MAsyncRx<T> {
     }
 }
 
-impl<T> Deref for MAsyncRx<T> {
+impl<T: Send + 'static> Deref for MAsyncRx<T> {
     type Target = AsyncRx<T>;
 
     /// inherit all the functions of [AsyncRx]
@@ -608,7 +631,7 @@ impl<T> Deref for MAsyncRx<T> {
     }
 }
 
-impl<T> From<MRx<T>> for MAsyncRx<T> {
+impl<T: Send + 'static> From<MRx<T>> for MAsyncRx<T> {
     fn from(value: MRx<T>) -> Self {
         value.add_rx();
         Self::new(value.shared.clone())
@@ -652,7 +675,7 @@ impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for MAsyncRx<T> {
     }
 }
 
-impl<T> Deref for AsyncRx<T> {
+impl<T: Send + 'static> Deref for AsyncRx<T> {
     type Target = ChannelShared<T>;
     #[inline(always)]
     fn deref(&self) -> &ChannelShared<T> {
@@ -660,14 +683,14 @@ impl<T> Deref for AsyncRx<T> {
     }
 }
 
-impl<T> AsRef<ChannelShared<T>> for AsyncRx<T> {
+impl<T: Send + 'static> AsRef<ChannelShared<T>> for AsyncRx<T> {
     #[inline(always)]
     fn as_ref(&self) -> &ChannelShared<T> {
         &self.shared
     }
 }
 
-impl<T> AsRef<ChannelShared<T>> for MAsyncRx<T> {
+impl<T: Send + 'static> AsRef<ChannelShared<T>> for MAsyncRx<T> {
     #[inline(always)]
     fn as_ref(&self) -> &ChannelShared<T> {
         &self.0.shared

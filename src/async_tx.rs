@@ -52,19 +52,22 @@ use std::task::{Context, Poll};
 ///     drop(rx);
 /// }
 /// ```
-pub struct AsyncTx<T> {
+pub struct AsyncTx<T: Send + 'static> {
     pub(crate) shared: Arc<ChannelShared<T>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
+    flavor: *const (),
+    _try_send: TrySendFunc<T>,
+    _poll_send: PollSendFunc<T>,
 }
 
-impl<T> fmt::Debug for AsyncTx<T> {
+impl<T: Send + 'static> fmt::Debug for AsyncTx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncTx")
     }
 }
 
-impl<T> fmt::Display for AsyncTx<T> {
+impl<T: Send + 'static> fmt::Display for AsyncTx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncTx")
     }
@@ -72,23 +75,29 @@ impl<T> fmt::Display for AsyncTx<T> {
 
 unsafe impl<T: Send> Send for AsyncTx<T> {}
 
-impl<T> Drop for AsyncTx<T> {
+impl<T: Send + 'static> Drop for AsyncTx<T> {
     fn drop(&mut self) {
         self.shared.close_tx();
     }
 }
 
-impl<T> From<Tx<T>> for AsyncTx<T> {
+impl<T: Send + 'static> From<Tx<T>> for AsyncTx<T> {
     fn from(value: Tx<T>) -> Self {
         value.add_tx();
         Self::new(value.shared.clone())
     }
 }
 
-impl<T> AsyncTx<T> {
+impl<T: Send + 'static> AsyncTx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
-        Self { shared, _phan: Default::default() }
+        Self {
+            flavor: shared.get_flavor_ptr(),
+            _try_send: shared._try_send,
+            _poll_send: shared._poll_send,
+            shared,
+            _phan: Default::default(),
+        }
     }
 
     #[inline]
@@ -105,6 +114,102 @@ impl<T> AsyncTx<T> {
     #[inline(always)]
     pub fn is_disconnected(&self) -> bool {
         self.shared.is_rx_closed()
+    }
+
+    /// Internal function might change in the future. For public version, use AsyncSink::poll_send() instead.
+    ///
+    /// Returns `Poll::Ready(Ok(()))` on message sent.
+    ///
+    /// Returns `Poll::Pending` for Poll::Pending case.
+    ///
+    /// Returns `Poll::Ready(Err(())` when all Rx dropped.
+    #[inline(always)]
+    pub(crate) fn _poll_send<'a, F: FlavorImpl<T>>(
+        shared: &ChannelShared<T>, flavor: &F, ctx: &'a mut Context, item: &MaybeUninit<T>,
+        o_waker: &'a mut Option<SendWaker<T>>, sink: bool,
+    ) -> Poll<Result<(), ()>> {
+        if shared.is_rx_closed() {
+            trace_log!("tx{:?}: closed {:?}", tokio_task_id!(), o_waker);
+            return Poll::Ready(Err(()));
+        }
+        let mut state;
+        // When the result is not TrySendError::Full,
+        // make sure always take the o_waker out and abandon,
+        // to skip the timeout cleaning logic in Drop.
+        loop {
+            if flavor.try_send(item) {
+                shared.on_send();
+                if let Some(_waker) = o_waker.take() {
+                    trace_log!("tx{:?}: send {:?}", tokio_task_id!(), _waker);
+                } else {
+                    trace_log!("tx{:?}: send", tokio_task_id!());
+                }
+                return Poll::Ready(Ok(()));
+            }
+            if let Some(waker) = o_waker.as_ref() {
+                match waker.try_change_state(WakerState::Woken, WakerState::Init) {
+                    Ok(_) => {
+                        if !waker.will_wake(ctx) {
+                            let _ = o_waker.take();
+                        }
+                    }
+                    Err(state) => {
+                        if state < WakerState::Woken as u8 {
+                            if waker.will_wake(ctx) {
+                                trace_log!("tx{:?}: will_wake {:?}", tokio_task_id!(), waker);
+                                // Normally only selection or multiplex future will get here.
+                                // No need to reg again, since waker is not consumed.
+                                return Poll::Pending;
+                            } else {
+                                // Spurious woken by runtime, waker can not be re-used (issue 38)
+                                shared.senders.cancel_waker(waker);
+                                trace_log!("tx{:?}: drop waker {:?}", tokio_task_id!(), waker);
+                                let _ = o_waker.take();
+                            }
+                        } else if state == WakerState::Closed as u8 {
+                            return Poll::Ready(Err(()));
+                        }
+                    }
+                }
+            } else {
+                if let Some(mut backoff) = shared.get_async_backoff() {
+                    loop {
+                        backoff.spin();
+                        if flavor.try_send(item) {
+                            shared.on_send();
+                            trace_log!("tx{:?}: send", tokio_task_id!());
+                            return Poll::Ready(Ok(()));
+                        }
+                        if backoff.is_completed() {
+                            break;
+                        }
+                    }
+                }
+            }
+            (state, *o_waker) = if let Some(waker) = o_waker.take() {
+                shared.sender_reg_and_try::<F>(flavor, item, waker, sink)
+            } else {
+                let waker = SendWaker::<T>::new_async(ctx, std::ptr::null_mut());
+                shared.sender_reg_and_try::<F>(flavor, item, waker, sink)
+            };
+            trace_log!("tx{:?}: sender_reg_and_try {:?} {}", tokio_task_id!(), o_waker, state);
+            if state < WakerState::Woken as u8 {
+                return Poll::Pending;
+            } else if state > WakerState::Woken as u8 {
+                if state == WakerState::Done as u8 {
+                    trace_log!("tx{:?}: send {:?} done", o_waker, tokio_task_id!());
+                    let _ = o_waker.take();
+                    return Poll::Ready(Ok(()));
+                } else {
+                    debug_assert_eq!(state, WakerState::Closed as u8);
+                    trace_log!("tx{:?}: closed {:?}", o_waker, tokio_task_id!());
+                    let _ = o_waker.take();
+                    return Poll::Ready(Err(()));
+                }
+            }
+            debug_assert_eq!(state, WakerState::Woken as u8);
+            continue;
+        }
     }
 }
 
@@ -137,7 +242,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
             return Err(TrySendError::Disconnected(item));
         }
         let _item = MaybeUninit::new(item);
-        if self.shared.inner.try_send(&_item) {
+        if unsafe { (self._try_send)(self.flavor, &_item) } {
             self.shared.on_send();
             return Ok(());
         } else {
@@ -236,95 +341,13 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
         &self, ctx: &'a mut Context, item: &MaybeUninit<T>, o_waker: &'a mut Option<SendWaker<T>>,
         sink: bool,
     ) -> Poll<Result<(), ()>> {
-        let shared = &self.shared;
-        if shared.is_rx_closed() {
-            trace_log!("tx{:?}: closed {:?}", tokio_task_id!(), o_waker);
-            return Poll::Ready(Err(()));
-        }
-        let mut state;
-        // When the result is not TrySendError::Full,
-        // make sure always take the o_waker out and abandon,
-        // to skip the timeout cleaning logic in Drop.
-        loop {
-            if shared.inner.try_send(item) {
-                shared.on_send();
-                if let Some(_waker) = o_waker.take() {
-                    trace_log!("tx{:?}: send {:?}", tokio_task_id!(), _waker);
-                } else {
-                    trace_log!("tx{:?}: send", tokio_task_id!());
-                }
-                return Poll::Ready(Ok(()));
-            }
-            if let Some(waker) = o_waker.as_ref() {
-                match waker.try_change_state(WakerState::Woken, WakerState::Init) {
-                    Ok(_) => {
-                        if !waker.will_wake(ctx) {
-                            let _ = o_waker.take();
-                        }
-                    }
-                    Err(state) => {
-                        if state < WakerState::Woken as u8 {
-                            if waker.will_wake(ctx) {
-                                trace_log!("tx{:?}: will_wake {:?}", tokio_task_id!(), waker);
-                                // Normally only selection or multiplex future will get here.
-                                // No need to reg again, since waker is not consumed.
-                                return Poll::Pending;
-                            } else {
-                                // Spurious woken by runtime, waker can not be re-used (issue 38)
-                                self.senders.cancel_waker(waker);
-                                trace_log!("tx{:?}: drop waker {:?}", tokio_task_id!(), waker);
-                                let _ = o_waker.take();
-                            }
-                        } else if state == WakerState::Closed as u8 {
-                            return Poll::Ready(Err(()));
-                        }
-                    }
-                }
-            } else {
-                if let Some(mut backoff) = shared.get_async_backoff() {
-                    loop {
-                        backoff.spin();
-                        if shared.inner.try_send(item) {
-                            shared.on_send();
-                            trace_log!("tx{:?}: send", tokio_task_id!());
-                            return Poll::Ready(Ok(()));
-                        }
-                        if backoff.is_completed() {
-                            break;
-                        }
-                    }
-                }
-            }
-            (state, *o_waker) = if let Some(waker) = o_waker.take() {
-                shared.sender_reg_and_try(item, waker, sink)
-            } else {
-                let waker = SendWaker::<T>::new_async(ctx, std::ptr::null_mut());
-                shared.sender_reg_and_try(item, waker, sink)
-            };
-            trace_log!("tx{:?}: sender_reg_and_try {:?} {}", tokio_task_id!(), o_waker, state);
-            if state < WakerState::Woken as u8 {
-                return Poll::Pending;
-            } else if state > WakerState::Woken as u8 {
-                if state == WakerState::Done as u8 {
-                    trace_log!("tx{:?}: send {:?} done", o_waker, tokio_task_id!());
-                    let _ = o_waker.take();
-                    return Poll::Ready(Ok(()));
-                } else {
-                    debug_assert_eq!(state, WakerState::Closed as u8);
-                    trace_log!("tx{:?}: closed {:?}", o_waker, tokio_task_id!());
-                    let _ = o_waker.take();
-                    return Poll::Ready(Err(()));
-                }
-            }
-            debug_assert_eq!(state, WakerState::Woken as u8);
-            continue;
-        }
+        unsafe { (self._poll_send)(&self.shared, self.flavor, ctx, item, o_waker, sink) }
     }
 }
 
 /// A fixed-sized future object constructed by [AsyncTx::make_send_future()]
 #[must_use]
-pub struct SendFuture<'a, T: Unpin> {
+pub struct SendFuture<'a, T: Unpin + Send + 'static> {
     tx: &'a AsyncTx<T>,
     item: MaybeUninit<T>,
     waker: Option<SendWaker<T>>,
@@ -332,7 +355,7 @@ pub struct SendFuture<'a, T: Unpin> {
 
 unsafe impl<T: Unpin + Send> Send for SendFuture<'_, T> {}
 
-impl<T: Unpin> Drop for SendFuture<'_, T> {
+impl<T: Unpin + Send + 'static> Drop for SendFuture<'_, T> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
@@ -366,7 +389,7 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
 
 /// A fixed-sized future object constructed by [AsyncTx::send_timeout()]
 #[must_use]
-pub struct SendTimeoutFuture<'a, T: Unpin, R> {
+pub struct SendTimeoutFuture<'a, T: Unpin + Send + 'static, R> {
     tx: &'a AsyncTx<T>,
     sleep: Pin<Box<dyn Future<Output = R>>>,
     item: MaybeUninit<T>,
@@ -375,7 +398,7 @@ pub struct SendTimeoutFuture<'a, T: Unpin, R> {
 
 unsafe impl<T: Unpin + Send, R> Send for SendTimeoutFuture<'_, T, R> {}
 
-impl<T: Unpin, R> Drop for SendTimeoutFuture<'_, T, R> {
+impl<T: Unpin + Send + 'static, R> Drop for SendTimeoutFuture<'_, T, R> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
@@ -561,15 +584,15 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for AsyncTx<T> {
 /// which means you can have two types of senders, both within async and
 /// blocking contexts, for the same channel.
 
-pub struct MAsyncTx<T>(pub(crate) AsyncTx<T>);
+pub struct MAsyncTx<T: Send + 'static>(pub(crate) AsyncTx<T>);
 
-impl<T> fmt::Debug for MAsyncTx<T> {
+impl<T: Send + 'static> fmt::Debug for MAsyncTx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MAsyncTx")
     }
 }
 
-impl<T> fmt::Display for MAsyncTx<T> {
+impl<T: Send + 'static> fmt::Display for MAsyncTx<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MAsyncTx")
     }
@@ -577,7 +600,7 @@ impl<T> fmt::Display for MAsyncTx<T> {
 
 unsafe impl<T: Send> Sync for MAsyncTx<T> {}
 
-impl<T: Unpin> Clone for MAsyncTx<T> {
+impl<T: Unpin + Send + 'static> Clone for MAsyncTx<T> {
     #[inline]
     fn clone(&self) -> Self {
         let inner = &self.0;
@@ -586,13 +609,13 @@ impl<T: Unpin> Clone for MAsyncTx<T> {
     }
 }
 
-impl<T> From<MAsyncTx<T>> for AsyncTx<T> {
+impl<T: Send + 'static> From<MAsyncTx<T>> for AsyncTx<T> {
     fn from(tx: MAsyncTx<T>) -> Self {
         tx.0
     }
 }
 
-impl<T> MAsyncTx<T> {
+impl<T: Send + 'static> MAsyncTx<T> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
         Self(AsyncTx::new(shared))
@@ -609,7 +632,7 @@ impl<T> MAsyncTx<T> {
     }
 }
 
-impl<T> Deref for MAsyncTx<T> {
+impl<T: Send + 'static> Deref for MAsyncTx<T> {
     type Target = AsyncTx<T>;
 
     /// inherit all the functions of [AsyncTx]
@@ -619,7 +642,7 @@ impl<T> Deref for MAsyncTx<T> {
     }
 }
 
-impl<T> From<MTx<T>> for MAsyncTx<T> {
+impl<T: Send + 'static> From<MTx<T>> for MAsyncTx<T> {
     fn from(value: MTx<T>) -> Self {
         value.add_tx();
         Self::new(value.shared.clone())
@@ -665,7 +688,7 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for MAsyncTx<T> {
     }
 }
 
-impl<T> Deref for AsyncTx<T> {
+impl<T: Send + 'static> Deref for AsyncTx<T> {
     type Target = ChannelShared<T>;
     #[inline(always)]
     fn deref(&self) -> &ChannelShared<T> {
@@ -673,14 +696,14 @@ impl<T> Deref for AsyncTx<T> {
     }
 }
 
-impl<T> AsRef<ChannelShared<T>> for AsyncTx<T> {
+impl<T: Send + 'static> AsRef<ChannelShared<T>> for AsyncTx<T> {
     #[inline(always)]
     fn as_ref(&self) -> &ChannelShared<T> {
         &self.shared
     }
 }
 
-impl<T> AsRef<ChannelShared<T>> for MAsyncTx<T> {
+impl<T: Send + 'static> AsRef<ChannelShared<T>> for MAsyncTx<T> {
     #[inline(always)]
     fn as_ref(&self) -> &ChannelShared<T> {
         &self.0.shared

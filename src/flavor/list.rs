@@ -12,7 +12,7 @@ impl<T> List<T> {
     }
 }
 
-impl<T> FlavorImpl<T> for List<T> {
+impl<T: Send + 'static> FlavorImpl<T> for List<T> {
     #[inline(always)]
     fn len(&self) -> usize {
         self.0.len()
@@ -55,7 +55,7 @@ impl<T> FlavorImpl<T> for List<T> {
     }
 }
 
-impl<T> FlavorPrivate<T> for List<T> {
+impl<T: Send + 'static> FlavorPrivate<T> for List<T> {
     #[inline]
     fn to_flavor(self) -> Flavor<T> {
         Flavor::List(self)

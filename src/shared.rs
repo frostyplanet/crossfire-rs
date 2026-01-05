@@ -4,65 +4,108 @@ pub(crate) use crate::flavor::*;
 pub(crate) use crate::locked_waker::*;
 use crate::trace_log;
 pub(crate) use crate::waker_registry::*;
+use crate::{AsyncRx, AsyncTx, Rx, Tx};
 use std::mem::MaybeUninit;
-use std::sync::atomic::{fence, AtomicUsize, Ordering};
+use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-pub struct ChannelShared<T> {
-    pub(crate) inner: Flavor<T>,
-    tx_count: AtomicUsize,
-    rx_count: AtomicUsize,
+pub struct ChannelShared<T: Send + 'static> {
     pub(crate) senders: RegistrySender<T>,
     pub(crate) recvs: RegistryRecv,
+    tx_count: AtomicUsize,
+    rx_count: AtomicUsize,
+    pub(crate) flavor: Flavor<T>,
     pub(crate) backoff_limit: u16,
     pub(crate) large: bool,
+    cap: Option<usize>,
     pub(crate) may_direct_copy: bool,
+    pub(crate) _try_send: TrySendFunc<T>,
+    pub(crate) _try_recv: TryRecvFunc<T>,
+    pub(crate) _poll_item: PollItemFunc<T>,
+    pub(crate) _poll_send: PollSendFunc<T>,
+    pub(crate) _send_blocking: SendBlocking<T>,
+    pub(crate) _recv_blocking: RecvBlocking<T>,
+    _is_empty: IsEmptyFunc,
+    flavor_ptr: AtomicPtr<()>,
 }
 
-impl<T> ChannelShared<T> {
-    pub(crate) fn new(
-        inner: Flavor<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
+impl<T: Send + 'static> ChannelShared<T> {
+    pub(crate) fn new<F: FlavorImpl<T> + FlavorPrivate<T>>(
+        flavor: F, senders: RegistrySender<T>, recvs: RegistryRecv,
     ) -> Arc<Self> {
         let mut large = false;
-        if let Some(bound) = inner.capacity() {
+        if let Some(bound) = flavor.capacity() {
             if bound >= 10 {
                 large = true;
             }
         }
-        Arc::new(Self {
+        // NOTE: we choose to store the frequently used function ptr, beause:
+        // - The flvaor type is fixed per channel.
+        // - There're a number of flavor types, might be incresing.
+        // - trait object has VTable lookup cost
+        // - we want to avoid the dereferencing cost to put flavor in another box than inline with
+        // ChannelShared, so we choose enum
+        // - In blocking context, although compiler will likely inline the operation and strip out
+        // branch which is not possible, but if use put Tx/Rx into vec, it may confuse and fallback
+        // to match.
+        // - In async context, because Future is always concertain about context, the compiler
+        // cannot not eliminate unused enum variant branch, leaving the match code for
+        // emum-dispatch. And the worse of all, as the enum grow beyond 2~3 types, it will not
+        // inline the function calls, making async code slow.
+        let s = Arc::new(Self {
             tx_count: AtomicUsize::new(1),
             rx_count: AtomicUsize::new(1),
             senders,
             recvs,
-            backoff_limit: inner.backoff_limit(),
+            _try_send: try_send_shim::<F, T>,
+            _try_recv: try_recv_shim::<F, T>,
+            _poll_item: poll_item_shim::<F, T>,
+            _poll_send: poll_send_shim::<F, T>,
+            _recv_blocking: recv_blocking_shim::<F, T>,
+            _send_blocking: send_blocking_shim::<F, T>,
+            _is_empty: is_empty_shim::<F, T>,
+            backoff_limit: flavor.backoff_limit(),
             large,
-            may_direct_copy: inner.may_direct_copy(),
-            inner,
-        })
+            cap: flavor.capacity(),
+            may_direct_copy: flavor.may_direct_copy(),
+            flavor: flavor.to_flavor(),
+            flavor_ptr: AtomicPtr::new(std::ptr::null_mut()),
+        });
+        // once arc is construct, the enum variant memory location is fixed, we can store it
+        let flavor_ptr = s.flavor.get_ptr();
+        s.flavor_ptr.store(flavor_ptr as *mut (), Ordering::Release);
+        s
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_flavor_ptr(&self) -> *const () {
+        self.flavor_ptr.load(Ordering::Relaxed)
     }
 
     /// The number of messages in the channel.
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.flavor.len()
     }
 
     /// The capacity of the channel. Returns `None` for unbounded channels.
     #[inline(always)]
     pub fn capacity(&self) -> Option<usize> {
-        self.inner.capacity()
+        self.cap
     }
 
     /// Returns `true` if the channel is empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        unsafe { (self._is_empty)(self.get_flavor_ptr()) }
     }
 
     /// Returns `true` if the channel is full.
     pub fn is_full(&self) -> bool {
-        self.inner.is_full()
+        // not frequently used
+        self.flavor.is_full()
     }
 
     /// Returns the number of senders for the channel.
@@ -147,12 +190,12 @@ impl<T> ChannelShared<T> {
     ///
     /// NOTE: when return state=Done, the waker is not set to Done
     #[inline]
-    pub(crate) fn sender_reg_and_try(
-        &self, item: &MaybeUninit<T>, waker: SendWaker<T>, sink: bool,
+    pub(crate) fn sender_reg_and_try<F: FlavorImpl<T>>(
+        &self, flavor: &F, item: &MaybeUninit<T>, waker: SendWaker<T>, sink: bool,
     ) -> (u8, Option<SendWaker<T>>) {
         self.senders.reg_waker(&waker);
         // Not allow Spurious wake and enter this function again;
-        if let Some(res) = self.inner.try_send_oneshot(item.as_ptr()) {
+        if let Some(res) = flavor.try_send_oneshot(item.as_ptr()) {
             if res {
                 self.on_send();
                 return self.senders.cancel_reuse_waker(waker, WakerState::Done);
@@ -205,20 +248,39 @@ impl<T> ChannelShared<T> {
     /// Wake up one tx
     #[inline(always)]
     pub(crate) fn on_recv(&self) {
-        if WakeResult::Sent == self.senders.fire(self) {
+        if WakeResult::Sent
+            == self.senders.fire(|waker| {
+                waker.wake_or_copy(|p: *const T| -> u8 {
+                    // TODO
+                    if let Some(true) = self.flavor.try_send_oneshot(p) {
+                        WakerState::Done as u8
+                    } else {
+                        WakerState::Woken as u8
+                    }
+                })
+            })
+        {
             self.on_send();
         }
     }
 
+    /// Wake up one tx
     #[inline(always)]
-    pub(crate) fn on_recv_try_send(&self, waker: &WakerInner<*const T>) -> WakeResult {
-        waker.wake_or_copy(|p: *const T| -> u8 {
-            if let Some(true) = self.inner.try_send_oneshot(p) {
-                WakerState::Done as u8
-            } else {
-                WakerState::Woken as u8
-            }
-        })
+    pub(crate) fn on_recv_shim<F: FlavorImpl<T>>(&self, flavor: &F) {
+        if WakeResult::Sent
+            == self.senders.fire(|waker| {
+                waker.wake_or_copy(|p: *const T| -> u8 {
+                    // TODO
+                    if let Some(true) = flavor.try_send_oneshot(p) {
+                        WakerState::Done as u8
+                    } else {
+                        WakerState::Woken as u8
+                    }
+                })
+            })
+        {
+            self.on_send();
+        }
     }
 
     /// Call on cancellation, return true to indicate drop temporary message
@@ -309,4 +371,99 @@ pub fn check_timeout(deadline: Option<Instant>) -> Result<Option<Duration>, ()> 
         }
     }
     Ok(None)
+}
+
+pub(crate) type TrySendFunc<T> = unsafe fn(*const (), &MaybeUninit<T>) -> bool;
+pub(crate) type TryRecvFunc<T> = unsafe fn(&ChannelShared<T>, *const ()) -> Option<T>;
+
+pub(crate) type PollSendFunc<T> = unsafe fn(
+    &ChannelShared<T>,
+    *const (),
+    &mut Context,
+    &MaybeUninit<T>,
+    &mut Option<SendWaker<T>>,
+    bool,
+) -> Poll<Result<(), ()>>;
+
+pub(crate) type PollItemFunc<T> = unsafe fn(
+    &ChannelShared<T>,
+    *const (),
+    &mut Context,
+    &mut Option<RecvWaker>,
+    bool,
+) -> Result<T, TryRecvError>;
+
+pub(crate) type SendBlocking<T> = unsafe fn(
+    &ChannelShared<T>,
+    *const (),
+    &MaybeUninit<T>,
+    Option<Instant>,
+    &WakerCache<*const T>,
+) -> Result<(), bool>;
+pub(crate) type RecvBlocking<T> =
+    unsafe fn(&ChannelShared<T>, *const (), Option<Instant>, &WakerCache<()>) -> Result<T, bool>;
+
+pub(crate) type IsEmptyFunc = unsafe fn(ptr: *const ()) -> bool;
+
+#[inline]
+unsafe fn try_send_shim<F: FlavorImpl<T>, T: Send + 'static>(
+    ptr: *const (), item: &MaybeUninit<T>,
+) -> bool {
+    let flavor = &*(ptr as *const F);
+    flavor.try_send(item)
+}
+
+#[inline]
+unsafe fn try_recv_shim<F: FlavorImpl<T>, T: Send + 'static>(
+    shared: &ChannelShared<T>, ptr: *const (),
+) -> Option<T> {
+    let flavor = &*(ptr as *const F);
+    if let Some(item) = flavor.try_recv() {
+        shared.on_recv_shim::<F>(flavor);
+        return Some(item);
+    } else {
+        None
+    }
+}
+
+#[inline]
+unsafe fn send_blocking_shim<F: FlavorImpl<T>, T: Send + 'static>(
+    shared: &ChannelShared<T>, ptr: *const (), item: &MaybeUninit<T>, deadline: Option<Instant>,
+    waker_cache: &WakerCache<*const T>,
+) -> Result<(), bool> {
+    let flavor = &*(ptr as *const F);
+    Tx::<T>::send_blocking::<F>(shared, flavor, item, deadline, waker_cache)
+}
+
+#[inline]
+unsafe fn recv_blocking_shim<F: FlavorImpl<T>, T: Send + 'static>(
+    shared: &ChannelShared<T>, ptr: *const (), deadline: Option<Instant>,
+    waker_cache: &WakerCache<()>,
+) -> Result<T, bool> {
+    let flavor = &*(ptr as *const F);
+    Rx::<T>::recv_blocking::<F>(shared, flavor, deadline, waker_cache)
+}
+
+#[inline]
+unsafe fn poll_send_shim<F: FlavorImpl<T>, T: Send + 'static>(
+    shared: &ChannelShared<T>, ptr: *const (), ctx: &mut Context, item: &MaybeUninit<T>,
+    o_waker: &mut Option<SendWaker<T>>, sink: bool,
+) -> Poll<Result<(), ()>> {
+    let flavor = &*(ptr as *const F);
+    AsyncTx::<T>::_poll_send::<F>(shared, flavor, ctx, item, o_waker, sink)
+}
+
+#[inline]
+unsafe fn poll_item_shim<F: FlavorImpl<T>, T: Send + 'static>(
+    shared: &ChannelShared<T>, ptr: *const (), ctx: &mut Context, o_waker: &mut Option<RecvWaker>,
+    stream: bool,
+) -> Result<T, TryRecvError> {
+    let flavor = &*(ptr as *const F);
+    AsyncRx::<T>::_poll_item::<F>(shared, flavor, ctx, o_waker, stream)
+}
+
+#[inline]
+unsafe fn is_empty_shim<F: FlavorImpl<T>, T: Send + 'static>(ptr: *const ()) -> bool {
+    let flavor = &*(ptr as *const F);
+    F::is_empty(flavor)
 }

@@ -9,7 +9,7 @@ mod one;
 pub(crate) use one::*;
 
 #[enum_dispatch::enum_dispatch]
-pub(crate) trait FlavorImpl<T> {
+pub(crate) trait FlavorImpl<T: Send + 'static>: Send + Sync + 'static {
     fn len(&self) -> usize;
 
     fn capacity(&self) -> Option<usize>;
@@ -42,9 +42,14 @@ pub(crate) trait FlavorImpl<T> {
     fn may_direct_copy(&self) -> bool {
         false
     }
+
+    #[inline(always)]
+    fn get_ptr(&self) -> *const () {
+        self as *const Self as *const ()
+    }
 }
 
-pub(crate) trait FlavorPrivate<T> {
+pub(crate) trait FlavorPrivate<T: Send + 'static> {
     fn to_flavor(self) -> Flavor<T>;
 
     fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T>;
@@ -53,7 +58,7 @@ pub(crate) trait FlavorPrivate<T> {
 }
 
 #[enum_dispatch::enum_dispatch(FlavorImpl<T>)]
-pub enum Flavor<T> {
+pub enum Flavor<T: Send + 'static> {
     ArrayMPMC(Array<T, true, true>),
     ArraySPSC(Array<T, false, false>),
     List(List<T>),
