@@ -53,13 +53,14 @@ use std::task::{Context, Poll};
 ///     drop(tx);
 /// }
 /// ```
+#[repr(C)]
 pub struct AsyncRx<T: Send + 'static> {
     pub(crate) shared: Arc<ChannelShared<T>>,
+    flavor: *const (),
+    _poll_item: PollItemFunc<T>,
+    _try_recv: TryRecvFunc<T>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
-    flavor: *const (),
-    _try_recv: TryRecvFunc<T>,
-    _poll_item: PollItemFunc<T>,
 }
 
 unsafe impl<T: Send> Send for AsyncRx<T> {}

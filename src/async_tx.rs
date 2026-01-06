@@ -52,13 +52,14 @@ use std::task::{Context, Poll};
 ///     drop(rx);
 /// }
 /// ```
+#[repr(C)]
 pub struct AsyncTx<T: Send + 'static> {
     pub(crate) shared: Arc<ChannelShared<T>>,
+    flavor: *const (),
+    _poll_send: PollSendFunc<T>,
+    _try_send: TrySendFunc<T>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
-    flavor: *const (),
-    _try_send: TrySendFunc<T>,
-    _poll_send: PollSendFunc<T>,
 }
 
 impl<T: Send + 'static> fmt::Debug for AsyncTx<T> {

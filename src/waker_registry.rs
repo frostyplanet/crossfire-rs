@@ -174,17 +174,17 @@ impl<T: Send + 'static> RegistrySender<T> {
                                 WakerState::Woken as u8
                             }
                         })
-                    }
-                    , "tx");
+                    },
+                    "tx",
+                );
             }
             Self::Single(inner) => {
                 inner.fire("tx");
-            },
-            _ => {},
+            }
+            _ => {}
         }
         return WakeResult::Next;
     }
-
 
     #[inline(always)]
     pub fn fire(&self) {
@@ -195,7 +195,7 @@ impl<T: Send + 'static> RegistrySender<T> {
             Self::Single(inner) => {
                 inner.fire("tx");
             }
-            _ => {},
+            _ => {}
         }
     }
 

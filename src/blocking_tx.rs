@@ -183,7 +183,7 @@ impl<T: Send + 'static> Tx<T> {
                         }
                         Err(_) => {
                             if shared.abandon_send_waker(&mut o_waker) {
-                                return Err(false)
+                                return Err(false);
                             } else {
                                 // NOTE: Unlikely since we disable direct copy with deadline
                                 // state is WakerState::Done
@@ -211,7 +211,7 @@ impl<T: Send + 'static> Tx<T> {
                 return_ok!();
             } else {
                 debug_assert_eq!(state, WakerState::Closed as u8);
-                return Err(true)
+                return Err(true);
             }
         }
     }
