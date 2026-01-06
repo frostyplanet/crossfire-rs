@@ -9,30 +9,27 @@ use std::task::*;
 /// Constructed by [AsyncRx::into_stream()](crate::AsyncRx::into_stream())
 ///
 /// Implements `futures_core::stream::Stream`.
-pub struct AsyncStream<T> {
-    rx: AsyncRx<T>,
+pub struct AsyncStream<F: Flavor> {
+    rx: AsyncRx<F>,
     waker: Option<RecvWaker>,
     ended: bool,
 }
 
-impl<T> fmt::Debug for AsyncStream<T> {
+impl<F: Flavor> fmt::Debug for AsyncStream<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncStream")
     }
 }
 
-impl<T> fmt::Display for AsyncStream<T> {
+impl<F: Flavor> fmt::Display for AsyncStream<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncStream")
     }
 }
 
-impl<T> AsyncStream<T>
-where
-    T: Unpin + Send + 'static,
-{
+impl<F: Flavor> AsyncStream<F> {
     #[inline(always)]
-    pub fn new(rx: AsyncRx<T>) -> Self {
+    pub fn new(rx: AsyncRx<F>) -> Self {
         Self { rx, waker: None, ended: false }
     }
 
@@ -61,8 +58,8 @@ where
     ///
     /// Returns Err([TryRecvError::Disconnected]) if all `Tx` have been dropped and the channel is empty.
     #[inline]
-    pub fn poll_item(&mut self, ctx: &mut Context) -> Poll<Option<T>> {
-        match self.rx.poll_item(ctx, &mut self.waker, true) {
+    pub fn poll_item(&mut self, ctx: &mut Context) -> Poll<Option<F::Item>> {
+        match self.rx.poll_item::<true>(ctx, &mut self.waker) {
             Ok(item) => Poll::Ready(Some(item)),
             Err(e) => {
                 if e.is_empty() {
@@ -75,8 +72,8 @@ where
     }
 }
 
-impl<T> Deref for AsyncStream<T> {
-    type Target = AsyncRx<T>;
+impl<F: Flavor> Deref for AsyncStream<F> {
+    type Target = AsyncRx<F>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -84,11 +81,8 @@ impl<T> Deref for AsyncStream<T> {
     }
 }
 
-impl<T> stream::Stream for AsyncStream<T>
-where
-    T: Unpin + Send + 'static,
-{
-    type Item = T;
+impl<F: Flavor> stream::Stream for AsyncStream<F> {
+    type Item = F::Item;
 
     #[inline(always)]
     fn poll_next(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Option<Self::Item>> {
@@ -96,7 +90,7 @@ where
         if _self.ended {
             return Poll::Ready(None);
         }
-        match _self.rx.poll_item(ctx, &mut _self.waker, false) {
+        match _self.rx.poll_item::<false>(ctx, &mut _self.waker) {
             Ok(item) => Poll::Ready(Some(item)),
             Err(e) => {
                 if e.is_empty() {
@@ -109,16 +103,13 @@ where
     }
 }
 
-impl<T> stream::FusedStream for AsyncStream<T>
-where
-    T: Unpin + Send + 'static,
-{
+impl<F: Flavor> stream::FusedStream for AsyncStream<F> {
     fn is_terminated(&self) -> bool {
         self.ended
     }
 }
 
-impl<T> Drop for AsyncStream<T> {
+impl<F: Flavor> Drop for AsyncStream<F> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             self.rx.shared.abandon_recv_waker(waker);
@@ -126,16 +117,16 @@ impl<T> Drop for AsyncStream<T> {
     }
 }
 
-impl<T: Unpin + Send + 'static> From<AsyncRx<T>> for AsyncStream<T> {
+impl<F: Flavor> From<AsyncRx<F>> for AsyncStream<F> {
     #[inline]
-    fn from(rx: AsyncRx<T>) -> Self {
+    fn from(rx: AsyncRx<F>) -> Self {
         rx.into_stream()
     }
 }
 
-impl<T: Unpin + Send + 'static> From<MAsyncRx<T>> for AsyncStream<T> {
+impl<F: Flavor> From<MAsyncRx<F>> for AsyncStream<F> {
     #[inline]
-    fn from(rx: MAsyncRx<T>) -> Self {
+    fn from(rx: MAsyncRx<F>) -> Self {
         rx.into_stream()
     }
 }

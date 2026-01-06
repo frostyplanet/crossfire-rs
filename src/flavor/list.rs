@@ -1,5 +1,4 @@
-use super::{Flavor, FlavorImpl, FlavorPrivate};
-use crate::waker_registry::*;
+use super::{Flavor, FlavorMC, FlavorMP};
 use crossbeam_queue::SegQueue;
 use std::mem::MaybeUninit;
 
@@ -12,7 +11,9 @@ impl<T> List<T> {
     }
 }
 
-impl<T> FlavorImpl<T> for List<T> {
+impl<T: Send + 'static + Unpin> Flavor for List<T> {
+    type Item = T;
+
     #[inline(always)]
     fn len(&self) -> usize {
         self.0.len()
@@ -34,7 +35,7 @@ impl<T> FlavorImpl<T> for List<T> {
     }
 
     #[inline(always)]
-    fn try_send(&self, item: &MaybeUninit<T>) -> bool {
+    fn try_send(&self, item: &MaybeUninit<Self::Item>) -> bool {
         self.0.push(unsafe { item.assume_init_read() });
         true
     }
@@ -55,23 +56,5 @@ impl<T> FlavorImpl<T> for List<T> {
     }
 }
 
-impl<T> FlavorPrivate<T> for List<T> {
-    #[inline]
-    fn to_flavor(self) -> Flavor<T> {
-        Flavor::List(self)
-    }
-
-    #[inline]
-    fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T> {
-        RegistrySender::<T>::Dummy
-    }
-
-    #[inline]
-    fn new_reg_recv<const MC: bool>(&self) -> RegistryRecv {
-        if MC {
-            RegistryRecv::new_multi()
-        } else {
-            RegistryRecv::new_single()
-        }
-    }
-}
+impl<T> FlavorMP for List<T> {}
+impl<T> FlavorMC for List<T> {}

@@ -1,6 +1,5 @@
-use super::{Flavor, FlavorImpl, FlavorPrivate};
+use super::{Flavor, FlavorBounded, FlavorMC, FlavorMP};
 use crate::crossbeam::array_queue::ArrayQueue;
-use crate::waker_registry::*;
 use std::mem::MaybeUninit;
 
 pub struct Array<T, const MP: bool, const MC: bool>(ArrayQueue<T, MP, MC>);
@@ -15,7 +14,9 @@ impl<T, const MP: bool, const MC: bool> Array<T, MP, MC> {
     }
 }
 
-impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
+impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Flavor for Array<T, MP, MC> {
+    type Item = T;
+
     #[inline(always)]
     fn len(&self) -> usize {
         self.0.len()
@@ -37,22 +38,22 @@ impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
     }
 
     #[inline(always)]
-    fn try_send(&self, item: &MaybeUninit<T>) -> bool {
+    fn try_send(&self, item: &MaybeUninit<Self::Item>) -> bool {
         return unsafe { self.0.push_with_ptr(item.as_ptr()) };
     }
 
     #[inline(always)]
-    fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
+    fn try_send_oneshot(&self, item: *const Self::Item) -> Option<bool> {
         return unsafe { self.0.try_push_oneshot(item) };
     }
 
     #[inline(always)]
-    fn try_recv(&self) -> Option<T> {
+    fn try_recv(&self) -> Option<Self::Item> {
         self.0.pop(false)
     }
 
     #[inline]
-    fn try_recv_final(&self) -> Option<T> {
+    fn try_recv_final(&self) -> Option<Self::Item> {
         self.0.pop(true)
     }
 
@@ -86,43 +87,16 @@ impl<T, const MP: bool, const MC: bool> FlavorImpl<T> for Array<T, MP, MC> {
     }
 }
 
-impl<T> FlavorPrivate<T> for Array<T, true, true> {
+impl<T: Send + Unpin + 'static, const MP: bool, const MC: bool> FlavorBounded for Array<T, MP, MC> {
     #[inline]
-    fn to_flavor(self) -> Flavor<T> {
-        Flavor::ArrayMPMC(self)
-    }
-
-    #[inline]
-    fn new_reg_sender<const _MP: bool>(&self) -> RegistrySender<T> {
-        debug_assert_eq!(_MP, true);
-        RegistrySender::<T>::new_multi()
-    }
-
-    #[inline]
-    fn new_reg_recv<const _MC: bool>(&self) -> RegistryRecv {
-        if _MC {
-            RegistryRecv::new_multi()
-        } else {
-            RegistryRecv::new_single()
+    fn new_with_bound(mut size: usize) -> Self {
+        if size < 1 {
+            size = 1;
         }
+        Self::new(size)
     }
 }
 
-impl<T> FlavorPrivate<T> for Array<T, false, false> {
-    #[inline]
-    fn to_flavor(self) -> Flavor<T> {
-        Flavor::ArraySPSC(self)
-    }
-
-    #[inline]
-    fn new_reg_sender<const _MP: bool>(&self) -> RegistrySender<T> {
-        debug_assert_eq!(_MP, false);
-        RegistrySender::<T>::new_single()
-    }
-
-    #[inline]
-    fn new_reg_recv<const _MC: bool>(&self) -> RegistryRecv {
-        debug_assert_eq!(_MC, false);
-        RegistryRecv::new_single()
-    }
-}
+impl<T> FlavorMP for Array<T, true, false> {}
+impl<T> FlavorMP for Array<T, true, true> {}
+impl<T> FlavorMC for Array<T, true, true> {}

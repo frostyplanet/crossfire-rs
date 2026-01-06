@@ -1,4 +1,3 @@
-use crate::waker_registry::*;
 use std::mem::MaybeUninit;
 
 mod array;
@@ -8,8 +7,9 @@ pub(crate) use list::*;
 mod one;
 pub(crate) use one::*;
 
-#[enum_dispatch::enum_dispatch]
-pub(crate) trait FlavorImpl<T> {
+pub trait Flavor: Send + 'static {
+    type Item: Send + 'static + Unpin;
+
     fn len(&self) -> usize;
 
     fn capacity(&self) -> Option<usize>;
@@ -18,17 +18,17 @@ pub(crate) trait FlavorImpl<T> {
 
     fn is_empty(&self) -> bool;
 
-    fn try_send(&self, item: &MaybeUninit<T>) -> bool;
+    fn try_send(&self, item: &MaybeUninit<Self::Item>) -> bool;
 
     #[inline]
-    fn try_send_oneshot(&self, _item: *const T) -> Option<bool> {
+    fn try_send_oneshot(&self, _item: *const Self::Item) -> Option<bool> {
         unimplemented!()
     }
 
-    fn try_recv(&self) -> Option<T>;
+    fn try_recv(&self) -> Option<Self::Item>;
 
     #[inline(always)]
-    fn try_recv_final(&self) -> Option<T> {
+    fn try_recv_final(&self) -> Option<Self::Item> {
         if !self.is_empty() {
             self.try_recv()
         } else {
@@ -44,21 +44,12 @@ pub(crate) trait FlavorImpl<T> {
     }
 }
 
-pub(crate) trait FlavorPrivate<T> {
-    fn to_flavor(self) -> Flavor<T>;
-
-    fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T>;
-
-    fn new_reg_recv<const MC: bool>(&self) -> RegistryRecv;
+pub trait FlavorBounded: Flavor {
+    fn new_with_bound(size: usize) -> Self;
 }
 
-#[enum_dispatch::enum_dispatch(FlavorImpl<T>)]
-pub enum Flavor<T> {
-    ArrayMPMC(Array<T, true, true>),
-    ArraySPSC(Array<T, false, false>),
-    List(List<T>),
-    One(OneSize<T>),
-}
+pub trait FlavorMP {}
+pub trait FlavorMC {}
 
 #[cfg(test)]
 mod tests {
@@ -67,8 +58,8 @@ mod tests {
 
     #[test]
     fn print_flavor_size() {
-        println!("Flavor size {}", size_of::<Flavor<usize>>());
-        println!("one size {}", size_of::<OneSize<usize>>());
+        //        println!("Flavor size {}", size_of::<Flavor<usize>>());
+        println!("one size {}", size_of::<One<usize>>());
         println!("array size {}", size_of::<Array<usize, true, true>>());
         println!("list size {}", size_of::<List<usize>>());
     }

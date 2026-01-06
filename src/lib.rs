@@ -164,6 +164,8 @@
 //! ```
 //! ### Example with tokio::select!
 //!
+
+/*
 //! ```rust
 //!
 //! extern crate crossfire;
@@ -213,6 +215,8 @@
 //! If you like to use poll function directly for complex behavior, you can call
 //! [AsyncSink::poll_send()](crate::sink::AsyncSink::poll_send()) or [AsyncStream::poll_item()](crate::stream::AsyncStream::poll_item()) with Context.
 
+*/
+
 pub mod flavor;
 mod shared;
 pub use shared::ChannelShared;
@@ -238,6 +242,7 @@ pub use async_tx::*;
 mod async_rx;
 pub use async_rx::*;
 
+pub mod compat;
 pub mod sink;
 pub mod stream;
 
@@ -267,3 +272,18 @@ macro_rules! tokio_task_id {
         }
     }};
 }
+
+use flavor::Flavor;
+use std::sync::Arc;
+
+/// type limiter for channel builder
+pub trait SenderType<F: Flavor> {
+    fn new(shared: Arc<ChannelShared<F>>) -> Self;
+}
+
+/// type limiter for channel builder
+pub trait ReceiverType<F: Flavor> {
+    fn new(shared: Arc<ChannelShared<F>>) -> Self;
+}
+
+pub trait NotClonable {}

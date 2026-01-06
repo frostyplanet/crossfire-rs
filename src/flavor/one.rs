@@ -1,6 +1,5 @@
-use super::{Flavor, FlavorImpl, FlavorPrivate};
+use super::{Flavor, FlavorBounded, FlavorMC, FlavorMP};
 use crate::backoff::*;
-use crate::waker_registry::*;
 use core::cell::UnsafeCell;
 use core::mem::{needs_drop, MaybeUninit};
 use core::ptr;
@@ -11,17 +10,17 @@ use core::sync::atomic::{
 use crossbeam_utils::CachePadded;
 
 /// A simplify ArrayQueue specialized for size=1
-pub struct OneSize<T> {
+pub struct One<T> {
     pos: CachePadded<AtomicU32>,
 
     /// The value in this slot.
     slots: [Slot<T>; 2],
 }
 
-unsafe impl<T: Send> Sync for OneSize<T> {}
-unsafe impl<T: Send> Send for OneSize<T> {}
+unsafe impl<T: Send> Sync for One<T> {}
+unsafe impl<T: Send> Send for One<T> {}
 
-impl<T> OneSize<T> {
+impl<T> One<T> {
     #[inline]
     pub fn new() -> Self {
         Self { pos: CachePadded::new(AtomicU32::new(0)), slots: [Slot::init(0), Slot::init(1)] }
@@ -143,7 +142,7 @@ impl<T> Slot<T> {
     }
 }
 
-impl<T> Drop for OneSize<T> {
+impl<T> Drop for One<T> {
     fn drop(&mut self) {
         if needs_drop::<T>() {
             let pos = *self.pos.get_mut();
@@ -156,7 +155,9 @@ impl<T> Drop for OneSize<T> {
     }
 }
 
-impl<T> FlavorImpl<T> for OneSize<T> {
+impl<T: Send + 'static + Unpin> Flavor for One<T> {
+    type Item = T;
+
     #[inline(always)]
     fn len(&self) -> usize {
         if self.is_full() {
@@ -210,27 +211,13 @@ impl<T> FlavorImpl<T> for OneSize<T> {
     }
 }
 
-impl<T> FlavorPrivate<T> for OneSize<T> {
+impl<T: Send + Unpin + 'static> FlavorBounded for One<T> {
     #[inline]
-    fn to_flavor(self) -> Flavor<T> {
-        Flavor::One(self)
-    }
-
-    #[inline]
-    fn new_reg_sender<const MP: bool>(&self) -> RegistrySender<T> {
-        if MP {
-            RegistrySender::<T>::new_multi()
-        } else {
-            RegistrySender::<T>::new_single()
-        }
-    }
-
-    #[inline]
-    fn new_reg_recv<const MC: bool>(&self) -> RegistryRecv {
-        if MC {
-            RegistryRecv::new_multi()
-        } else {
-            RegistryRecv::new_single()
-        }
+    fn new_with_bound(size: usize) -> Self {
+        assert_eq!(size, 1);
+        Self::new()
     }
 }
+
+impl<T> FlavorMP for One<T> {}
+impl<T> FlavorMC for One<T> {}

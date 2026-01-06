@@ -7,32 +7,32 @@ use std::ops::Deref;
 use std::task::*;
 
 /// An async sink that allows you to write custom futures with `poll_send(ctx)`.
-pub struct AsyncSink<T> {
-    tx: AsyncTx<T>,
-    waker: Option<SendWaker<T>>,
+pub struct AsyncSink<F: Flavor> {
+    tx: AsyncTx<F>,
+    waker: Option<SendWaker<F::Item>>,
 }
 
-impl<T> fmt::Debug for AsyncSink<T> {
+impl<F: Flavor> fmt::Debug for AsyncSink<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncSink")
     }
 }
 
-impl<T> fmt::Display for AsyncSink<T> {
+impl<F: Flavor> fmt::Display for AsyncSink<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncSink")
     }
 }
 
-impl<T> AsyncSink<T> {
+impl<F: Flavor> AsyncSink<F> {
     #[inline]
-    pub fn new(tx: AsyncTx<T>) -> Self {
+    pub fn new(tx: AsyncTx<F>) -> Self {
         Self { tx, waker: None }
     }
 }
 
-impl<T> Deref for AsyncSink<T> {
-    type Target = AsyncTx<T>;
+impl<F: Flavor> Deref for AsyncSink<F> {
+    type Target = AsyncTx<F>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -40,21 +40,21 @@ impl<T> Deref for AsyncSink<T> {
     }
 }
 
-impl<T: Unpin + Send + 'static> From<AsyncTx<T>> for AsyncSink<T> {
+impl<F: Flavor> From<AsyncTx<F>> for AsyncSink<F> {
     #[inline]
-    fn from(tx: AsyncTx<T>) -> Self {
+    fn from(tx: AsyncTx<F>) -> Self {
         tx.into_sink()
     }
 }
 
-impl<T: Unpin + Send + 'static> From<MAsyncTx<T>> for AsyncSink<T> {
+impl<F: Flavor> From<MAsyncTx<F>> for AsyncSink<F> {
     #[inline]
-    fn from(tx: MAsyncTx<T>) -> Self {
+    fn from(tx: MAsyncTx<F>) -> Self {
         tx.into_sink()
     }
 }
 
-impl<T: Send + Unpin + 'static> AsyncSink<T> {
+impl<F: Flavor> AsyncSink<F> {
     /// `poll_send()` will try to send a message.
     /// If the channel is full, it will register a notification for the next poll.
     ///
@@ -80,14 +80,16 @@ impl<T: Send + Unpin + 'static> AsyncSink<T> {
     ///
     /// Returns `Err([crate::TrySendError::Disconnected])` when all `Rx` are dropped.
     #[inline]
-    pub fn poll_send(&mut self, ctx: &mut Context, item: T) -> Result<(), TrySendError<T>> {
+    pub fn poll_send(
+        &mut self, ctx: &mut Context, item: F::Item,
+    ) -> Result<(), TrySendError<F::Item>> {
         let _item = MaybeUninit::new(item);
         let shared = &self.tx.shared;
         if shared.inner.try_send(&_item) {
             shared.on_send();
             return Ok(());
         }
-        match self.tx.poll_send(ctx, &_item, &mut self.waker, true) {
+        match self.tx.poll_send::<true>(ctx, &_item, &mut self.waker) {
             Poll::Ready(Ok(())) => Ok(()),
             Poll::Ready(Err(())) => Err(TrySendError::Disconnected(unsafe { _item.assume_init() })),
             Poll::Pending => Err(TrySendError::Full(unsafe { _item.assume_init() })),
@@ -95,7 +97,7 @@ impl<T: Send + Unpin + 'static> AsyncSink<T> {
     }
 }
 
-impl<T> Drop for AsyncSink<T> {
+impl<F: Flavor> Drop for AsyncSink<F> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             self.tx.shared.abandon_send_waker(waker);

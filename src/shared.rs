@@ -1,6 +1,6 @@
 use crate::backoff::*;
 pub(crate) use crate::crossbeam::err::*;
-pub(crate) use crate::flavor::*;
+pub(crate) use crate::flavor::Flavor;
 pub(crate) use crate::locked_waker::*;
 use crate::trace_log;
 pub(crate) use crate::waker_registry::*;
@@ -9,20 +9,20 @@ use std::sync::atomic::{fence, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub struct ChannelShared<T> {
-    pub(crate) inner: Flavor<T>,
+pub struct ChannelShared<F: Flavor> {
+    pub(crate) inner: F,
     tx_count: AtomicUsize,
     rx_count: AtomicUsize,
-    pub(crate) senders: RegistrySender<T>,
+    pub(crate) senders: RegistrySender<F::Item>,
     pub(crate) recvs: RegistryRecv,
     pub(crate) backoff_limit: u16,
     pub(crate) large: bool,
     pub(crate) may_direct_copy: bool,
 }
 
-impl<T> ChannelShared<T> {
+impl<F: Flavor> ChannelShared<F> {
     pub(crate) fn new(
-        inner: Flavor<T>, senders: RegistrySender<T>, recvs: RegistryRecv,
+        inner: F, senders: RegistrySender<F::Item>, recvs: RegistryRecv,
     ) -> Arc<Self> {
         let mut large = false;
         if let Some(bound) = inner.capacity() {
@@ -68,13 +68,13 @@ impl<T> ChannelShared<T> {
     /// Returns the number of senders for the channel.
     #[inline(always)]
     pub fn get_tx_count(&self) -> usize {
-        self.tx_count.load(Ordering::Acquire) as usize
+        self.tx_count.load(Ordering::SeqCst) as usize
     }
 
     /// Returns the number of receivers for the channel.
     #[inline(always)]
     pub fn get_rx_count(&self) -> usize {
-        self.rx_count.load(Ordering::Acquire) as usize
+        self.rx_count.load(Ordering::SeqCst) as usize
     }
 
     #[inline(always)]
@@ -147,9 +147,9 @@ impl<T> ChannelShared<T> {
     ///
     /// NOTE: when return state=Done, the waker is not set to Done
     #[inline]
-    pub(crate) fn sender_reg_and_try(
-        &self, item: &MaybeUninit<T>, waker: SendWaker<T>, sink: bool,
-    ) -> (u8, Option<SendWaker<T>>) {
+    pub(crate) fn sender_reg_and_try<const SINK: bool>(
+        &self, item: &MaybeUninit<F::Item>, waker: SendWaker<F::Item>,
+    ) -> (u8, Option<SendWaker<F::Item>>) {
         self.senders.reg_waker(&waker);
         // Not allow Spurious wake and enter this function again;
         if let Some(res) = self.inner.try_send_oneshot(item.as_ptr()) {
@@ -157,7 +157,7 @@ impl<T> ChannelShared<T> {
                 self.on_send();
                 return self.senders.cancel_reuse_waker(waker, WakerState::Done);
             } else {
-                if sink {
+                if SINK {
                     if self.is_rx_closed() {
                         return (WakerState::Closed as u8, None);
                     } else {
@@ -183,7 +183,7 @@ impl<T> ChannelShared<T> {
     /// Wait a little more for the waker state change,
     /// NOTE: it's important to yield when you have more sender than receiver
     #[inline(always)]
-    pub(crate) fn sender_snooze(&self, waker: &SendWaker<T>, backoff: &mut Backoff) -> u8 {
+    pub(crate) fn sender_snooze(&self, waker: &SendWaker<F::Item>, backoff: &mut Backoff) -> u8 {
         backoff.reset();
         loop {
             let state = waker.get_state_relaxed();
@@ -211,8 +211,8 @@ impl<T> ChannelShared<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn on_recv_try_send(&self, waker: &WakerInner<*const T>) -> WakeResult {
-        waker.wake_or_copy(|p: *const T| -> u8 {
+    pub(crate) fn on_recv_try_send(&self, waker: &WakerInner<*const F::Item>) -> WakeResult {
+        waker.wake_or_copy(|p: *const F::Item| -> u8 {
             if let Some(true) = self.inner.try_send_oneshot(p) {
                 WakerState::Done as u8
             } else {
@@ -224,7 +224,7 @@ impl<T> ChannelShared<T> {
     /// Call on cancellation, return true to indicate drop temporary message
     /// return false to indicate already Done.
     #[inline(always)]
-    pub(crate) fn abandon_send_waker(&self, waker: SendWaker<T>) -> bool {
+    pub(crate) fn abandon_send_waker(&self, waker: SendWaker<F::Item>) -> bool {
         match waker.abandon() {
             Ok(()) => {
                 trace_log!("tx: abandon cancel {:?}", waker);
