@@ -1,6 +1,6 @@
 use crate::*;
 use captains_log::{logfn, *};
-use crossfire::*;
+use crossfire::compat::*;
 use rstest::*;
 use std::time::Duration;
 

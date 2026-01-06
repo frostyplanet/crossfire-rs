@@ -1,6 +1,6 @@
 use crate::*;
 use captains_log::{logfn, *};
-use crossfire::*;
+use crossfire::compat::*;
 use rstest::*;
 use std::sync::Arc;
 use std::thread;
@@ -36,8 +36,8 @@ fn test_basic_bounded_empty_full_drop_rx<T: BlockingTxTrait<usize>, R: BlockingR
         assert_eq!(rx.is_disconnected(), false);
         drop(rx);
         assert_eq!(tx.is_disconnected(), true);
-        assert_eq!(tx.as_ref().get_rx_count(), 0);
-        assert_eq!(tx.as_ref().get_tx_count(), 1);
+        assert_eq!(tx.get_rx_count(), 0);
+        assert_eq!(tx.get_tx_count(), 1);
         assert_eq!(tx.try_send(2).unwrap_err(), TrySendError::Disconnected(2));
         assert_eq!(tx.send(2).unwrap_err(), SendError(2));
         let start = Instant::now();
@@ -72,8 +72,8 @@ fn test_basic_bounded_empty_full_drop_tx<T: BlockingTxTrait<usize>, R: BlockingR
         assert_eq!(rx.is_disconnected(), false);
         drop(tx);
         assert_eq!(rx.is_disconnected(), true);
-        assert_eq!(rx.as_ref().get_tx_count(), 0);
-        assert_eq!(rx.as_ref().get_rx_count(), 1);
+        assert_eq!(rx.get_tx_count(), 0);
+        assert_eq!(rx.get_rx_count(), 1);
         assert_eq!(rx.try_recv().unwrap(), 1);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Disconnected);
         assert_eq!(rx.recv().unwrap_err(), RecvError);
@@ -107,8 +107,8 @@ fn test_basic_unbounded_empty_drop_rx<T: BlockingTxTrait<usize>, R: BlockingRxTr
         assert_eq!(rx.is_disconnected(), false);
         drop(rx);
         assert_eq!(tx.is_disconnected(), true);
-        assert_eq!(tx.as_ref().get_rx_count(), 0);
-        assert_eq!(tx.as_ref().get_tx_count(), 1);
+        assert_eq!(tx.get_rx_count(), 0);
+        assert_eq!(tx.get_tx_count(), 1);
         assert_eq!(tx.try_send(2).unwrap_err(), TrySendError::Disconnected(2));
         assert_eq!(tx.send(2).unwrap_err(), SendError(2));
         let start = Instant::now();
@@ -139,8 +139,8 @@ fn test_basic_unbounded_empty_drop_tx<T: BlockingTxTrait<usize>, R: BlockingRxTr
         assert_eq!(rx.is_disconnected(), false);
         drop(tx);
         assert_eq!(rx.is_disconnected(), true);
-        assert_eq!(rx.as_ref().get_tx_count(), 0);
-        assert_eq!(rx.as_ref().get_rx_count(), 1);
+        assert_eq!(rx.get_tx_count(), 0);
+        assert_eq!(rx.get_rx_count(), 1);
         assert_eq!(rx.recv().unwrap(), 1);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Disconnected);
         assert_eq!(rx.recv().unwrap_err(), RecvError);
@@ -492,7 +492,7 @@ fn test_pressure_bounded_timeout_blocking(
             rx.recv_timeout(Duration::from_millis(1)).unwrap_err(),
             RecvTimeoutError::Timeout
         );
-        let (tx_wakers, rx_wakers) = rx.as_ref().get_wakers_count();
+        let (tx_wakers, rx_wakers) = rx.get_wakers_count();
         println!("wakers: {}, {}", tx_wakers, rx_wakers);
         assert_eq!(tx_wakers, 0);
         assert_eq!(rx_wakers, 0);

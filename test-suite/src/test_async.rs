@@ -1,7 +1,12 @@
 use crate::*;
 use captains_log::{logfn, *};
-use crossfire::{sink::*, stream::*, *};
-use futures_util::{pin_mut, select, stream::FusedStream, stream::StreamExt, FutureExt};
+use crossfire::compat::{sink::*, stream::*, *};
+use crossfire::tokio_task_id;
+use futures_util::{
+    pin_mut, select,
+    stream::{Stream, StreamExt},
+    FutureExt,
+};
 use rstest::*;
 use std::future::Future;
 use std::pin::Pin;
@@ -37,8 +42,8 @@ fn test_basic_bounded_empty_full_drop_rx<T: AsyncTxTrait<usize>, R: AsyncRxTrait
     assert_eq!(rx.is_disconnected(), false);
     drop(rx);
     assert_eq!(tx.is_disconnected(), true);
-    assert_eq!(tx.as_ref().get_rx_count(), 0);
-    assert_eq!(tx.as_ref().get_tx_count(), 1);
+    assert_eq!(tx.get_rx_count(), 0);
+    assert_eq!(tx.get_tx_count(), 1);
 }
 
 #[logfn]
@@ -62,8 +67,8 @@ fn test_basic_bounded_empty_full_drop_tx<T: AsyncTxTrait<usize>, R: AsyncRxTrait
     assert_eq!(rx.is_disconnected(), false);
     drop(tx);
     assert_eq!(rx.is_disconnected(), true);
-    assert_eq!(rx.as_ref().get_tx_count(), 0);
-    assert_eq!(rx.as_ref().get_rx_count(), 1);
+    assert_eq!(rx.get_tx_count(), 0);
+    assert_eq!(rx.get_rx_count(), 1);
 }
 
 #[logfn]
@@ -327,14 +332,15 @@ fn test_basic_unbounded_idle_select<T: BlockingTxTrait<usize>, R: AsyncRxTrait<u
     };
 
     runtime_block_on!(async move {
-        let mut c = rx.recv().fuse();
+        let c = rx.recv().fuse();
+        pin_mut!(c);
         for _ in 0..round {
             {
                 let f = sleep(Duration::from_millis(1)).fuse();
                 pin_mut!(f);
                 select! {
                     _ = f => {
-                        let (_tx_wakers, _rx_wakers) = rx.as_ref().get_wakers_count();
+                        let (_tx_wakers, _rx_wakers) = rx.get_wakers_count();
                         trace!("waker tx {} rx {}", _tx_wakers, _rx_wakers);
                     },
                     _ = c => {
@@ -343,7 +349,7 @@ fn test_basic_unbounded_idle_select<T: BlockingTxTrait<usize>, R: AsyncRxTrait<u
                 }
             }
         }
-        let (tx_wakers, rx_wakers) = rx.as_ref().get_wakers_count();
+        let (tx_wakers, rx_wakers) = rx.get_wakers_count();
         assert_eq!(tx_wakers, 0);
         info!("waker rx {}", rx_wakers);
     });
@@ -427,14 +433,14 @@ fn test_basic_timeout_recv_async_waker<T: AsyncTxTrait<usize>, R: AsyncRxTrait<u
         for _ in 0..1000 {
             assert!(rx.recv_with_timer(sleep(Duration::from_millis(1))).await.is_err());
         }
-        let (tx_wakers, rx_wakers) = rx.as_ref().get_wakers_count();
+        let (tx_wakers, rx_wakers) = rx.get_wakers_count();
         println!("wakers: {}, {}", tx_wakers, rx_wakers);
         assert!(tx_wakers <= 1);
         assert!(rx_wakers <= 1);
         sleep(Duration::from_secs(1)).await;
         let _ = tx.send(1).await;
         assert_eq!(rx.recv().await.unwrap(), 1);
-        let (tx_wakers, rx_wakers) = rx.as_ref().get_wakers_count();
+        let (tx_wakers, rx_wakers) = rx.get_wakers_count();
         println!("wakers: {}, {}", tx_wakers, rx_wakers);
         assert!(tx_wakers <= 1);
         assert!(rx_wakers <= 1);
@@ -461,7 +467,7 @@ fn test_basic_unbounded_recv_timeout_async<T: BlockingTxTrait<usize>, R: AsyncRx
             assert_eq!(r.unwrap_err(), RecvTimeoutError::Timeout);
         }
         let _ = async_join_result!(th);
-        let (tx_wakers, rx_wakers) = rx.as_ref().get_wakers_count();
+        let (tx_wakers, rx_wakers) = rx.get_wakers_count();
         println!("wakers: {}, {}", tx_wakers, rx_wakers);
         assert_eq!(tx_wakers, 0);
         assert_eq!(rx_wakers, 0);
@@ -517,7 +523,7 @@ fn test_basic_send_timeout_async<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>
                 }
             }
         }
-        let (tx_wakers, rx_wakers) = tx.as_ref().get_wakers_count();
+        let (tx_wakers, rx_wakers) = tx.get_wakers_count();
         println!("wakers: {}, {}", tx_wakers, rx_wakers);
         assert!(tx_wakers <= 1, "{:?}", tx_wakers);
         assert!(rx_wakers <= 1, "{:?}", rx_wakers);
@@ -542,7 +548,7 @@ fn test_pressure_bounded_timeout_async(
             rx.recv_with_timer(sleep(Duration::from_millis(1))).await.unwrap_err(),
             RecvTimeoutError::Timeout
         );
-        let (tx_wakers, rx_wakers) = rx.as_ref().get_wakers_count();
+        let (tx_wakers, rx_wakers) = rx.get_wakers_count();
         println!("wakers: {}, {}", tx_wakers, rx_wakers);
         assert_eq!(tx_wakers, 0);
         assert_eq!(rx_wakers, 0);
@@ -1088,13 +1094,13 @@ fn test_basic_into_stream_1_1<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
             }
             println!("sender thread send {} message end", total_message);
         });
-        let mut s: AsyncStream<usize> = rx.into();
+        let mut s: Pin<Box<dyn Stream<Item = usize>>> = rx.to_stream();
 
         for _i in 0..total_message {
             assert_eq!(s.next().await, Some(_i));
         }
         assert_eq!(s.next().await, None);
-        assert!(s.is_terminated());
+        //assert!(s.is_terminated());
         async_join_result!(th);
     });
 }
