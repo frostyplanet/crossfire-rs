@@ -1,6 +1,7 @@
 use crate::*;
 use captains_log::{logfn, *};
-use crossfire::*;
+use crossfire::compat::*;
+use crossfire::tokio_task_id;
 use rstest::*;
 use std::thread;
 use std::time::*;
@@ -29,8 +30,8 @@ fn test_basic_bounded_empty_full_drop_rx<T: BlockingTxTrait<usize>, R: AsyncRxTr
     assert_eq!(rx.is_disconnected(), false);
     drop(rx);
     assert_eq!(tx.is_disconnected(), true);
-    assert_eq!(tx.as_ref().get_rx_count(), 0);
-    assert_eq!(tx.as_ref().get_tx_count(), 1);
+    assert_eq!(tx.get_rx_count(), 0);
+    assert_eq!(tx.get_tx_count(), 1);
 }
 
 #[logfn]
@@ -52,8 +53,8 @@ fn test_basic_bounded_empty_full_drop_tx<T: BlockingTxTrait<usize>, R: AsyncRxTr
     assert_eq!(rx.is_disconnected(), false);
     drop(tx);
     assert_eq!(rx.is_disconnected(), true);
-    assert_eq!(rx.as_ref().get_tx_count(), 0);
-    assert_eq!(rx.as_ref().get_rx_count(), 1);
+    assert_eq!(rx.get_tx_count(), 0);
+    assert_eq!(rx.get_rx_count(), 1);
 }
 
 #[logfn]
@@ -73,8 +74,8 @@ fn test_basic_unbounded_empty_drop_tx<T: BlockingTxTrait<usize>, R: AsyncRxTrait
     assert_eq!(rx.is_disconnected(), false);
     drop(tx);
     assert_eq!(rx.is_disconnected(), true);
-    assert_eq!(rx.as_ref().get_tx_count(), 0);
-    assert_eq!(rx.as_ref().get_rx_count(), 1);
+    assert_eq!(rx.get_tx_count(), 0);
+    assert_eq!(rx.get_rx_count(), 1);
 }
 
 #[logfn]
