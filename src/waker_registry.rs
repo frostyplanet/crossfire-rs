@@ -1,4 +1,5 @@
 use crate::collections::WeakCell;
+use crate::flavor::Flavor;
 use crate::locked_waker::*;
 use crate::shared::ChannelShared;
 #[cfg(feature = "trace_log")]
@@ -133,7 +134,7 @@ impl<T> RegistrySender<T> {
     }
 
     #[inline(always)]
-    pub fn fire(&self, shared: &ChannelShared<T>) -> WakeResult {
+    pub fn fire<F: Flavor<Item = T>>(&self, shared: &ChannelShared<F>) -> WakeResult {
         match self {
             Self::Multi(inner) => {
                 return inner.fire(|waker| shared.on_recv_try_send(waker), "tx");

@@ -165,7 +165,7 @@ impl<T> SendError<T> {
     /// ```
     /// use crossfire::mpmc;
     ///
-    /// let (s, r) = mpmc::bounded_blocking::<&str>(10);
+    /// let (s, r) = mpmc::Bounded::<&str>::new_blocking(10);
     /// drop(r);
     ///
     /// if let Err(err) = s.send("foo") {
@@ -213,7 +213,7 @@ impl<T> TrySendError<T> {
     /// ```
     /// use crossfire::mpmc;
     ///
-    /// let (s, r) = mpmc::bounded_blocking::<&str>(0);
+    /// let (s, r) = mpmc::Bounded::<&str>::new_blocking(0);
     ///
     /// if let Err(err) = s.try_send("foo") {
     ///     assert_eq!(err.into_inner(), "foo");
@@ -271,7 +271,7 @@ impl<T> SendTimeoutError<T> {
     /// use std::time::Duration;
     /// use crossfire::mpmc;
     ///
-    /// let (s, r) = mpmc::bounded_blocking::<&str>(10);
+    /// let (s, r) = mpmc::Bounded::<&str>::new_blocking(10);
     /// drop(r);
     ///
     /// if let Err(err) = s.send_timeout("foo", Duration::from_secs(1)) {

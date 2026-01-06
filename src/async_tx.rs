@@ -1,7 +1,7 @@
 use crate::sink::AsyncSink;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
-use crate::{shared::*, trace_log, MTx, Tx};
+use crate::{shared::*, trace_log, MTx, NotClonable, SenderType, Tx};
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -52,52 +52,52 @@ use std::task::{Context, Poll};
 ///     drop(rx);
 /// }
 /// ```
-pub struct AsyncTx<T> {
-    pub(crate) shared: Arc<ChannelShared<T>>,
+pub struct AsyncTx<F: Flavor> {
+    pub(crate) shared: Arc<ChannelShared<F>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
 }
 
-impl<T> fmt::Debug for AsyncTx<T> {
+impl<F: Flavor> fmt::Debug for AsyncTx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncTx")
     }
 }
 
-impl<T> fmt::Display for AsyncTx<T> {
+impl<F: Flavor> fmt::Display for AsyncTx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AsyncTx")
     }
 }
 
-unsafe impl<T: Send> Send for AsyncTx<T> {}
+unsafe impl<F: Flavor> Send for AsyncTx<F> {}
 
-impl<T> Drop for AsyncTx<T> {
+impl<F: Flavor> Drop for AsyncTx<F> {
     fn drop(&mut self) {
         self.shared.close_tx();
     }
 }
 
-impl<T> From<Tx<T>> for AsyncTx<T> {
-    fn from(value: Tx<T>) -> Self {
+impl<F: Flavor> From<Tx<F>> for AsyncTx<F> {
+    fn from(value: Tx<F>) -> Self {
         value.add_tx();
         Self::new(value.shared.clone())
     }
 }
 
-impl<T> AsyncTx<T> {
+impl<F: Flavor> AsyncTx<F> {
     #[inline]
-    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+    pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self { shared, _phan: Default::default() }
     }
 
     #[inline]
-    pub fn into_sink(self) -> AsyncSink<T> {
+    pub fn into_sink(self) -> AsyncSink<F> {
         AsyncSink::new(self)
     }
 
     #[inline]
-    pub fn into_blocking(self) -> Tx<T> {
+    pub fn into_blocking(self) -> Tx<F> {
         self.into()
     }
 
@@ -108,7 +108,7 @@ impl<T> AsyncTx<T> {
     }
 }
 
-impl<T: Unpin + Send + 'static> AsyncTx<T> {
+impl<F: Flavor> AsyncTx<F> {
     /// Sends a message. This method will await until the message is sent or the channel is closed.
     ///
     /// This function is cancellation-safe, so it's safe to use with `timeout()` and the `select!` macro.
@@ -120,7 +120,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     ///
     /// Returns Err([SendError]) if the receiver has been dropped.
     #[inline(always)]
-    pub fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
+    pub fn send<'a>(&'a self, item: F::Item) -> SendFuture<'a, F> {
         return SendFuture { tx: &self, item: MaybeUninit::new(item), waker: None };
     }
 
@@ -132,7 +132,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     ///
     /// Returns Err([TrySendError::Disconnected]) if the receiver has been dropped.
     #[inline]
-    pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
+    pub fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
         if self.shared.is_rx_closed() {
             return Err(TrySendError::Disconnected(item));
         }
@@ -159,8 +159,8 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
     #[inline]
     pub fn send_timeout<'a>(
-        &'a self, item: T, duration: std::time::Duration,
-    ) -> SendTimeoutFuture<'a, T, ()> {
+        &'a self, item: F::Item, duration: std::time::Duration,
+    ) -> SendTimeoutFuture<'a, F, ()> {
         let sleep = {
             #[cfg(feature = "tokio")]
             {
@@ -212,12 +212,14 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     /// }
     /// ```
     #[inline]
-    pub fn send_with_timer<'a, F, R>(&'a self, item: T, fut: F) -> SendTimeoutFuture<'a, T, R>
+    pub fn send_with_timer<'a, FR, R>(
+        &'a self, item: F::Item, fut: FR,
+    ) -> SendTimeoutFuture<'a, F, R>
     where
-        F: Future<Output = R> + 'static,
+        FR: Future<Output = R> + 'static,
     {
         SendTimeoutFuture {
-            tx: &self,
+            tx: self,
             item: MaybeUninit::new(item),
             waker: None,
             sleep: Box::pin(fut),
@@ -232,9 +234,9 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     ///
     /// Returns `Poll::Ready(Err(())` when all Rx dropped.
     #[inline(always)]
-    pub(crate) fn poll_send<'a>(
-        &self, ctx: &'a mut Context, item: &MaybeUninit<T>, o_waker: &'a mut Option<SendWaker<T>>,
-        sink: bool,
+    pub(crate) fn poll_send<'a, const SINK: bool>(
+        &self, ctx: &'a mut Context, item: &MaybeUninit<F::Item>,
+        o_waker: &'a mut Option<SendWaker<F::Item>>,
     ) -> Poll<Result<(), ()>> {
         let shared = &self.shared;
         if shared.is_rx_closed() {
@@ -271,7 +273,7 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                                 return Poll::Pending;
                             } else {
                                 // Spurious woken by runtime, waker can not be re-used (issue 38)
-                                self.senders.cancel_waker(waker);
+                                shared.senders.cancel_waker(waker);
                                 trace_log!("tx{:?}: drop waker {:?}", tokio_task_id!(), waker);
                                 let _ = o_waker.take();
                             }
@@ -296,10 +298,10 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
                 }
             }
             (state, *o_waker) = if let Some(waker) = o_waker.take() {
-                shared.sender_reg_and_try(item, waker, sink)
+                shared.sender_reg_and_try::<SINK>(item, waker)
             } else {
-                let waker = SendWaker::<T>::new_async(ctx, std::ptr::null_mut());
-                shared.sender_reg_and_try(item, waker, sink)
+                let waker = SendWaker::<F::Item>::new_async(ctx, std::ptr::null_mut());
+                shared.sender_reg_and_try::<SINK>(item, waker)
             };
             trace_log!("tx{:?}: sender_reg_and_try {:?} {}", tokio_task_id!(), o_waker, state);
             if state < WakerState::Woken as u8 {
@@ -322,22 +324,23 @@ impl<T: Unpin + Send + 'static> AsyncTx<T> {
     }
 }
 
-/// A fixed-sized future object constructed by [AsyncTx::make_send_future()]
+/// A fixed-sized future object constructed by [AsyncTx::send()]
 #[must_use]
-pub struct SendFuture<'a, T: Unpin> {
-    tx: &'a AsyncTx<T>,
-    item: MaybeUninit<T>,
-    waker: Option<SendWaker<T>>,
+pub struct SendFuture<'a, F: Flavor> {
+    tx: &'a AsyncTx<F>,
+    item: MaybeUninit<F::Item>,
+    waker: Option<SendWaker<F::Item>>,
 }
 
-unsafe impl<T: Unpin + Send> Send for SendFuture<'_, T> {}
+unsafe impl<F: Flavor> Send for SendFuture<'_, F> {}
 
-impl<T: Unpin> Drop for SendFuture<'_, T> {
+impl<F: Flavor> Drop for SendFuture<'_, F> {
+    #[inline]
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
             if self.tx.shared.abandon_send_waker(waker) {
-                if needs_drop::<T>() {
+                if needs_drop::<F::Item>() {
                     unsafe { self.item.assume_init_drop() };
                 }
             }
@@ -345,12 +348,13 @@ impl<T: Unpin> Drop for SendFuture<'_, T> {
     }
 }
 
-impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
-    type Output = Result<(), SendError<T>>;
+impl<F: Flavor> Future for SendFuture<'_, F> {
+    type Output = Result<(), SendError<F::Item>>;
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match _self.tx.poll_send(ctx, &_self.item, &mut _self.waker, false) {
+        match _self.tx.poll_send::<false>(ctx, &_self.item, &mut _self.waker) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
                 return Poll::Ready(Ok(()));
@@ -366,21 +370,22 @@ impl<T: Unpin + Send + 'static> Future for SendFuture<'_, T> {
 
 /// A fixed-sized future object constructed by [AsyncTx::send_timeout()]
 #[must_use]
-pub struct SendTimeoutFuture<'a, T: Unpin, R> {
-    tx: &'a AsyncTx<T>,
+pub struct SendTimeoutFuture<'a, F: Flavor, R> {
+    tx: &'a AsyncTx<F>,
     sleep: Pin<Box<dyn Future<Output = R>>>,
-    item: MaybeUninit<T>,
-    waker: Option<SendWaker<T>>,
+    item: MaybeUninit<F::Item>,
+    waker: Option<SendWaker<F::Item>>,
 }
 
-unsafe impl<T: Unpin + Send, R> Send for SendTimeoutFuture<'_, T, R> {}
+unsafe impl<F: Flavor, R> Send for SendTimeoutFuture<'_, F, R> {}
 
-impl<T: Unpin, R> Drop for SendTimeoutFuture<'_, T, R> {
+impl<F: Flavor, R> Drop for SendTimeoutFuture<'_, F, R> {
+    #[inline]
     fn drop(&mut self) {
         if let Some(waker) = self.waker.take() {
             // Cancelling the future, poll is not ready
             if self.tx.shared.abandon_send_waker(waker) {
-                if needs_drop::<T>() {
+                if needs_drop::<F::Item>() {
                     unsafe { self.item.assume_init_drop() };
                 }
             }
@@ -388,12 +393,13 @@ impl<T: Unpin, R> Drop for SendTimeoutFuture<'_, T, R> {
     }
 }
 
-impl<T: Unpin + Send + 'static, R> Future for SendTimeoutFuture<'_, T, R> {
-    type Output = Result<(), SendTimeoutError<T>>;
+impl<F: Flavor, R> Future for SendTimeoutFuture<'_, F, R> {
+    type Output = Result<(), SendTimeoutError<F::Item>>;
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match _self.tx.poll_send(ctx, &_self.item, &mut _self.waker, false) {
+        match _self.tx.poll_send::<false>(ctx, &_self.item, &mut _self.waker) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
                 return Poll::Ready(Ok(()));
@@ -427,7 +433,7 @@ impl<T: Unpin + Send + 'static, R> Future for SendTimeoutFuture<'_, T, R> {
 
 /// For writing generic code with MAsyncTx & AsyncTx
 pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
-    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>> + Into<AsyncSink<T>>
+    Send + 'static + fmt::Debug + fmt::Display
 {
     /// Try to send message, non-blocking
     ///
@@ -437,6 +443,115 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
     ///
     /// Returns Err([TrySendError::Disconnected]) when all Rx dropped.
     fn try_send(&self, item: T) -> Result<(), TrySendError<T>>;
+
+    /// The number of messages in the channel at the moment
+    fn len(&self) -> usize;
+
+    /// The capacity of the channel, return None for unbounded channel.
+    fn capacity(&self) -> Option<usize>;
+
+    /// Whether channel is empty at the moment
+    fn is_empty(&self) -> bool;
+
+    /// Whether the channel is full at the moment
+    fn is_full(&self) -> bool;
+
+    /// Return true if the other side has closed
+    fn is_disconnected(&self) -> bool;
+
+    /// Return the number of senders
+    fn get_tx_count(&self) -> usize;
+
+    /// Return the number of receivers
+    fn get_rx_count(&self) -> usize;
+
+    fn clone_to_vec(self, count: usize) -> Vec<Self>
+    where
+        Self: Sized;
+
+    fn get_wakers_count(&self) -> (usize, usize);
+
+    /// Send message. Will await when channel is full.
+    ///
+    /// Returns `Ok(())` on successful.
+    ///
+    /// Returns Err([SendError]) when all Rx is dropped.
+    fn send<'a>(&'a self, item: T) -> impl Future<Output = Result<(), SendError<T>>> + Send;
+
+    /// Waits for a message to be sent into the channel, but only for a limited time.
+    /// Will await when channel is full.
+    ///
+    /// The behavior is atomic, either message sent successfully or returned on error.
+    ///
+    /// Returns `Ok(())` when successful.
+    ///
+    /// Returns Err([SendTimeoutError::Timeout]) when the operation timed out.
+    ///
+    /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped.
+    #[cfg(any(feature = "tokio", feature = "async_std"))]
+    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
+    fn send_timeout<'a>(
+        &'a self, item: T, duration: std::time::Duration,
+    ) -> impl Future<Output = Result<(), SendTimeoutError<T>>> + Send;
+
+    /// Sends a message with a custom timer function.
+    /// Will await when channel is full.
+    ///
+    /// The behavior is atomic: the message is either sent successfully or returned with error.
+    ///
+    /// Returns `Ok(())` when successful.
+    ///
+    /// Returns Err([SendTimeoutError::Timeout]) if the operation timed out. The error contains the message that failed to be sent.
+    ///
+    /// Returns Err([SendTimeoutError::Disconnected]) if the receiver has been dropped. The error contains the message that failed to be sent.
+    ///
+    /// # Argument:
+    ///
+    /// * `fut`: The sleep function. It's possible to wrap this function with cancelable handle,
+    /// you can control when to stop polling. the return value of `fut` is ignore.
+    /// We add generic `R` just in order to support smol::Timer
+    fn send_with_timer<'a, FR, R>(
+        &'a self, item: T, fut: FR,
+    ) -> impl Future<Output = Result<(), SendTimeoutError<T>>> + Send
+    where
+        FR: Future<Output = R> + 'static + Send;
+}
+
+impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F> {
+    #[inline(always)]
+    fn clone_to_vec(self, count: usize) -> Vec<Self> {
+        assert_eq!(count, 1);
+        vec![self]
+    }
+
+    #[inline(always)]
+    fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
+        AsyncTx::try_send(self, item)
+    }
+
+    #[inline(always)]
+    fn send(&self, item: F::Item) -> impl Future<Output = Result<(), SendError<F::Item>>> + Send {
+        AsyncTx::send(self, item)
+    }
+
+    #[cfg(any(feature = "tokio", feature = "async_std"))]
+    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
+    #[inline(always)]
+    fn send_timeout<'a>(
+        &'a self, item: F::Item, duration: std::time::Duration,
+    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send {
+        AsyncTx::send_timeout(self, item, duration)
+    }
+
+    #[inline(always)]
+    fn send_with_timer<'a, FR, R>(
+        &'a self, item: F::Item, fut: FR,
+    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
+    where
+        FR: Future<Output = R> + 'static + Send,
+    {
+        AsyncTx::send_with_timer(self, item, fut)
+    }
 
     /// The number of messages in the channel at the moment
     #[inline(always)]
@@ -465,90 +580,21 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
     /// Return true if the other side has closed
     #[inline(always)]
     fn is_disconnected(&self) -> bool {
-        self.as_ref().is_rx_closed()
-    }
-
-    fn clone_to_vec(self, count: usize) -> Vec<Self>
-    where
-        Self: Sized;
-
-    /// Send message. Will await when channel is full.
-    ///
-    /// Returns `Ok(())` on successful.
-    ///
-    /// Returns Err([SendError]) when all Rx is dropped.
-    fn send<'a>(&'a self, item: T) -> SendFuture<'a, T>;
-
-    /// Waits for a message to be sent into the channel, but only for a limited time.
-    /// Will await when channel is full.
-    ///
-    /// The behavior is atomic, either message sent successfully or returned on error.
-    ///
-    /// Returns `Ok(())` when successful.
-    ///
-    /// Returns Err([SendTimeoutError::Timeout]) when the operation timed out.
-    ///
-    /// Returns Err([SendTimeoutError::Disconnected]) when all Rx dropped.
-    #[cfg(any(feature = "tokio", feature = "async_std"))]
-    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
-    fn send_timeout<'a>(
-        &'a self, item: T, duration: std::time::Duration,
-    ) -> SendTimeoutFuture<'a, T, ()>;
-
-    /// Sends a message with a custom timer function.
-    /// Will await when channel is full.
-    ///
-    /// The behavior is atomic: the message is either sent successfully or returned with error.
-    ///
-    /// Returns `Ok(())` when successful.
-    ///
-    /// Returns Err([SendTimeoutError::Timeout]) if the operation timed out. The error contains the message that failed to be sent.
-    ///
-    /// Returns Err([SendTimeoutError::Disconnected]) if the receiver has been dropped. The error contains the message that failed to be sent.
-    ///
-    /// # Argument:
-    ///
-    /// * `fut`: The sleep function. It's possible to wrap this function with cancelable handle,
-    /// you can control when to stop polling. the return value of `fut` is ignore.
-    /// We add generic `R` just in order to support smol::Timer
-
-    fn send_with_timer<'a, F, R>(&'a self, item: T, fut: F) -> SendTimeoutFuture<'a, T, R>
-    where
-        F: Future<Output = R> + 'static;
-}
-
-impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for AsyncTx<T> {
-    #[inline(always)]
-    fn clone_to_vec(self, count: usize) -> Vec<Self> {
-        assert_eq!(count, 1);
-        vec![self]
+        self.as_ref().get_rx_count() == 0
     }
 
     #[inline(always)]
-    fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        AsyncTx::try_send(self, item)
+    fn get_tx_count(&self) -> usize {
+        self.as_ref().get_tx_count()
     }
 
     #[inline(always)]
-    fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
-        AsyncTx::send(self, item)
+    fn get_rx_count(&self) -> usize {
+        self.as_ref().get_rx_count()
     }
 
-    #[cfg(any(feature = "tokio", feature = "async_std"))]
-    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
-    #[inline(always)]
-    fn send_timeout<'a>(
-        &'a self, item: T, duration: std::time::Duration,
-    ) -> SendTimeoutFuture<'a, T, ()> {
-        AsyncTx::send_timeout(self, item, duration)
-    }
-
-    #[inline(always)]
-    fn send_with_timer<'a, F, R>(&'a self, item: T, fut: F) -> SendTimeoutFuture<'a, T, R>
-    where
-        F: Future<Output = R> + 'static,
-    {
-        AsyncTx::send_with_timer(self, item, fut)
+    fn get_wakers_count(&self) -> (usize, usize) {
+        self.as_ref().get_wakers_count()
     }
 }
 
@@ -563,23 +609,23 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for AsyncTx<T> {
 /// which means you can have two types of senders, both within async and
 /// blocking contexts, for the same channel.
 
-pub struct MAsyncTx<T>(pub(crate) AsyncTx<T>);
+pub struct MAsyncTx<F: Flavor>(pub(crate) AsyncTx<F>);
 
-impl<T> fmt::Debug for MAsyncTx<T> {
+impl<F: Flavor> fmt::Debug for MAsyncTx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MAsyncTx")
     }
 }
 
-impl<T> fmt::Display for MAsyncTx<T> {
+impl<F: Flavor> fmt::Display for MAsyncTx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MAsyncTx")
     }
 }
 
-unsafe impl<T: Send> Sync for MAsyncTx<T> {}
+unsafe impl<F: Flavor> Sync for MAsyncTx<F> {}
 
-impl<T: Unpin> Clone for MAsyncTx<T> {
+impl<F: Flavor> Clone for MAsyncTx<F> {
     #[inline]
     fn clone(&self) -> Self {
         let inner = &self.0;
@@ -588,31 +634,31 @@ impl<T: Unpin> Clone for MAsyncTx<T> {
     }
 }
 
-impl<T> From<MAsyncTx<T>> for AsyncTx<T> {
-    fn from(tx: MAsyncTx<T>) -> Self {
+impl<F: Flavor> From<MAsyncTx<F>> for AsyncTx<F> {
+    fn from(tx: MAsyncTx<F>) -> Self {
         tx.0
     }
 }
 
-impl<T> MAsyncTx<T> {
+impl<F: Flavor> MAsyncTx<F> {
     #[inline]
-    pub(crate) fn new(shared: Arc<ChannelShared<T>>) -> Self {
+    pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self(AsyncTx::new(shared))
     }
 
     #[inline]
-    pub fn into_sink(self) -> AsyncSink<T> {
+    pub fn into_sink(self) -> AsyncSink<F> {
         AsyncSink::new(self.0)
     }
 
     #[inline]
-    pub fn into_blocking(self) -> MTx<T> {
+    pub fn into_blocking(self) -> MTx<F> {
         self.into()
     }
 }
 
-impl<T> Deref for MAsyncTx<T> {
-    type Target = AsyncTx<T>;
+impl<F: Flavor> Deref for MAsyncTx<F> {
+    type Target = AsyncTx<F>;
 
     /// inherit all the functions of [AsyncTx]
     #[inline(always)]
@@ -621,14 +667,14 @@ impl<T> Deref for MAsyncTx<T> {
     }
 }
 
-impl<T> From<MTx<T>> for MAsyncTx<T> {
-    fn from(value: MTx<T>) -> Self {
+impl<F: Flavor> From<MTx<F>> for MAsyncTx<F> {
+    fn from(value: MTx<F>) -> Self {
         value.add_tx();
         Self::new(value.shared.clone())
     }
 }
 
-impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for MAsyncTx<T> {
+impl<F: Flavor> AsyncTxTrait<F::Item> for MAsyncTx<F> {
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         let mut v = Vec::with_capacity(count);
@@ -640,12 +686,14 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for MAsyncTx<T> {
     }
 
     #[inline(always)]
-    fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
+    fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
         self.0.try_send(item)
     }
 
     #[inline(always)]
-    fn send<'a>(&'a self, item: T) -> SendFuture<'a, T> {
+    fn send<'a>(
+        &'a self, item: F::Item,
+    ) -> impl Future<Output = Result<(), SendError<F::Item>>> + Send {
         self.0.send(item)
     }
 
@@ -653,38 +701,100 @@ impl<T: Unpin + Send + 'static> AsyncTxTrait<T> for MAsyncTx<T> {
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
     #[inline(always)]
     fn send_timeout<'a>(
-        &'a self, item: T, duration: std::time::Duration,
-    ) -> SendTimeoutFuture<'a, T, ()> {
+        &'a self, item: F::Item, duration: std::time::Duration,
+    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send {
         self.0.send_timeout(item, duration)
     }
 
     #[inline(always)]
-    fn send_with_timer<'a, F, R>(&'a self, item: T, fut: F) -> SendTimeoutFuture<'a, T, R>
+    fn send_with_timer<'a, FR, R>(
+        &'a self, item: F::Item, fut: FR,
+    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
     where
-        F: Future<Output = R> + 'static,
+        FR: Future<Output = R> + 'static + Send,
     {
-        self.0.send_with_timer(item, fut)
+        self.0.send_with_timer::<FR, R>(item, fut)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    /// The capacity of the channel, return None for unbounded channel.
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        self.as_ref().capacity()
+    }
+
+    /// Whether channel is empty at the moment
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
+    /// Whether the channel is full at the moment
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.as_ref().get_rx_count() == 0
+    }
+
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.as_ref().get_tx_count()
+    }
+
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        self.as_ref().get_rx_count()
+    }
+
+    fn get_wakers_count(&self) -> (usize, usize) {
+        self.as_ref().get_wakers_count()
     }
 }
 
-impl<T> Deref for AsyncTx<T> {
-    type Target = ChannelShared<T>;
+impl<F: Flavor> Deref for AsyncTx<F> {
+    type Target = ChannelShared<F>;
     #[inline(always)]
-    fn deref(&self) -> &ChannelShared<T> {
+    fn deref(&self) -> &ChannelShared<F> {
         &self.shared
     }
 }
 
-impl<T> AsRef<ChannelShared<T>> for AsyncTx<T> {
+impl<F: Flavor> AsRef<ChannelShared<F>> for AsyncTx<F> {
     #[inline(always)]
-    fn as_ref(&self) -> &ChannelShared<T> {
+    fn as_ref(&self) -> &ChannelShared<F> {
         &self.shared
     }
 }
 
-impl<T> AsRef<ChannelShared<T>> for MAsyncTx<T> {
+impl<F: Flavor> AsRef<ChannelShared<F>> for MAsyncTx<F> {
     #[inline(always)]
-    fn as_ref(&self) -> &ChannelShared<T> {
+    fn as_ref(&self) -> &ChannelShared<F> {
         &self.0.shared
+    }
+}
+
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType<F> for AsyncTx<F> {
+    #[inline(always)]
+    fn new(shared: Arc<ChannelShared<F>>) -> Self {
+        Self::new(shared)
+    }
+}
+
+impl<F: Flavor> NotClonable for AsyncTx<F> {}
+
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType<F> for MAsyncTx<F> {
+    #[inline(always)]
+    fn new(shared: Arc<ChannelShared<F>>) -> Self {
+        Self::new(shared)
     }
 }

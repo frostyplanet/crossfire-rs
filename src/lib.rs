@@ -56,25 +56,18 @@
 //!
 //! ### Modules and functions
 //!
-//! There are 3 modules: [spsc], [mpsc], [mpmc], providing functions to allocate different types of channels.
+//! There are 3 modules: [spsc], [mpsc], [mpmc]. Each has different underlying implementation
+//! optimized to it concurrent model.
+//! The SP or SC interface is only for non-concurrent operation. It's more memory-efficient in waker registration,
+//! and has atomic ops cost reduced in the lockless algorithm.
 //!
-//! The SP or SC interface is only for non-concurrent operation. It's more memory-efficient than MP or MC implementations, and sometimes slightly faster.
-//!
-//! The return types in these 3 modules are different:
-//!
-//! * [mpmc::bounded_blocking()]: tx blocking, rx blocking
-//!
-//! * [mpmc::bounded_async()]:  tx async, rx async
-//!
-//! * [mpmc::bounded_tx_async_rx_blocking()]: tx async, rx blocking
-//!
-//! * [mpmc::bounded_tx_blocking_rx_async()]: tx blocking, rx async
-//!
-//! * [mpmc::unbounded_blocking()]: tx non-blocking, rx blocking
-//!
-//! * [mpmc::unbounded_async()]: tx non-blocking, rx async
-//!
-//! > **NOTE** :  For a bounded channel, a 0 size case is not supported yet. (Temporary rewrite as 1 size).
+//! - Each module has [build()](crate::mpmc::build()) function, which can apply to all the channel flavors.
+//! - Altough the [One](crate::mpmc::One) flavor can be used standalone, it's also wrapped inside enum `Array`,
+//! to provide unified type for bounded channel.
+//! - **NOTE** : Although the name [Array](crate::mpmc::Array), [List](crate::mpmc::List) are the same between spsc/mpsc/mpmc module,
+//! they are different type alias local to its parent module. We suggest distinguish by
+//! namespace when import for use.
+//! - **NOTE** :  For a bounded channel, a 0 size case is not supported yet. (rewrite as 1 size).
 //!
 //!
 //! ### Types
@@ -105,21 +98,14 @@
 //!
 //! The benefit of using the SP / SC API is completely lockless waker registration, in exchange for a performance boost.
 //!
-//! The sender/receiver can use the `From` trait to convert between blocking and async context
-//! counterparts.
+//! The sender/receiver can use the `From` trait to **convert between blocking and async context
+//! counterparts**.
 //!
 //! ### Error types
 //!
 //! Error types are the same as crossbeam-channel:
 //!
 //! [TrySendError], [SendError], [SendTimeoutError], [TryRecvError], [RecvError], [RecvTimeoutError]
-//!
-//! ### Feature flags
-//!
-//! - `tokio`: Enable send_timeout, recv_timeout API for async context, based on `tokio`. And will
-//! detect the right backoff strategy for the type of runtime (multi-threaded / current-thread).
-//!
-//! - `async_std`: Enable send_timeout, recv_timeout API for async context, based on `async-std`.
 //!
 //! ### Async compatibility
 //!
@@ -130,7 +116,7 @@
 //! * The [AsyncTx::send()] and [AsyncRx::recv()] operations are **cancellation-safe** in an async context.
 //! You can safely use the select! macro and timeout() function in tokio/futures in combination with recv().
 //!  On cancellation, [SendFuture] and [RecvFuture] will trigger drop(), which will clean up the state of the waker,
-//! making sure there is no mem-leak and deadlock.
+//! making sure there is no memory-leak and deadlock.
 //! But you cannot know the true result from SendFuture, since it's dropped
 //! upon cancellation. Thus, we suggest using [AsyncTx::send_timeout()] instead.
 //!
@@ -162,6 +148,19 @@
 //! [dependencies]
 //! crossfire = "2.1"
 //! ```
+//!
+//! ### Feature flags
+//!
+//! * `compat`: Enable the [compat] model, which has the same API namespace struct as V2.x
+//!
+//! * `tokio`: Enable [send_timeout](crate::AsyncTx::send_timeout()), [recv_timeout](crate::AsyncRx::recv_timeout()) with tokio sleep function. (conflict
+//! with `async_std` feature)
+//!
+//! * `async_std`: Enable send_timeout, recv_timeout with async-std sleep function. (conflict
+//! with `tokio` feature)
+//!
+//! * `trace_log`: Development mode, to enable internal log while testing or benchmark, to debug deadlock issues.
+//!
 //! ### Example with tokio::select!
 //!
 //! ```rust
@@ -238,12 +237,15 @@ pub use async_tx::*;
 mod async_rx;
 pub use async_rx::*;
 
+#[cfg(feature = "compat")]
+pub mod compat;
 pub mod sink;
 pub mod stream;
 
 mod crossbeam;
 pub use crossbeam::err::*;
 
+/// logging macro for development
 #[macro_export(local_inner_macros)]
 macro_rules! trace_log {
     ($($arg:tt)+)=>{
@@ -254,6 +256,7 @@ macro_rules! trace_log {
     };
 }
 
+/// logging macro for development under tokio
 #[macro_export(local_inner_macros)]
 macro_rules! tokio_task_id {
     () => {{
@@ -267,3 +270,18 @@ macro_rules! tokio_task_id {
         }
     }};
 }
+
+use flavor::Flavor;
+use std::sync::Arc;
+
+/// type limiter for channel builder
+pub trait SenderType<F: Flavor> {
+    fn new(shared: Arc<ChannelShared<F>>) -> Self;
+}
+
+/// type limiter for channel builder
+pub trait ReceiverType<F: Flavor> {
+    fn new(shared: Arc<ChannelShared<F>>) -> Self;
+}
+
+pub trait NotClonable {}

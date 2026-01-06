@@ -200,9 +200,9 @@ The return types in these 3 modules are different:
 
 * mpmc::bounded_async() :  (tx async, rx async)
 
-* mpmc::bounded_tx_async_rx_blocking() : (tx async, rx blocking)
+* mpmc::bounded_async_blocking() : (tx async, rx blocking)
 
-* mpmc::bounded_tx_blocking_rx_async() : (tx blocking, rx async)
+* mpmc::bounded_blocking_async() : (tx blocking, rx async)
 
 * mpmc::unbounded_blocking() : (tx non-blocking, rx blocking)
 

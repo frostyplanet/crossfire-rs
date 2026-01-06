@@ -39,82 +39,172 @@ use crate::async_rx::*;
 use crate::async_tx::*;
 use crate::blocking_rx::*;
 use crate::blocking_tx::*;
+use crate::flavor::{flavor_dispatch, Flavor, FlavorImpl, FlavorNew, FlavorWrap};
 use crate::shared::*;
+use crate::{NotClonable, ReceiverType, SenderType};
+use std::mem::MaybeUninit;
 
-macro_rules! init_share {
-    ($flavor: expr) => {{
-        let send_wakers = $flavor.new_reg_sender::<false>();
-        let recv_wakers = $flavor.new_reg_recv::<false>();
-        ChannelShared::new($flavor.to_flavor(), send_wakers, recv_wakers)
-    }};
+/// Flavor Type for unbounded SPSC channel
+pub type List<T> = FlavorWrap<crate::flavor::List<T>, RegistryDummy, RegistrySingle>;
+
+/// Flavor type for one-sized SPSC channel
+pub type One<T> = FlavorWrap<crate::flavor::OneSpsc<T>, RegistrySingle, RegistrySingle>;
+
+/// Flavor Type for bounded SPSC channel
+pub enum Array<T> {
+    Array(crate::flavor::Array<T, false, false>),
+    One(crate::flavor::One<T>),
 }
 
-macro_rules! init_array {
-    ($bound: expr) => {{
-        if $bound <= 1 {
-            init_share!(OneSize::<T>::new())
+impl<T: Send + Unpin + 'static> Array<T> {
+    #[inline]
+    pub fn new(size: usize) -> Self {
+        if size <= 1 {
+            Self::One(crate::flavor::One::new())
         } else {
-            init_share!(Array::<T, false, false>::new($bound))
+            Self::Array(crate::flavor::Array::<T, false, false>::new(size))
         }
-    }};
+    }
 }
 
-/// Creates an unbounded channel for use in a blocking context.
+macro_rules! wrap_array {
+    ($self: expr, $method:ident $($arg:expr)*)=>{
+        match $self {
+            Self::Array(inner) => inner.$method($($arg)*),
+            Self::One(inner) => inner.$method($($arg)*),
+        }
+    };
+}
+
+impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
+    type Item = T;
+    flavor_dispatch!(wrap_array);
+}
+
+impl<T: Send + Unpin + 'static> Flavor for Array<T> {
+    type Send = RegistrySingle;
+    type Recv = RegistrySingle;
+}
+
+/// The generic builder for all spsc channel types with a new method (except Array).
 ///
-/// The sender will never block, so we use the same `Tx` for all threads.
-pub fn unbounded_blocking<T: Unpin>() -> (Tx<T>, Rx<T>) {
-    let share = init_share!(List::<T>::new());
-    let tx = Tx::new(share.clone());
-    let rx = Rx::new(share);
-    (tx, rx)
-}
-
-/// Creates an unbounded channel for use in an async context.
+/// Initialize sender and receiver types from a flavor type,
+/// you can let the compiler to infer the type according to return type signature.
+/// (the falvor might have diffrent new() method, but the rest is the same.
+/// # Examples
 ///
-/// The sender will never block, so we use the same `Tx` for all threads.
-pub fn unbounded_async<T: Unpin>() -> (Tx<T>, AsyncRx<T>) {
-    let share = init_share!(List::<T>::new());
-    let tx = Tx::new(share.clone());
-    let rx = AsyncRx::new(share);
-    (tx, rx)
+/// ```rust
+/// use crossfire::*;
+/// let (tx, rx): (Tx<_>, Rx<_>) = spsc::new::<spsc::List<i32>, _, _>();
+/// let (tx, rx): (AsyncTx<spsc::One<usize>>, Rx<spsc::One<usize>>) = spsc::new();
+/// ```
+#[inline(always)]
+pub fn new<F, S, R>() -> (S, R)
+where
+    F: Flavor + FlavorNew,
+    S: SenderType<F> + NotClonable,
+    R: ReceiverType<F> + NotClonable,
+{
+    build::<F, S, R>(F::new())
 }
 
-/// Creates a bounded channel for use in a blocking context.
+/// The generic builder for all spsc channel types.
+///
+/// Initialize sender and receiver types from a flavor type,
+/// you can let the compiler to infer the type according to return type signature.
+/// (the falvor might have diffrent new() method, but the rest is the same.
+/// # Examples
+///
+/// ```rust
+/// use crossfire::{*, spsc::*};
+/// let (tx, rx): (Tx<_>, Rx<_>) = build::<List<i32>, _, _>(List::new());
+/// let (tx, rx): (AsyncTx<One<usize>>, Rx<One<usize>>)  = build(One::new());
+/// ```
+#[inline(always)]
+pub fn build<F, S, R>(flavor: F) -> (S, R)
+where
+    F: Flavor,
+    S: SenderType<F> + NotClonable,
+    R: ReceiverType<F> + NotClonable,
+{
+    let shared = ChannelShared::new(flavor);
+    (S::new(shared.clone()), R::new(shared))
+}
+
+#[inline]
+fn unbounded_new<T, R>() -> (Tx<List<T>>, R)
+where
+    T: Send + 'static + Unpin,
+    R: ReceiverType<List<T>> + NotClonable,
+{
+    build::<List<T>, Tx<List<T>>, R>(List::<T>::from_inner(crate::flavor::List::<T>::new()))
+}
+
+#[inline]
+pub fn unbounded_blocking<T>() -> (Tx<List<T>>, Rx<List<T>>)
+where
+    T: Send + 'static + Unpin,
+{
+    unbounded_new()
+}
+
+#[inline]
+pub fn unbounded_async<T>() -> (Tx<List<T>>, AsyncRx<List<T>>)
+where
+    T: Send + 'static + Unpin,
+{
+    unbounded_new()
+}
+
+fn bounded_new<T, S, R>(size: usize) -> (S, R)
+where
+    T: Send + 'static + Unpin,
+    S: SenderType<Array<T>> + NotClonable,
+    R: ReceiverType<Array<T>> + NotClonable,
+{
+    build::<Array<T>, S, R>(Array::<T>::new(size))
+}
+
+/// Creates a bounded channel with a pair of blocking sender and receiver.
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
-pub fn bounded_blocking<T: Unpin>(size: usize) -> (Tx<T>, Rx<T>) {
-    let share = init_array!(size);
-    let tx = Tx::new(share.clone());
-    let rx = Rx::new(share);
-    (tx, rx)
+#[inline]
+pub fn bounded_blocking<T>(size: usize) -> (Tx<Array<T>>, Rx<Array<T>>)
+where
+    T: Send + 'static + Unpin,
+{
+    bounded_new(size)
 }
 
-/// Creates a bounded channel where both the sender and receiver are async.
+/// Creates a bounded channel with a pair of async sender and receiver.
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
-pub fn bounded_async<T: Unpin>(size: usize) -> (AsyncTx<T>, AsyncRx<T>) {
-    let share = init_array!(size);
-    let tx = AsyncTx::new(share.clone());
-    let rx = AsyncRx::new(share);
-    (tx, rx)
+#[inline]
+pub fn bounded_async<T>(size: usize) -> (AsyncTx<Array<T>>, AsyncRx<Array<T>>)
+where
+    T: Send + 'static + Unpin,
+{
+    bounded_new(size)
 }
 
-/// Creates a bounded channel where the sender is async and the receiver is blocking.
+/// Creates a bounded channel with a pair of blocking sender and async receiver.
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
-pub fn bounded_tx_async_rx_blocking<T: Unpin>(size: usize) -> (AsyncTx<T>, Rx<T>) {
-    let share = init_array!(size);
-    let tx = AsyncTx::new(share.clone());
-    let rx = Rx::new(share);
-    (tx, rx)
+#[inline]
+pub fn bounded_blocking_async<T>(size: usize) -> (Tx<Array<T>>, AsyncRx<Array<T>>)
+where
+    T: Send + 'static + Unpin,
+{
+    bounded_new(size)
 }
 
-/// Creates a bounded channel where the sender is blocking and the receiver is async.
+/// Creates a bounded channel with a pair of async sender and blocking receiver.
 ///
 /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
-pub fn bounded_tx_blocking_rx_async<T>(size: usize) -> (Tx<T>, AsyncRx<T>) {
-    let share = init_array!(size);
-    let tx = Tx::new(share.clone());
-    let rx = AsyncRx::new(share);
-    (tx, rx)
+#[inline]
+pub fn bounded_async_blocking<T>(size: usize) -> (AsyncTx<Array<T>>, Rx<Array<T>>)
+where
+    T: Send + 'static + Unpin,
+{
+    bounded_new(size)
 }
