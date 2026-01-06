@@ -6,7 +6,7 @@ pub(crate) use crate::waker::*;
 pub(crate) use crate::waker_registry::*;
 use crate::{AsyncRx, AsyncTx, Rx, Tx};
 use std::mem::MaybeUninit;
-use std::sync::atomic::{compiler_fence, fence, AtomicUsize, AtomicPtr, Ordering};
+use std::sync::atomic::{compiler_fence, fence, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -367,7 +367,7 @@ pub(crate) type RecvBlocking<T> =
 
 pub(crate) type IsEmptyFunc = unsafe fn(ptr: *const ()) -> bool;
 
-#[inline]
+#[inline(always)]
 unsafe fn try_send_shim<F: FlavorImpl<T>, T: Send + 'static>(
     ptr: *const (), item: &MaybeUninit<T>,
 ) -> bool {
@@ -375,15 +375,13 @@ unsafe fn try_send_shim<F: FlavorImpl<T>, T: Send + 'static>(
     flavor.try_send(item)
 }
 
-#[inline]
-unsafe fn try_recv_shim<F: FlavorImpl<T>, T: Send + 'static>(
-    ptr: *const (),
-) -> Option<T> {
+#[inline(always)]
+unsafe fn try_recv_shim<F: FlavorImpl<T>, T: Send + 'static>(ptr: *const ()) -> Option<T> {
     let flavor = &*(ptr as *const F);
     flavor.try_recv()
 }
 
-#[inline]
+#[inline(always)]
 unsafe fn send_blocking_shim<F: FlavorImpl<T>, T: Send + 'static>(
     shared: &ChannelShared<T>, ptr: *const (), item: &MaybeUninit<T>, deadline: Option<Instant>,
     waker_cache: &WakerCache<*const T>,
@@ -392,7 +390,7 @@ unsafe fn send_blocking_shim<F: FlavorImpl<T>, T: Send + 'static>(
     Tx::<T>::send_blocking::<F>(shared, flavor, item, deadline, waker_cache)
 }
 
-#[inline]
+#[inline(always)]
 unsafe fn recv_blocking_shim<F: FlavorImpl<T>, T: Send + 'static>(
     shared: &ChannelShared<T>, ptr: *const (), deadline: Option<Instant>,
     waker_cache: &WakerCache<()>,
@@ -401,7 +399,7 @@ unsafe fn recv_blocking_shim<F: FlavorImpl<T>, T: Send + 'static>(
     Rx::<T>::recv_blocking::<F>(shared, flavor, deadline, waker_cache)
 }
 
-#[inline]
+#[inline(always)]
 unsafe fn poll_send_shim<F: FlavorImpl<T>, T: Send + 'static>(
     shared: &ChannelShared<T>, ptr: *const (), ctx: &mut Context, item: &MaybeUninit<T>,
     o_waker: &mut Option<SendWaker<T>>, sink: bool,
@@ -410,7 +408,7 @@ unsafe fn poll_send_shim<F: FlavorImpl<T>, T: Send + 'static>(
     AsyncTx::<T>::_poll_send::<F>(shared, flavor, ctx, item, o_waker, sink)
 }
 
-#[inline]
+#[inline(always)]
 unsafe fn poll_item_shim<F: FlavorImpl<T>, T: Send + 'static>(
     shared: &ChannelShared<T>, ptr: *const (), ctx: &mut Context, o_waker: &mut Option<RecvWaker>,
     stream: bool,
@@ -419,7 +417,7 @@ unsafe fn poll_item_shim<F: FlavorImpl<T>, T: Send + 'static>(
     AsyncRx::<T>::_poll_item::<F>(shared, flavor, ctx, o_waker, stream)
 }
 
-#[inline]
+#[inline(always)]
 unsafe fn is_empty_shim<F: FlavorImpl<T>, T: Send + 'static>(ptr: *const ()) -> bool {
     let flavor = &*(ptr as *const F);
     F::is_empty(flavor)

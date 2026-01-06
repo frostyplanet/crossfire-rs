@@ -37,9 +37,12 @@ log = { version="0", optional=true}
 log = "0"
 tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
 
+[profile.release]
+lto = "fat"
+codegen-units = 1
 ## For profiling symbol
-#[profile.release]
 #debug = true
+
 
 [features]
 default = []
