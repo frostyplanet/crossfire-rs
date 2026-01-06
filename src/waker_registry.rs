@@ -3,6 +3,7 @@ use crate::locked_waker::*;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
 use crate::trace_log;
+use crossbeam_utils::CachePadded;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -274,13 +275,13 @@ impl RegistryRecv {
 }
 
 pub struct RegistrySingle<P> {
-    cell: WeakCell<WakerInner<P>>,
+    cell: CachePadded<WeakCell<WakerInner<P>>>,
 }
 
 impl<P> RegistrySingle<P> {
     #[inline(always)]
     pub fn new() -> Self {
-        Self { cell: WeakCell::new() }
+        Self { cell: CachePadded::new(WeakCell::new()) }
     }
 
     /// return is_skip
