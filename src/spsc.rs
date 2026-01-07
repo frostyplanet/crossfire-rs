@@ -39,19 +39,42 @@ use crate::async_rx::*;
 use crate::async_tx::*;
 use crate::blocking_rx::*;
 use crate::blocking_tx::*;
-use crate::flavor::{Flavor, FlavorBounded};
+use crate::flavor::{flavor_enum_dispatch, Flavor};
 use crate::shared::*;
 use crate::{NotClonable, ReceiverType, SenderType};
 use std::marker::PhantomData;
+use std::mem::MaybeUninit;
 
 /// Flavor Type alias for unbounded SPSC channel
 pub type List<T> = crate::flavor::List<T>;
 
-/// Flavor Type alias for bounded SPSC channel
-pub type Array<T> = crate::flavor::Array<T, false, false>;
+/// Flavor Type alias for bounded SPSC channel wrapped with specified One impl
+pub enum Array<T> {
+    Array(crate::flavor::Array<T, false, false>),
+    One(crate::flavor::One<T>),
+}
 
-/// Flavor Type alias for one-size SPSC channel
-pub type One<T> = crate::flavor::One<T>;
+impl<T: Send + Unpin + 'static> Array<T> {
+    #[inline]
+    pub fn new(size: usize) -> Self {
+        if size <= 1 {
+            Self::One(crate::flavor::One::new())
+        } else {
+            Self::Array(crate::flavor::Array::<T, false, false>::new(size))
+        }
+    }
+}
+
+macro_rules! wrap_array {
+    ($self: expr, $method:ident $($arg:expr)*)=>{
+        match $self {
+            Self::Array(inner) => inner.$method($($arg)*),
+            Self::One(inner) => inner.$method($($arg)*),
+        }
+    };
+}
+
+flavor_enum_dispatch!(Array, wrap_array);
 
 /// The generic builder for all spsc channel type.
 ///
@@ -97,24 +120,22 @@ where
 
     #[inline]
     pub fn new_blocking() -> (Tx<List<T>>, Rx<List<T>>) {
-        build::<List<T>, Tx<List<T>>, Rx<List<T>>>(List::<T>::new())
+        Self::new()
     }
 
     #[inline]
     pub fn new_async() -> (Tx<List<T>>, AsyncRx<List<T>>) {
-        build::<List<T>, Tx<List<T>>, AsyncRx<List<T>>>(List::<T>::new())
+        Self::new()
     }
 }
 
-pub struct Bounded<T, F = Array<T>>(PhantomData<fn(&T, &F)>)
+pub struct Bounded<T>(PhantomData<fn(&T)>)
 where
-    T: Send + 'static + Unpin,
-    F: Flavor<Item = T> + FlavorBounded;
+    T: Send + 'static + Unpin;
 
-impl<T, F> Bounded<T, F>
+impl<T> Bounded<T>
 where
     T: Send + 'static + Unpin,
-    F: Flavor<Item = T> + FlavorBounded,
 {
     /// Creates a bounded channel with specified type of sender and receiver
     ///
@@ -122,41 +143,41 @@ where
     #[inline]
     pub fn new<S, R>(size: usize) -> (S, R)
     where
-        S: SenderType<F>,
-        R: ReceiverType<F> + NotClonable,
+        S: SenderType<Array<T>>,
+        R: ReceiverType<Array<T>> + NotClonable,
     {
-        build::<F, S, R>(F::new_with_bound(size))
+        build::<Array<T>, S, R>(Array::<T>::new(size))
     }
 
     /// Creates a bounded channel with a pair of blocking sender and receiver.
     ///
     /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
     #[inline]
-    pub fn new_blocking(size: usize) -> (Tx<F>, Rx<F>) {
-        build::<F, Tx<F>, Rx<F>>(F::new_with_bound(size))
+    pub fn new_blocking(size: usize) -> (Tx<Array<T>>, Rx<Array<T>>) {
+        Self::new(size)
     }
 
     /// Creates a bounded channel with a pair of async sender and receiver.
     ///
     /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
     #[inline]
-    pub fn new_async(size: usize) -> (AsyncTx<F>, AsyncRx<F>) {
-        build::<F, AsyncTx<F>, AsyncRx<F>>(F::new_with_bound(size))
+    pub fn new_async(size: usize) -> (AsyncTx<Array<T>>, AsyncRx<Array<T>>) {
+        Self::new(size)
     }
 
     /// Creates a bounded channel with a pair of blocking sender and async receiver.
     ///
     /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
     #[inline]
-    pub fn blocking_async(size: usize) -> (Tx<F>, AsyncRx<F>) {
-        build::<F, Tx<F>, AsyncRx<F>>(F::new_with_bound(size))
+    pub fn blocking_async(size: usize) -> (Tx<Array<T>>, AsyncRx<Array<T>>) {
+        Self::new(size)
     }
 
     /// Creates a bounded channel with a pair of async sender and blocking receiver.
     ///
     /// As a special case, a channel size of 0 is not supported and will be treated as a channel of size 1.
     #[inline]
-    pub fn async_blocking(size: usize) -> (AsyncTx<F>, Rx<F>) {
-        build::<F, AsyncTx<F>, Rx<F>>(F::new_with_bound(size))
+    pub fn async_blocking(size: usize) -> (AsyncTx<Array<T>>, Rx<Array<T>>) {
+        Self::new(size)
     }
 }

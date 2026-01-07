@@ -1,4 +1,4 @@
-use super::{Flavor, FlavorBounded, FlavorMC, FlavorMP};
+use super::{Flavor, FlavorMC, FlavorMP};
 use crate::crossbeam::array_queue::ArrayQueue;
 use std::mem::MaybeUninit;
 
@@ -84,16 +84,6 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Flavor for Array
         } else {
             false
         }
-    }
-}
-
-impl<T: Send + Unpin + 'static, const MP: bool, const MC: bool> FlavorBounded for Array<T, MP, MC> {
-    #[inline]
-    fn new_with_bound(mut size: usize) -> Self {
-        if size < 1 {
-            size = 1;
-        }
-        Self::new(size)
     }
 }
 

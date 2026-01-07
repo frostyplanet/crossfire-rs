@@ -53,7 +53,7 @@
 //! - The crossbeam implementation of select is decouple from channel types and message type, which
 //! means the API is possible for crossfire too.
 
-use crate::flavor::Flavor;
+use crate::flavor::{flavor_enum_dispatch, Flavor};
 use crate::shared::*;
 pub use crate::{AsyncRxTrait, AsyncTxTrait, BlockingRxTrait, BlockingTxTrait};
 use std::mem::MaybeUninit;
@@ -63,7 +63,7 @@ pub enum CompatFlavor<T> {
     List(crate::flavor::List<T>),
 }
 
-macro_rules! wrap_method {
+macro_rules! wrap_compat {
     ($self: expr, $method:ident $($arg:expr)*)=>{
         match $self {
             Self::Array(inner) => inner.$method($($arg)*),
@@ -72,62 +72,7 @@ macro_rules! wrap_method {
     };
 }
 
-impl<T: Send + Unpin + 'static> Flavor for CompatFlavor<T> {
-    type Item = T;
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        wrap_method!(self, len)
-    }
-
-    #[inline(always)]
-    fn capacity(&self) -> Option<usize> {
-        wrap_method!(self, capacity)
-    }
-
-    #[inline(always)]
-    fn is_full(&self) -> bool {
-        wrap_method!(self, is_full)
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        wrap_method!(self, is_empty)
-    }
-
-    #[inline(always)]
-    fn try_send(&self, item: &MaybeUninit<Self::Item>) -> bool {
-        wrap_method!(self, try_send item)
-    }
-
-    #[inline]
-    fn try_send_oneshot(&self, _item: *const Self::Item) -> Option<bool> {
-        match self {
-            Self::Array(inner) => inner.try_send_oneshot(_item),
-            _ => unreachable!(),
-        }
-    }
-
-    #[inline(always)]
-    fn try_recv(&self) -> Option<Self::Item> {
-        wrap_method!(self, try_recv)
-    }
-
-    #[inline(always)]
-    fn try_recv_final(&self) -> Option<Self::Item> {
-        wrap_method!(self, try_recv_final)
-    }
-
-    #[inline(always)]
-    fn backoff_limit(&self) -> u16 {
-        wrap_method!(self, backoff_limit)
-    }
-
-    #[inline(always)]
-    fn may_direct_copy(&self) -> bool {
-        wrap_method!(self, may_direct_copy)
-    }
-}
+flavor_enum_dispatch!(CompatFlavor, wrap_compat);
 
 #[inline(always)]
 fn new_list<T: Send + Unpin + 'static>() -> CompatFlavor<T> {

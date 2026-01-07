@@ -1,4 +1,4 @@
-use super::{Flavor, FlavorBounded, FlavorMC, FlavorMP};
+use super::{Flavor, FlavorMC, FlavorMP};
 use crate::backoff::*;
 use core::cell::UnsafeCell;
 use core::mem::{needs_drop, MaybeUninit};
@@ -208,14 +208,6 @@ impl<T: Send + 'static + Unpin> Flavor for One<T> {
     #[inline]
     fn backoff_limit(&self) -> u16 {
         crate::backoff::DEFAULT_LIMIT
-    }
-}
-
-impl<T: Send + Unpin + 'static> FlavorBounded for One<T> {
-    #[inline]
-    fn new_with_bound(size: usize) -> Self {
-        assert_eq!(size, 1);
-        Self::new()
     }
 }
 
