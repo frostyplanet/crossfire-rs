@@ -1,12 +1,57 @@
 //! compatible layer for V2.0 API
 //!
-//! The API is exactly the same with V2.0, V2.1 :
+//! # migration from v2.* to v3
 //!
-//! - The sender/receiver types does not distinguish between bounded or unbounded channels
+//! You only need to change original import from  `use crossfire::*` to `use crossfire::compat::*`
+//!
+//! # Compatible consideration
+//!
+//! - In the legacy API, the sender/receiver types had erased the signature between bounded or unbounded channels
 //! - The low level queue implement is for MPMC regardless of MPSC/SPSC model (which is exactly the
 //! same with V2.1)
-//! - For migration, you only need to change original code from  `use crossfire::*` to `use
+//! - The module structure in `crossfire::compat::*`, is exactly the same as v2.x `crossfire::*`.
 //! crossfire::compat::*`
+//!
+//! # Incompatible notes
+//!
+//! - keeping Into<AsyncStream<T, F>> for `AsyncRxTrait<T>` is not possible, due to `AsyncRxTrait<T>`
+//! is erased out Flavor parameter, so we add `AsyncRxTrait::to_stream()` which returns `Pin<Box<dyn futures_core::stream::Stream<Item = T>>>`.
+//!
+//! # The reason of complete API refactor
+//!
+//! I know we all hate the contagious nature of generic code, and reluctant to use trait object,
+//! it's common practice to use static dispatch like `enum-dispatch`. Originally crossfire only
+//! have 2 channel variance ([CompatFlavor]), when adding more channel flavor for specific scenario,
+//! other than common list and array, and specialized implement for spsc, mpsc, etc,
+//! I notice that when the flavor enum grow from 2 types to 4+ types,
+//! although the positive result can be observed on Arm, there was a regression in x86 async benchmark,
+//! which offset the optimization effort.
+//! It's impossible to erased the type while keeping the performance goal having so much types.
+//!
+//! From the aspect of compiler:
+//! - In blocking context, the compiler can eliminate the unused branch according to the context,
+//! and keeping the function calls inline, unless you put multiple variant of enum together into a
+//! collection.
+//! - In async context, the compiler is ignorance, since most of the async code is indirect calls.
+//! We can see in generated asm from cargo-show-asm, even you initialize the channel with ArrayQueue, there's still
+//! SeqQueue match branch inside the `RecvFuture::poll()`. What's worse when we have 4 types
+//! variant in the flavor enum, the compiler think the internal queue ops function no longer worth
+//! to inline (because overall flatten code will be too big), and the match branch might fallen
+//! back to a big match table instead of simple comparison. This is the reason of performance regression.
+//!
+//! From the aspect of CPU:
+//! - I had tried a manual Vtable by puting method ptr inside AsyncTx/AsyncRx, which is ok on X86,
+//! but Arm will have -50% penalty. It looks like Arm is poor on loading / caching function ptr.
+//! - Generic Arm CPU has overall poor performance (1/3 ~ 1/2) compared to mainstream x86_64, and
+//! bad at atomic CAS, a big match branch might be not so obvious than the positive effect from
+//! changing some CAS to direct load/store in the lockless algorithm.
+//!
+//! From the aspect of API usage:
+//! - There're already nice native select mechanisms on async ecology, we don't have to worry about the
+//! difference of receiver types, for flexibility.
+//! - For blocking context, it might be more common scenario to select from the same type of channels for efficience.
+//! - The crossbeam implementation of select is decouple from channel types and message type, which
+//! means the API is possible for crossfire too.
 
 use crate::flavor::Flavor;
 use crate::shared::*;
