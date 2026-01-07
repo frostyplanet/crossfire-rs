@@ -1,7 +1,8 @@
 use crate::*;
 use captains_log::{logfn, *};
-use crossfire::compat::*;
+use crossfire::flavor::Flavor;
 use crossfire::tokio_task_id;
+use crossfire::*;
 use rstest::*;
 use std::thread;
 use std::time::*;
@@ -13,9 +14,9 @@ fn setup_log() {
 
 #[logfn]
 #[rstest]
-#[case(spsc::bounded_tx_blocking_rx_async(1))]
-#[case(mpsc::bounded_tx_blocking_rx_async(1))]
-#[case(mpmc::bounded_tx_blocking_rx_async(1))]
+#[case(spsc::bounded_blocking_async(1))]
+#[case(mpsc::bounded_blocking_async(1))]
+#[case(mpmc::bounded_blocking_async(1))]
 fn test_basic_bounded_empty_full_drop_rx<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
@@ -36,9 +37,9 @@ fn test_basic_bounded_empty_full_drop_rx<T: BlockingTxTrait<usize>, R: AsyncRxTr
 
 #[logfn]
 #[rstest]
-#[case(spsc::bounded_tx_blocking_rx_async(1))]
-#[case(mpsc::bounded_tx_blocking_rx_async(1))]
-#[case(mpmc::bounded_tx_blocking_rx_async(1))]
+#[case(spsc::bounded_blocking_async(1))]
+#[case(mpsc::bounded_blocking_async(1))]
+#[case(mpmc::bounded_blocking_async(1))]
 fn test_basic_bounded_empty_full_drop_tx<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
@@ -81,7 +82,7 @@ fn test_basic_unbounded_empty_drop_tx<T: BlockingTxTrait<usize>, R: AsyncRxTrait
 #[logfn]
 #[rstest]
 fn test_basic_compile_bounded_empty_full() {
-    let (tx, rx) = mpmc::bounded_tx_blocking_rx_async::<usize>(1);
+    let (tx, rx) = mpmc::bounded_blocking_async(1);
     assert!(tx.is_empty());
     assert!(rx.is_empty());
     tx.try_send(1).expect("ok");
@@ -98,9 +99,9 @@ fn test_basic_compile_bounded_empty_full() {
 
 #[logfn]
 #[rstest]
-#[case(spsc::bounded_tx_blocking_rx_async::<usize>(10))]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(10))]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(10))]
+#[case(spsc::bounded_blocking_async(10))]
+#[case(mpsc::bounded_blocking_async(10))]
+#[case(mpmc::bounded_blocking_async(10))]
 fn test_basic_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
@@ -142,15 +143,15 @@ fn test_basic_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxTrai
 
 #[logfn]
 #[rstest]
-#[case(spsc::bounded_tx_blocking_rx_async::<usize>(1))]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(1))]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(1))]
-#[case(spsc::bounded_tx_blocking_rx_async::<usize>(100))]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(100))]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100))]
-#[case(spsc::unbounded_async::<usize>())]
-#[case(mpsc::unbounded_async::<usize>())]
-#[case(mpmc::unbounded_async::<usize>())]
+#[case(spsc::bounded_blocking_async(1))]
+#[case(mpsc::bounded_blocking_async(1))]
+#[case(mpmc::bounded_blocking_async(1))]
+#[case(spsc::bounded_blocking_async(100))]
+#[case(mpsc::bounded_blocking_async(100))]
+#[case(mpmc::bounded_blocking_async(100))]
+#[case(spsc::unbounded_async())]
+#[case(mpsc::unbounded_async())]
+#[case(mpmc::unbounded_async())]
 fn test_pressure_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
     setup_log: (), #[case] channel: (T, R),
 ) {
@@ -188,26 +189,29 @@ fn test_pressure_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxT
 
 #[logfn]
 #[rstest]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(1), 5)]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(1), 100)]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(1), 200)]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(100), 10)]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(100), 100)]
-#[case(mpsc::bounded_tx_blocking_rx_async::<usize>(100), 200)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(1), 5)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(1), 100)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(1), 300)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100), 5)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100), 100)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100), 200)]
-#[case(mpsc::unbounded_async::<usize>(), 5)]
-#[case(mpsc::unbounded_async::<usize>(), 100)]
-#[case(mpsc::unbounded_async::<usize>(), 300)]
-#[case(mpmc::unbounded_async::<usize>(), 6)]
-#[case(mpmc::unbounded_async::<usize>(), 100)]
-#[case(mpmc::unbounded_async::<usize>(), 300)]
-fn test_pressure_tx_multi_blocking_1_rx_async<R: AsyncRxTrait<usize>>(
-    setup_log: (), #[case] channel: (MTx<usize>, R), #[case] tx_count: usize,
+#[case(mpsc::bounded_blocking_async(1), 5)]
+#[case(mpsc::bounded_blocking_async(1), 100)]
+#[case(mpsc::bounded_blocking_async(1), 200)]
+#[case(mpsc::bounded_blocking_async(100), 10)]
+#[case(mpsc::bounded_blocking_async(100), 100)]
+#[case(mpsc::bounded_blocking_async(100), 200)]
+#[case(mpmc::bounded_blocking_async(1), 5)]
+#[case(mpmc::bounded_blocking_async(1), 100)]
+#[case(mpmc::bounded_blocking_async(1), 300)]
+#[case(mpmc::bounded_blocking_async(100), 5)]
+#[case(mpmc::bounded_blocking_async(100), 100)]
+#[case(mpmc::bounded_blocking_async(100), 200)]
+#[case(mpsc::unbounded_async(), 5)]
+#[case(mpsc::unbounded_async(), 100)]
+#[case(mpsc::unbounded_async(), 300)]
+#[case(mpmc::unbounded_async(), 6)]
+#[case(mpmc::unbounded_async(), 100)]
+#[case(mpmc::unbounded_async(), 300)]
+fn test_pressure_tx_multi_blocking_1_rx_async<
+    F: Flavor<Item = usize> + 'static,
+    R: AsyncRxTrait<usize>,
+>(
+    setup_log: (), #[case] channel: (MTx<F>, R), #[case] tx_count: usize,
 ) {
     let (tx, rx) = channel;
     #[cfg(miri)]
@@ -256,25 +260,25 @@ fn test_pressure_tx_multi_blocking_1_rx_async<R: AsyncRxTrait<usize>>(
 
 #[logfn]
 #[rstest]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(1), 5, 5)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(1), 100, 20)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(1), 300, 200)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(10), 10, 10)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(10), 100, 20)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(10), 300, 200)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100), 10, 200)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100), 100, 200)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100), 300, 300)]
-#[case(mpmc::bounded_tx_blocking_rx_async::<usize>(100), 30, 500)]
-#[case(mpmc::unbounded_async::<usize>(), 5, 5)]
-#[case(mpmc::unbounded_async::<usize>(), 100, 20)]
-#[case(mpmc::unbounded_async::<usize>(), 300, 200)]
-#[case(mpmc::unbounded_async::<usize>(), 10, 200)]
-#[case(mpmc::unbounded_async::<usize>(), 100, 200)]
-#[case(mpmc::unbounded_async::<usize>(), 300, 300)]
-#[case(mpmc::unbounded_async::<usize>(), 30, 500)]
-fn test_pressure_tx_multi_blocking_multi_rx_async(
-    setup_log: (), #[case] channel: (MTx<usize>, MAsyncRx<usize>), #[case] tx_count: usize,
+#[case(mpmc::bounded_blocking_async(1), 5, 5)]
+#[case(mpmc::bounded_blocking_async(1), 100, 20)]
+#[case(mpmc::bounded_blocking_async(1), 300, 200)]
+#[case(mpmc::bounded_blocking_async(10), 10, 10)]
+#[case(mpmc::bounded_blocking_async(10), 100, 20)]
+#[case(mpmc::bounded_blocking_async(10), 300, 200)]
+#[case(mpmc::bounded_blocking_async(100), 10, 200)]
+#[case(mpmc::bounded_blocking_async(100), 100, 200)]
+#[case(mpmc::bounded_blocking_async(100), 300, 300)]
+#[case(mpmc::bounded_blocking_async(100), 30, 500)]
+#[case(mpmc::unbounded_async(), 5, 5)]
+#[case(mpmc::unbounded_async(), 100, 20)]
+#[case(mpmc::unbounded_async(), 300, 200)]
+#[case(mpmc::unbounded_async(), 10, 200)]
+#[case(mpmc::unbounded_async(), 100, 200)]
+#[case(mpmc::unbounded_async(), 300, 300)]
+#[case(mpmc::unbounded_async(), 30, 500)]
+fn test_pressure_tx_multi_blocking_multi_rx_async<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (MTx<F>, MAsyncRx<F>), #[case] tx_count: usize,
     #[case] rx_count: usize,
 ) {
     let (tx, rx) = channel;
