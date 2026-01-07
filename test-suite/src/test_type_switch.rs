@@ -1,6 +1,7 @@
 use crate::*;
 use captains_log::{logfn, *};
-use crossfire::compat::*;
+use crossfire::flavor::Flavor;
+use crossfire::*;
 use rstest::*;
 use std::time::Duration;
 
@@ -23,10 +24,13 @@ macro_rules! runtime_block_on_with_timeout {
 // Test async-to-blocking receiver switching for bounded channels with messages in buffer
 #[logfn]
 #[rstest]
-#[case(spsc::bounded_async::<usize>(5))] // Small buffer to create backpressure
-#[case(mpsc::bounded_async::<usize>(5))]
-fn test_bounded_async_with_sync_receiver_switch_buffered<T: AsyncTxTrait<usize>>(
-    setup_log: (), #[case] channel: (T, AsyncRx<usize>),
+#[case(spsc::Bounded::<usize>::new_async(5))] // Small buffer to create backpressure
+#[case(mpsc::Bounded::<usize>::new_async(5))]
+fn test_bounded_async_with_sync_receiver_switch_buffered<
+    F: Flavor<Item = usize> + 'static,
+    T: AsyncTxTrait<usize>,
+>(
+    setup_log: (), #[case] channel: (T, AsyncRx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 20; // More messages than buffer capacity
@@ -64,7 +68,7 @@ fn test_bounded_async_with_sync_receiver_switch_buffered<T: AsyncTxTrait<usize>>
         let (rx, async_received) = async_join_result!(receiver_task);
 
         // CRITICAL: Convert to blocking receiver while messages are still in buffer AND sender is waiting
-        let blocking_rx: Rx<usize> = rx.into();
+        let blocking_rx: Rx<F> = rx.into();
 
         // Continue receiving with blocking receiver in a thread
         let remaining_messages = total_messages - async_consumed;
@@ -106,9 +110,9 @@ fn test_bounded_async_with_sync_receiver_switch_buffered<T: AsyncTxTrait<usize>>
 // Test async-to-blocking receiver switching for MPMC bounded channels with messages in buffer
 #[logfn]
 #[rstest]
-#[case(mpmc::bounded_async::<usize>(5))] // Small buffer to create backpressure
-fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered(
-    setup_log: (), #[case] channel: (MAsyncTx<usize>, MAsyncRx<usize>),
+#[case(mpmc::Bounded::<usize>::new_async(5))] // Small buffer to create backpressure
+fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (MAsyncTx<F>, MAsyncRx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 20; // More messages than buffer capacity
@@ -146,7 +150,7 @@ fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered(
         let (rx, async_received) = async_join_result!(receiver_task);
 
         // Convert to blocking receiver while messages are still in buffer
-        let sync_rx: MRx<usize> = rx.into();
+        let sync_rx: MRx<F> = rx.into();
 
         // Consume remaining messages with blocking receiver in thread
         let remaining_messages = total_messages - async_consumed;
@@ -185,9 +189,9 @@ fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered(
 // Test blocking-to-async sender switching for bounded channels
 #[logfn]
 #[rstest]
-#[case(spsc::bounded_blocking::<usize>(5))] // Small buffer for backpressure
-fn test_spsc_bounded_blocking_with_async_sender_switch(
-    setup_log: (), #[case] channel: (Tx<usize>, Rx<usize>),
+#[case(spsc::Bounded::<usize>::new_blocking(5))] // Small buffer for backpressure
+fn test_spsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (Tx<F>, Rx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 20;
@@ -219,7 +223,7 @@ fn test_spsc_bounded_blocking_with_async_sender_switch(
         let tx = sender_handle.join().expect("Sender thread panicked");
 
         // CRITICAL: Convert to async sender while buffer has backpressure
-        let async_tx: AsyncTx<usize> = tx.into();
+        let async_tx: AsyncTx<F> = tx.into();
 
         // Send remaining messages with async sender in task
         let remaining_messages = total_messages - sync_sent;
@@ -248,9 +252,9 @@ fn test_spsc_bounded_blocking_with_async_sender_switch(
 // Test blocking-to-async sender switching for multi-producer bounded channels
 #[logfn]
 #[rstest]
-#[case(mpsc::bounded_blocking::<usize>(5))] // Buffer < 12 total messages
-fn test_mpsc_bounded_blocking_with_async_sender_switch(
-    setup_log: (), #[case] channel: (MTx<usize>, Rx<usize>),
+#[case(mpsc::Bounded::<usize>::new_blocking(5))] // Buffer < 12 total messages
+fn test_mpsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (MTx<F>, Rx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 20;
@@ -270,7 +274,7 @@ fn test_mpsc_bounded_blocking_with_async_sender_switch(
         let tx = sender_handle.join().expect("Sender thread panicked");
 
         // CRITICAL: Convert to async multi-sender while messages are in buffer
-        let async_tx: MAsyncTx<usize> = tx.into();
+        let async_tx: MAsyncTx<F> = tx.into();
 
         // Send remaining messages with async multi-sender in a task
         let async_sender_task = async_spawn!(async move {
@@ -309,9 +313,9 @@ fn test_mpsc_bounded_blocking_with_async_sender_switch(
 // Test blocking-to-async sender switching for MPMC bounded channels
 #[logfn]
 #[rstest]
-#[case(mpmc::bounded_blocking::<usize>(5))] // Buffer < 12 total messages
-fn test_mpmc_bounded_blocking_with_async_sender_switch(
-    setup_log: (), #[case] channel: (MTx<usize>, MRx<usize>),
+#[case(mpmc::Bounded::<usize>::new_blocking(5))] // Buffer < 12 total messages
+fn test_mpmc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (MTx<F>, MRx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 20;
@@ -331,7 +335,7 @@ fn test_mpmc_bounded_blocking_with_async_sender_switch(
         let tx = sender_handle.join().expect("Sender thread panicked");
 
         // CRITICAL: Convert to async multi-sender while messages are in buffer
-        let async_tx: MAsyncTx<usize> = tx.into();
+        let async_tx: MAsyncTx<F> = tx.into();
 
         // Send remaining messages with async multi-sender in a task
         let async_sender_task = async_spawn!(async move {
@@ -369,9 +373,9 @@ fn test_mpmc_bounded_blocking_with_async_sender_switch(
 // Test blocking-to-async receiver switching for bounded channels
 #[logfn]
 #[rstest]
-#[case(spsc::bounded_blocking::<usize>(5))] // Buffer < 12 total messages
-fn test_spsc_bounded_blocking_with_async_receiver_switch(
-    setup_log: (), #[case] channel: (Tx<usize>, Rx<usize>),
+#[case(spsc::Bounded::<usize>::new_blocking(5))] // Buffer < 12 total messages
+fn test_spsc_bounded_blocking_with_async_receiver_switch<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (Tx<F>, Rx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 20;
@@ -404,7 +408,7 @@ fn test_spsc_bounded_blocking_with_async_receiver_switch(
         let (rx, sync_received) = receiver_handle.join().expect("Receiver thread panicked");
 
         // CRITICAL: Convert to async receiver while messages are still in buffer
-        let async_rx: AsyncRx<usize> = rx.into();
+        let async_rx: AsyncRx<F> = rx.into();
 
         // Consume remaining messages with async receiver in a task
         let async_receiver_task = async_spawn!(async move {
@@ -441,9 +445,9 @@ fn test_spsc_bounded_blocking_with_async_receiver_switch(
 // Test blocking-to-async receiver switching for multi-producer bounded channels
 #[logfn]
 #[rstest]
-#[case(mpsc::bounded_blocking::<usize>(5))] // Buffer < 12 total messages
-fn test_mpsc_bounded_blocking_with_async_receiver_switch(
-    setup_log: (), #[case] channel: (MTx<usize>, Rx<usize>),
+#[case(mpsc::Bounded::<usize>::new_blocking(5))] // Buffer < 12 total messages
+fn test_mpsc_bounded_blocking_with_async_receiver_switch<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (MTx<F>, Rx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 20;
@@ -476,7 +480,7 @@ fn test_mpsc_bounded_blocking_with_async_receiver_switch(
         let (rx, sync_received) = receiver_handle.join().expect("Receiver thread panicked");
 
         // CRITICAL: Convert to async receiver while messages are still in buffer
-        let async_rx: AsyncRx<usize> = rx.into();
+        let async_rx: AsyncRx<F> = rx.into();
 
         // Consume remaining messages with async receiver in a task
         let async_receiver_task = async_spawn!(async move {
@@ -513,9 +517,9 @@ fn test_mpsc_bounded_blocking_with_async_receiver_switch(
 // Test blocking-to-async receiver switching for MPMC bounded channels
 #[logfn]
 #[rstest]
-#[case(mpmc::bounded_blocking::<usize>(5))] // Buffer < 12 total messages
-fn test_mpmc_bounded_blocking_with_async_receiver_switch(
-    setup_log: (), #[case] channel: (MTx<usize>, MRx<usize>),
+#[case(mpmc::Bounded::<usize>::new_blocking(5))] // Buffer < 12 total messages
+fn test_mpmc_bounded_blocking_with_async_receiver_switch<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (MTx<F>, MRx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 20;
@@ -548,7 +552,7 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch(
         let (rx, sync_received) = receiver_handle.join().expect("Receiver thread panicked");
 
         // CRITICAL: Convert to async receiver while messages are still in buffer
-        let async_rx: MAsyncRx<usize> = rx.into();
+        let async_rx: MAsyncRx<F> = rx.into();
 
         // Consume remaining messages with async receiver in a task
         let async_receiver_task = async_spawn!(async move {
@@ -579,10 +583,13 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch(
 // Test multi-producer sender switching (MTx to MAsyncTx)
 #[logfn]
 #[rstest]
-#[case(mpsc::bounded_blocking::<usize>(5))] // Buffer < 20 total messages
-#[case(mpmc::bounded_blocking::<usize>(5))]
-fn test_multi_producer_sender_switch<R: BlockingRxTrait<usize>>(
-    setup_log: (), #[case] channel: (MTx<usize>, R),
+#[case(mpsc::Bounded::<usize>::new_blocking(5))] // Buffer < 20 total messages
+#[case(mpmc::Bounded::<usize>::new_blocking(5))]
+fn test_multi_producer_sender_switch<
+    F: Flavor<Item = usize> + 'static,
+    R: BlockingRxTrait<usize>,
+>(
+    setup_log: (), #[case] channel: (MTx<F>, R),
 ) {
     let (tx, rx) = channel;
     let total_messages = 20;
@@ -609,7 +616,7 @@ fn test_multi_producer_sender_switch<R: BlockingRxTrait<usize>>(
 
         // Get the sender back and convert to async
         let tx = sender_handle.join().expect("Sender thread panicked");
-        let async_tx: MAsyncTx<usize> = tx.into();
+        let async_tx: MAsyncTx<F> = tx.into();
 
         // Send remaining messages with async multi-sender in a task
         let async_sender_task = async_spawn!(async move {
@@ -636,9 +643,9 @@ fn test_multi_producer_sender_switch<R: BlockingRxTrait<usize>>(
 // Test async-to-blocking sender switching for SPSC bounded channels
 #[logfn]
 #[rstest]
-#[case(spsc::bounded_async::<usize>(5))] // Small buffer for backpressure
-fn test_spsc_bounded_async_with_blocking_sender_switch(
-    setup_log: (), #[case] channel: (AsyncTx<usize>, AsyncRx<usize>),
+#[case(spsc::Bounded::<usize>::new_async(5))] // Small buffer for backpressure
+fn test_spsc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (AsyncTx<F>, AsyncRx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 10;
@@ -656,7 +663,7 @@ fn test_spsc_bounded_async_with_blocking_sender_switch(
 
         // Get the sender back and convert to blocking
         let tx = async_join_result!(sender_task);
-        let blocking_tx: Tx<usize> = tx.into();
+        let blocking_tx: Tx<F> = tx.into();
 
         // Send remaining messages with blocking sender in thread
         let blocking_sender_handle = std::thread::spawn(move || {
@@ -693,9 +700,9 @@ fn test_spsc_bounded_async_with_blocking_sender_switch(
 // Test async-to-blocking sender switching for MPSC bounded channels
 #[logfn]
 #[rstest]
-#[case(mpsc::bounded_async::<usize>(5))] // Small buffer for backpressure
-fn test_mpsc_bounded_async_with_blocking_sender_switch(
-    setup_log: (), #[case] channel: (MAsyncTx<usize>, AsyncRx<usize>),
+#[case(mpsc::Bounded::<usize>::new_async(5))] // Small buffer for backpressure
+fn test_mpsc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (MAsyncTx<F>, AsyncRx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 10;
@@ -713,7 +720,7 @@ fn test_mpsc_bounded_async_with_blocking_sender_switch(
 
         // Get the sender back and convert to blocking
         let tx = async_join_result!(sender_task);
-        let blocking_tx: MTx<usize> = tx.into();
+        let blocking_tx: MTx<F> = tx.into();
 
         // Send remaining messages with blocking multi-sender in thread
         let blocking_sender_handle = std::thread::spawn(move || {
@@ -750,9 +757,9 @@ fn test_mpsc_bounded_async_with_blocking_sender_switch(
 // Test async-to-blocking sender switching for MPMC bounded channels
 #[logfn]
 #[rstest]
-#[case(mpmc::bounded_async::<usize>(5))] // Small buffer for backpressure
-fn test_mpmc_bounded_async_with_blocking_sender_switch(
-    setup_log: (), #[case] channel: (MAsyncTx<usize>, MAsyncRx<usize>),
+#[case(mpmc::Bounded::<usize>::new_async(5))] // Small buffer for backpressure
+fn test_mpmc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> + 'static>(
+    setup_log: (), #[case] channel: (MAsyncTx<F>, MAsyncRx<F>),
 ) {
     let (tx, rx) = channel;
     let total_messages = 10;
@@ -770,7 +777,7 @@ fn test_mpmc_bounded_async_with_blocking_sender_switch(
 
         // Get the sender back and convert to blocking
         let tx = async_join_result!(sender_task);
-        let blocking_tx: MTx<usize> = tx.into();
+        let blocking_tx: MTx<F> = tx.into();
 
         // Send remaining messages with blocking multi-sender in thread
         let blocking_sender_handle = std::thread::spawn(move || {
