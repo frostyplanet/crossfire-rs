@@ -9,14 +9,14 @@ use crate::async_rx::*;
 use crate::async_tx::*;
 use crate::blocking_rx::*;
 use crate::blocking_tx::*;
-use crate::flavor::{flavor_enum_dispatch, Flavor, FlavorMC, FlavorMP};
+use crate::flavor::{flavor_dispatch, Flavor, FlavorImpl, FlavorMC, FlavorMP, FlavorWrap};
 use crate::shared::*;
 use crate::{ReceiverType, SenderType};
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
 /// Flavor Type alias for unbounded MPMC channel
-pub type List<T> = crate::flavor::List<T>;
+pub type List<T> = FlavorWrap<crate::flavor::List<T>, RegistryDummy, RegistryMultiRecv>;
 
 /// Flavor Type alias for bounded MPMC channel wrapped with specified One impl
 pub enum Array<T> {
@@ -47,7 +47,15 @@ macro_rules! wrap_array {
     };
 }
 
-flavor_enum_dispatch!(Array, wrap_array);
+impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
+    type Item = T;
+    flavor_dispatch!(wrap_array);
+}
+
+impl<T: Send + Unpin + 'static> Flavor for Array<T> {
+    type Send = RegistryMultiSend<T>;
+    type Recv = RegistryMultiRecv;
+}
 
 /// The generic builder for all mpmc channel type.
 ///
@@ -61,13 +69,7 @@ where
     S: SenderType<F> + Clone,
     R: ReceiverType<F> + Clone,
 {
-    let send_wakers = if flavor.capacity().is_none() {
-        RegistrySender::Dummy
-    } else {
-        RegistrySender::new_multi()
-    };
-    let recv_wakers = RegistryRecv::new_multi();
-    let shared = ChannelShared::new(flavor, send_wakers, recv_wakers);
+    let shared = ChannelShared::new(flavor);
     (S::new(shared.clone()), R::new(shared))
 }
 
@@ -88,7 +90,7 @@ where
         T: Send + 'static + Unpin,
         R: ReceiverType<List<T>> + Clone,
     {
-        build::<List<T>, MTx<List<T>>, R>(List::<T>::new())
+        build::<List<T>, MTx<List<T>>, R>(List::<T>::from(crate::flavor::List::<T>::new()))
     }
 
     #[inline]

@@ -238,7 +238,7 @@ pub use async_tx::*;
 mod async_rx;
 pub use async_rx::*;
 
-pub mod compat;
+//pub mod compat;
 pub mod sink;
 pub mod stream;
 

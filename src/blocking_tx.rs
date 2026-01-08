@@ -123,7 +123,7 @@ impl<F: Flavor> Tx<F> {
             if direct_copy { item.as_ptr() } else { std::ptr::null() };
 
         let mut state: u8;
-        let mut o_waker: Option<SendWaker<F::Item>> = None;
+        let mut o_waker: Option<<F::Send as Registry>::Waker> = None;
         macro_rules! return_ok {
             () => {
                 trace_log!("tx: send {:?}", o_waker);

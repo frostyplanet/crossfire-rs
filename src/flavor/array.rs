@@ -1,4 +1,4 @@
-use super::{Flavor, FlavorMC, FlavorMP};
+use super::FlavorImpl;
 use crate::crossbeam::array_queue::ArrayQueue;
 use std::mem::MaybeUninit;
 
@@ -14,7 +14,7 @@ impl<T, const MP: bool, const MC: bool> Array<T, MP, MC> {
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Flavor for Array<T, MP, MC> {
+impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for Array<T, MP, MC> {
     type Item = T;
 
     #[inline(always)]
@@ -86,7 +86,3 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Flavor for Array
         }
     }
 }
-
-impl<T> FlavorMP for Array<T, true, false> {}
-impl<T> FlavorMP for Array<T, true, true> {}
-impl<T> FlavorMC for Array<T, true, true> {}

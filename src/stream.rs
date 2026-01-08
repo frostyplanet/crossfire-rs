@@ -11,7 +11,7 @@ use std::task::*;
 /// Implements `futures_core::stream::Stream`.
 pub struct AsyncStream<F: Flavor> {
     rx: AsyncRx<F>,
-    waker: Option<RecvWaker>,
+    waker: Option<<F::Recv as Registry>::Waker>,
     ended: bool,
 }
 

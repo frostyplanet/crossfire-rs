@@ -1,4 +1,4 @@
-use super::{Flavor, FlavorMC, FlavorMP};
+use super::FlavorImpl;
 use crossbeam_queue::SegQueue;
 use std::mem::MaybeUninit;
 
@@ -11,7 +11,7 @@ impl<T> List<T> {
     }
 }
 
-impl<T: Send + 'static + Unpin> Flavor for List<T> {
+impl<T: Send + Unpin + 'static> FlavorImpl for List<T> {
     type Item = T;
 
     #[inline(always)]
@@ -55,6 +55,3 @@ impl<T: Send + 'static + Unpin> Flavor for List<T> {
         false
     }
 }
-
-impl<T> FlavorMP for List<T> {}
-impl<T> FlavorMC for List<T> {}

@@ -37,26 +37,9 @@ impl WakeResult {
     }
 }
 
-pub enum WakerHanle<P> {
-    Multi(ArcWaker<P>),
-    Single, // it's only use on async sender
-}
-
-pub type SendWaker<T> = WakerHanle<*const T>;
-pub type RecvWaker = WakerHanle<()>;
-
 /// Although removing direct copy feature of the payload pointer is not used,
 /// leave it to unbuffer channel in the future
 pub struct ArcWaker<P>(Arc<WakerInner<P>>);
-
-impl<P> fmt::Debug for WakerHanle<P> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Single => write!(f, "waker"),
-            Self::Multi(inner) => inner.fmt(f),
-        }
-    }
-}
 
 impl<P> fmt::Debug for ArcWaker<P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

@@ -39,26 +39,26 @@ use crate::async_rx::*;
 use crate::async_tx::*;
 use crate::blocking_rx::*;
 use crate::blocking_tx::*;
-use crate::flavor::{flavor_enum_dispatch, Flavor};
+use crate::flavor::{flavor_dispatch, Flavor, FlavorImpl, FlavorWrap};
 use crate::shared::*;
 use crate::{NotClonable, ReceiverType, SenderType};
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
 /// Flavor Type alias for unbounded SPSC channel
-pub type List<T> = crate::flavor::List<T>;
+pub type List<T> = FlavorWrap<crate::flavor::List<T>, RegistryDummy, RegistrySingle>;
 
 /// Flavor Type alias for bounded SPSC channel wrapped with specified One impl
 pub enum Array<T> {
     Array(crate::flavor::Array<T, false, false>),
-    One(crate::flavor::OneSpmc<T>),
+    One(crate::flavor::One<T>),
 }
 
 impl<T: Send + Unpin + 'static> Array<T> {
     #[inline]
     pub fn new(size: usize) -> Self {
         if size <= 1 {
-            Self::One(crate::flavor::OneSpmc::new())
+            Self::One(crate::flavor::One::new())
         } else {
             Self::Array(crate::flavor::Array::<T, false, false>::new(size))
         }
@@ -74,7 +74,15 @@ macro_rules! wrap_array {
     };
 }
 
-flavor_enum_dispatch!(Array, wrap_array);
+impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
+    type Item = T;
+    flavor_dispatch!(wrap_array);
+}
+
+impl<T: Send + Unpin + 'static> Flavor for Array<T> {
+    type Send = RegistrySingle;
+    type Recv = RegistrySingle;
+}
 
 /// The generic builder for all spsc channel type.
 ///
@@ -88,13 +96,7 @@ where
     S: SenderType<F>,
     R: ReceiverType<F> + NotClonable,
 {
-    let send_wakers = if flavor.capacity().is_none() {
-        RegistrySender::Dummy
-    } else {
-        RegistrySender::new_single()
-    };
-    let recv_wakers = RegistryRecv::new_single();
-    let shared = ChannelShared::new(flavor, send_wakers, recv_wakers);
+    let shared = ChannelShared::new(flavor);
     (S::new(shared.clone()), R::new(shared))
 }
 
@@ -115,7 +117,7 @@ where
         T: Send + 'static + Unpin,
         R: ReceiverType<List<T>> + NotClonable,
     {
-        build::<List<T>, Tx<List<T>>, R>(List::<T>::new())
+        build::<List<T>, Tx<List<T>>, R>(List::<T>::from(crate::flavor::List::<T>::new()))
     }
 
     #[inline]

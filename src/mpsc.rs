@@ -39,14 +39,14 @@ use crate::async_rx::*;
 use crate::async_tx::*;
 use crate::blocking_rx::*;
 use crate::blocking_tx::*;
-use crate::flavor::{flavor_enum_dispatch, Flavor, FlavorMP};
+use crate::flavor::{flavor_dispatch, Flavor, FlavorImpl, FlavorMP, FlavorWrap};
 use crate::shared::*;
 use crate::{NotClonable, ReceiverType, SenderType};
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
 /// Flavor Type alias for unbounded MPSC channel
-pub type List<T> = crate::flavor::List<T>;
+pub type List<T> = FlavorWrap<crate::flavor::List<T>, RegistryDummy, RegistrySingle>;
 
 /// Flavor Type alias for bounded MPSC channel wrapped with specified One impl
 pub enum Array<T> {
@@ -76,7 +76,15 @@ macro_rules! wrap_array {
     };
 }
 
-flavor_enum_dispatch!(Array, wrap_array);
+impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
+    type Item = T;
+    flavor_dispatch!(wrap_array);
+}
+
+impl<T: Send + Unpin + 'static> Flavor for Array<T> {
+    type Send = RegistryMultiSend<T>;
+    type Recv = RegistrySingle;
+}
 
 /// The generic builder for all mpsc channel type.
 ///
@@ -110,13 +118,7 @@ where
     S: SenderType<F> + Clone,
     R: ReceiverType<F> + NotClonable,
 {
-    let send_wakers = if flavor.capacity().is_none() {
-        RegistrySender::Dummy
-    } else {
-        RegistrySender::new_multi()
-    };
-    let recv_wakers = RegistryRecv::new_single();
-    let shared = ChannelShared::new(flavor, send_wakers, recv_wakers);
+    let shared = ChannelShared::new(flavor);
     (S::new(shared.clone()), R::new(shared))
 }
 
@@ -146,7 +148,7 @@ where
         T: Send + 'static + Unpin,
         R: ReceiverType<List<T>> + NotClonable,
     {
-        build::<List<T>, MTx<List<T>>, R>(List::<T>::new())
+        build::<List<T>, MTx<List<T>>, R>(List::<T>::from(crate::flavor::List::<T>::new()))
     }
 
     #[inline]

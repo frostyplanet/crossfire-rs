@@ -1,4 +1,4 @@
-use super::Flavor;
+use super::FlavorImpl;
 use core::cell::UnsafeCell;
 use core::mem::{needs_drop, MaybeUninit};
 use crossbeam_utils::CachePadded;
@@ -37,6 +37,13 @@ impl<T> OneSpmc<T> {
     #[inline(always)]
     fn pack(head: u32, tail: u32) -> u64 {
         ((head as u64) << 32) | (tail as u64)
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        let pos = self.pos.load(SeqCst);
+        let (head, tail) = Self::unpack(pos);
+        head == tail
     }
 
     #[inline]
@@ -97,6 +104,11 @@ impl<T> OneSpmc<T> {
                 }
             }
         }
+    }
+
+    #[inline(always)]
+    pub fn pop(&self) -> Option<T> {
+        self._pop(Ordering::SeqCst)
     }
 
     #[inline(always)]
@@ -167,7 +179,7 @@ impl<T> Slot<T> {
     }
 }
 
-impl<T: Send + Unpin + 'static> Flavor for OneSpmc<T> {
+impl<T: Send + Unpin + 'static> FlavorImpl for OneSpmc<T> {
     type Item = T;
 
     #[inline(always)]
@@ -180,6 +192,11 @@ impl<T: Send + Unpin + 'static> Flavor for OneSpmc<T> {
     }
 
     #[inline(always)]
+    fn is_empty(&self) -> bool {
+        Self::is_empty(self)
+    }
+
+    #[inline(always)]
     fn capacity(&self) -> Option<usize> {
         Some(1)
     }
@@ -189,13 +206,6 @@ impl<T: Send + Unpin + 'static> Flavor for OneSpmc<T> {
         let pos = self.pos.load(SeqCst);
         let (head, tail) = Self::unpack(pos);
         head != tail
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        let pos = self.pos.load(SeqCst);
-        let (head, tail) = Self::unpack(pos);
-        head == tail
     }
 
     #[inline(always)]

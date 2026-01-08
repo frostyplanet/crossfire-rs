@@ -58,7 +58,7 @@ use crate::shared::*;
 pub use crate::{AsyncRxTrait, AsyncTxTrait, BlockingRxTrait, BlockingTxTrait};
 use std::mem::MaybeUninit;
 
-pub enum CompatFlavor<T> {
+pub enum CompatFlavor<T, S, R> {
     Array(crate::flavor::Array<T, true, true>),
     List(crate::flavor::List<T>),
 }

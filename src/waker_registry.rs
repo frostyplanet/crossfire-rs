@@ -1,4 +1,4 @@
-use crate::flavor::{Flavor, OneSpmc};
+use crate::flavor::{Flavor, FlavorImpl, OneSpmc};
 use crate::shared::ChannelShared;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
@@ -6,131 +6,61 @@ use crate::trace_log;
 use crate::waker::*;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Weak;
 use std::task::{Context, Poll};
 use std::thread;
 
-pub enum RegistrySender<T> {
-    Single(RegistrySingle),
-    Multi(RegistryMulti<*const T>),
-    Dummy,
+pub(crate) type RegistryMultiSend<T> = RegistryMulti<*const T>;
+pub(crate) type RegistryMultiRecv = RegistryMulti<()>;
+
+pub trait Registry: Send + 'static {
+    type Waker: Send + Unpin + 'static;
+
+    fn get_waker_state(&self, o_waker: &Option<Self::Waker>, order: Ordering) -> u8;
+
+    #[inline(always)]
+    fn clear_wakers(&self, _waker: &Self::Waker) {}
+
+    fn close(&self);
+
+    fn len(&self) -> usize;
+
+    #[inline(always)]
+    fn commit_waiting(&self, _o_waker: &Option<Self::Waker>) -> u8 {
+        WakerState::Init as u8
+    }
+
+    #[inline(always)]
+    fn cancel_waker(&self, _o_waker: &mut Option<Self::Waker>) {}
+
+    /// return false when waker is none
+    fn abandon_waker(&self, o_waker: &mut Option<Self::Waker>) -> Result<bool, u8>;
 }
 
-impl<T> RegistrySender<T> {
+pub trait RegistrySend<T: Send + 'static>: Registry {
+    fn new() -> Self;
+
     #[inline(always)]
-    pub fn new_single() -> Self {
-        Self::Single(RegistrySingle::new())
+    fn use_direct_copy(&self) -> bool {
+        false
     }
 
     #[inline(always)]
-    pub fn new_multi() -> Self {
-        Self::Multi(RegistryMulti::<*const T>::new())
-    }
-
-    #[inline(always)]
-    pub fn use_direct_copy(&self) -> bool {
-        if let Self::Multi(inner) = self {
-            !inner.is_empty()
-        } else {
-            false
-        }
-    }
-
-    #[inline(always)]
-    pub fn get_waker_state(&self, o_waker: &Option<SendWaker<T>>, order: Ordering) -> u8 {
-        if let Some(WakerHanle::Multi(waker)) = o_waker {
-            waker._get_state(order)
-        } else {
-            if let Self::Single(inner) = self {
-                if inner.is_empty() {
-                    WakerState::Woken as u8
-                } else {
-                    WakerState::Init as u8
-                }
-            } else {
-                unreachable!();
-            }
-        }
-    }
-
-    #[inline(always)]
-    pub fn cache_waker(&self, o_waker: Option<SendWaker<T>>, cache: &WakerCache<*const T>) {
-        if let Some(WakerHanle::Multi(waker)) = o_waker {
-            if waker.get_state() >= WakerState::Woken as u8 {
-                cache.push(waker);
-            }
-        }
-    }
-
-    #[inline(always)]
-    pub fn reg_waker_async(
-        &self, ctx: &mut Context, o_waker: &mut Option<SendWaker<T>>,
-    ) -> Option<Poll<()>> {
-        match self {
-            Self::Multi(inner) => {
-                return inner.reg_waker_async(ctx, o_waker, std::ptr::null_mut(), "tx");
-            }
-            Self::Single(inner) => {
-                let waker = ThinWaker::Async(ctx.waker().clone());
-                inner.reg_waker(waker);
-                o_waker.replace(WakerHanle::Single);
-                // should store into o_waker, AsyncTx need to drop item when SendFuture drop
-                return None;
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    #[inline(always)]
-    pub fn reg_waker_blocking(
-        &self, o_waker: &mut Option<SendWaker<T>>, cache: &WakerCache<*const T>, payload: *const T,
+    fn reg_waker_blocking(
+        &self, _o_waker: &mut Option<<Self as Registry>::Waker>, _cache: &WakerCache<*const T>,
+        _payload: *const T,
     ) {
-        match self {
-            Self::Multi(inner) => {
-                return inner.reg_waker_blocking(o_waker, cache, payload, "tx");
-            }
-            Self::Single(inner) => {
-                let waker = ThinWaker::Blocking(thread::current());
-                trace_log!("tx{:?}: reg {:?}", tokio_task_id!(), waker);
-                inner.reg_waker(waker);
-            }
-            _ => unreachable!(),
-        }
+        unreachable!();
     }
 
     #[inline(always)]
-    fn _clear_wakers(&self, waker: &ArcWaker<*const T>, oneshot: bool) {
-        if let Self::Multi(inner) = self {
-            inner.clear_wakers(waker, oneshot, "tx");
-        } else {
-            unreachable!();
-        }
+    fn reg_waker_async(
+        &self, _ctx: &mut Context, _o_waker: &mut Option<<Self as Registry>::Waker>,
+    ) -> Option<Poll<()>> {
+        unreachable!();
     }
-
-    /// Cancel outdated wakers until me, make sure it does not accumulate
-    #[inline(always)]
-    pub fn clear_wakers(&self, waker: &ArcWaker<*const T>) {
-        self._clear_wakers(waker, false);
-    }
-
-    ///// remove outdated waker, make sure it does not accumulate.
-    /////
-    ///// It's ok to set state with Relaxed here, two scenario:
-    ///// * set Done while the state is Init, does not matter other thread see it or not.
-    ///// * other thread might have wake it in the process, but we are dropping it anyway, and then
-    ///// reg_waker with a new one.
-    //#[inline(always)]
-    //pub fn cancel_waker(&self, o_waker: &mut Option<SendWaker<T>>) {
-    //    if let Some(WakerHanle::Multi(waker)) = o_waker.take() {
-    //        // If we se Woken here, only possible otherside has woken it
-    //        if waker.get_state_relaxed() >= WakerState::Woken as u8 {
-    //            return;
-    //        }
-    //        let aker) = o_waker {
-    //            self._clear_wakers(waker, true);
-    //        }
-    //    }
 
     /// remove outdated waker, make sure it does not accumulate.
     ///
@@ -138,238 +68,199 @@ impl<T> RegistrySender<T> {
     /// * set Done while the state is Init, does not matter other thread see it or not.
     /// * other thread might have wake it in the process, but we are dropping it anyway, and then
     /// reg_waker with a new one.
-    #[inline(always)]
-    pub fn cancel_reuse_waker(&self, o_waker: &mut Option<SendWaker<T>>, state: WakerState) -> u8 {
-        if let Self::Multi(inner) = self {
-            if let Some(WakerHanle::Multi(waker)) = o_waker.as_ref() {
-                let cur_state = waker.get_state();
-                // If we se Woken here, only possible otherside has woken it
-                if cur_state >= WakerState::Woken as u8 {
-                    trace_log!("tx: cancel_reuse {:?} {}", waker, cur_state);
-                    if cur_state < state as u8 {
-                        return state as u8;
-                    } else {
-                        return cur_state;
-                    }
-                } else {
-                    inner.clear_wakers(&waker, true, "tx");
-                    let _ = o_waker.take();
-                    return state as u8;
-                }
-            } else {
-                unreachable!();
-            }
-        }
-        return state as u8;
+    fn cancel_reuse_waker(
+        &self, _o_waker: &mut Option<<Self as Registry>::Waker>, _state: WakerState,
+    ) -> u8 {
+        unreachable!();
     }
 
     #[inline(always)]
-    pub fn fire<F: Flavor<Item = T>>(&self, shared: &ChannelShared<F>) -> WakeResult {
-        match self {
-            Self::Multi(inner) => {
-                return inner.fire(|waker| shared.on_recv_try_send(waker), "tx");
-            }
-            Self::Single(inner) => {
-                inner.fire("tx");
-            }
-            _ => {}
-        }
-        return WakeResult::Next;
+    fn fire<F: Flavor>(&self, _shared: &ChannelShared<F>) -> WakeResult
+    where
+        F: FlavorImpl<Item = T>,
+    {
+        WakeResult::Next
     }
 
     #[inline(always)]
-    pub fn close(&self) {
-        match self {
-            Self::Single(inner) => inner.fire("tx"),
-            Self::Multi(inner) => inner.close("tx"),
-            _ => {}
-        }
-    }
-
-    /// return waker queue size
-    #[inline]
-    pub fn len(&self) -> usize {
-        if let Self::Multi(inner) = self {
-            inner.len()
-        } else {
-            0
-        }
-    }
-
-    #[inline(always)]
-    pub fn commit_waiting(&self, o_waker: &Option<SendWaker<T>>) -> u8 {
-        if let Some(WakerHanle::Multi(waker)) = &o_waker {
-            return waker.commit_waiting();
-        }
-        return WakerState::Init as u8;
+    fn cache_waker(
+        &self, _o_waker: Option<<Self as Registry>::Waker>, _cache: &WakerCache<*const T>,
+    ) {
     }
 }
 
-pub enum RegistryRecv {
-    Single(RegistrySingle),
-    Multi(RegistryMulti<()>),
-}
+pub trait RegistryRecv: Registry {
+    fn new() -> Self;
 
-impl RegistryRecv {
     #[inline(always)]
-    pub fn new_single() -> Self {
-        Self::Single(RegistrySingle::new())
+    fn fire(&self) {}
+
+    #[inline(always)]
+    fn reg_waker_blocking(
+        &self, _o_waker: &mut Option<<Self as Registry>::Waker>, _cache: &WakerCache<()>,
+    ) {
+        unreachable!();
     }
 
     #[inline(always)]
-    pub fn new_multi() -> Self {
-        Self::Multi(RegistryMulti::<()>::new())
-    }
-
-    #[inline(always)]
-    pub fn get_waker_state(&self, o_waker: &Option<RecvWaker>) -> u8 {
-        if let Some(WakerHanle::Multi(waker)) = o_waker.as_ref() {
-            waker.get_state()
-        } else {
-            if let Self::Single(inner) = self {
-                if inner.is_empty() {
-                    WakerState::Woken as u8
-                } else {
-                    WakerState::Init as u8
-                }
-            } else {
-                unreachable!();
-            }
-        }
-    }
-
-    #[inline(always)]
-    pub fn reg_waker_async(
-        &self, ctx: &mut Context, o_waker: &mut Option<RecvWaker>,
+    fn reg_waker_async(
+        &self, _ctx: &mut Context, _o_waker: &mut Option<<Self as Registry>::Waker>,
     ) -> Option<Poll<()>> {
-        match self {
-            Self::Multi(inner) => {
-                return inner.reg_waker_async(ctx, o_waker, (), "rx");
-            }
-            Self::Single(inner) => {
-                let waker = ThinWaker::Async(ctx.waker().clone());
-                inner.reg_waker(waker);
-                // XXX: should store into o_waker ?
-                return None;
-            }
-        }
+        unreachable!();
     }
 
     #[inline(always)]
-    pub fn reg_waker_blocking(&self, o_waker: &mut Option<RecvWaker>, cache: &WakerCache<()>) {
-        match self {
-            Self::Multi(inner) => {
-                return inner.reg_waker_blocking(o_waker, cache, (), "rx");
-            }
-            Self::Single(inner) => {
-                let waker = ThinWaker::Blocking(thread::current());
-                trace_log!("rx{:?}: reg {:?}", tokio_task_id!(), waker);
-                inner.reg_waker(waker);
-            }
-        }
+    fn cache_waker(&self, _o_waker: Option<<Self as Registry>::Waker>, _cache: &WakerCache<()>) {}
+}
+
+#[derive(Debug)]
+pub struct RegistryDummy();
+
+impl Registry for RegistryDummy {
+    type Waker = ();
+
+    #[inline(always)]
+    fn get_waker_state(&self, _o_waker: &Option<Self::Waker>, _order: Ordering) -> u8 {
+        unreachable!();
     }
 
     #[inline(always)]
-    pub fn cache_waker(&self, o_waker: Option<RecvWaker>, cache: &WakerCache<()>) {
-        if let Some(WakerHanle::Multi(waker)) = o_waker {
-            if waker.get_state() >= WakerState::Woken as u8 {
-                cache.push(waker);
-            }
-        }
+    fn close(&self) {}
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        0
     }
 
     #[inline(always)]
-    pub fn fire(&self) {
-        match self {
-            Self::Multi(inner) => {
-                inner.fire(|waker| waker.wake(), "rx");
-            }
-            Self::Single(inner) => {
-                inner.fire("rx");
-            }
-        }
+    fn abandon_waker(&self, _o_waker: &mut Option<Self::Waker>) -> Result<bool, u8> {
+        Ok(false)
     }
+}
 
+impl<T: Send + 'static> RegistrySend<T> for RegistryDummy {
     #[inline(always)]
-    fn _clear_wakers(&self, waker: &ArcWaker<()>, oneshot: bool) {
-        match self {
-            Self::Multi(inner) => {
-                inner.clear_wakers(waker, oneshot, "rx");
-            }
-            _ => {}
-        }
-    }
-
-    /// cancel outdated wakers until me, make sure it does not accumulate
-    #[inline(always)]
-    pub fn clear_wakers(&self, waker: &ArcWaker<()>) {
-        self._clear_wakers(waker, false)
-    }
-
-    /// cancel one outdated waker, make sure it does not accumulate
-    #[inline(always)]
-    pub fn cancel_waker(&self, o_waker: &mut Option<RecvWaker>) {
-        if let Some(WakerHanle::Multi(waker)) = o_waker.take() {
-            // If we se Woken here, only possible otherside has woken it
-            if waker.get_state_relaxed() >= WakerState::Woken as u8 {
-                return;
-            }
-            self._clear_wakers(&waker, true)
-        }
-    }
-
-    #[inline(always)]
-    pub fn close(&self) {
-        match self {
-            Self::Single(inner) => inner.fire("rx"),
-            Self::Multi(inner) => inner.close("rx"),
-        }
-    }
-
-    /// return waker queue size
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Single(_inner) => 0,
-            Self::Multi(inner) => inner.len(),
-        }
-    }
-
-    #[inline(always)]
-    pub fn commit_waiting(&self, o_waker: &Option<RecvWaker>) -> u8 {
-        if let Some(RecvWaker::Multi(waker)) = &o_waker {
-            return waker.commit_waiting();
-        }
-        return WakerState::Init as u8;
+    fn new() -> Self {
+        Self()
     }
 }
 
 pub struct RegistrySingle {
     cell: OneSpmc<ThinWaker>,
+    _tag: &'static str,
 }
 
 impl RegistrySingle {
     #[inline(always)]
-    pub fn new() -> Self {
-        Self { cell: OneSpmc::new() }
-    }
-
-    /// return is_skip
-    #[inline(always)]
-    fn reg_waker(&self, waker: ThinWaker) {
-        self.cell.replace(waker);
-    }
-
-    #[inline(always)]
-    fn fire(&self, _tag: &str) {
-        if let Some(waker) = self.cell.try_recv_final() {
+    fn _fire(&self) {
+        if let Some(waker) = self.cell.pop() {
             waker.wake();
-            trace_log!("{} wake", _tag);
+            trace_log!("{} wake", self._tag);
         }
     }
 
-    #[inline]
-    fn is_empty(&self) -> bool {
-        self.cell.is_empty()
+    #[inline(always)]
+    fn _reg_waker_async(&self, ctx: &mut Context) {
+        // XXX don't know what the waker was, always generate new
+        let waker = ThinWaker::Async(ctx.waker().clone());
+        self.cell.replace(waker);
+        trace_log!("{}{:?}: reg {:?}", self._tag, tokio_task_id!(), waker);
+        // should store into o_waker, AsyncTx need to drop item when SendFuture drop
+    }
+
+    #[inline(always)]
+    fn _reg_waker_blocking(&self) {
+        let waker = ThinWaker::Blocking(thread::current());
+        trace_log!("{}{:?}: reg {:?}", self._tag, tokio_task_id!(), waker);
+        self.cell.replace(waker);
+    }
+}
+
+impl Registry for RegistrySingle {
+    type Waker = ();
+
+    #[inline(always)]
+    fn get_waker_state(&self, _o_waker: &Option<()>, _order: Ordering) -> u8 {
+        if self.cell.is_empty() {
+            WakerState::Woken as u8
+        } else {
+            WakerState::Init as u8
+        }
+    }
+
+    #[inline(always)]
+    fn close(&self) {
+        self._fire();
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        0
+    }
+
+    #[inline(always)]
+    fn abandon_waker(&self, o_waker: &mut Option<()>) -> Result<bool, u8> {
+        Ok(o_waker.take().is_some())
+    }
+}
+
+impl<T: Send + 'static> RegistrySend<T> for RegistrySingle {
+    #[inline(always)]
+    fn new() -> Self {
+        Self { cell: OneSpmc::new(), _tag: "tx" }
+    }
+
+    #[inline(always)]
+    fn cancel_reuse_waker(&self, _o_waker: &mut Option<()>, state: WakerState) -> u8 {
+        state as u8
+    }
+
+    #[inline(always)]
+    fn fire<F: Flavor>(&self, _shared: &ChannelShared<F>) -> WakeResult
+    where
+        F: FlavorImpl<Item = T>,
+    {
+        self._fire();
+        return WakeResult::Next;
+    }
+
+    #[inline(always)]
+    fn reg_waker_blocking(
+        &self, o_waker: &mut Option<()>, _cache: &WakerCache<*const T>, _payload: *const T,
+    ) {
+        self._reg_waker_blocking();
+        o_waker.replace(());
+    }
+
+    #[inline(always)]
+    fn reg_waker_async(&self, ctx: &mut Context, o_waker: &mut Option<()>) -> Option<Poll<()>> {
+        self._reg_waker_async(ctx);
+        // for abandon
+        o_waker.replace(());
+        None
+    }
+}
+
+impl RegistryRecv for RegistrySingle {
+    #[inline(always)]
+    fn new() -> Self {
+        Self { cell: OneSpmc::new(), _tag: "rx" }
+    }
+
+    #[inline(always)]
+    fn fire(&self) {
+        self._fire();
+    }
+
+    #[inline(always)]
+    fn reg_waker_blocking(&self, _o_waker: &mut Option<()>, _cache: &WakerCache<()>) {
+        self._reg_waker_blocking()
+    }
+
+    #[inline(always)]
+    fn reg_waker_async(&self, ctx: &mut Context, _o_waker: &mut Option<()>) -> Option<Poll<()>> {
+        self._reg_waker_async(ctx);
+        None
     }
 }
 
@@ -381,76 +272,13 @@ struct RegistryMultiInner<P> {
 pub struct RegistryMulti<P> {
     is_empty: AtomicBool,
     inner: Mutex<RegistryMultiInner<P>>,
+    _tag: &'static str,
 }
 
 impl<P: Copy> RegistryMulti<P> {
     #[inline(always)]
-    pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
-            is_empty: AtomicBool::new(true),
-        }
-    }
-
-    #[inline(always)]
     fn is_empty(&self) -> bool {
         self.is_empty.load(Ordering::Acquire)
-    }
-
-    #[inline]
-    pub fn reg_waker_blocking(
-        &self, o_waker: &mut Option<WakerHanle<P>>, cache: &WakerCache<P>, payload: P, _tag: &str,
-    ) {
-        if let Some(WakerHanle::Multi(waker)) = o_waker.as_ref() {
-            waker.reset_init();
-            self.reg_waker(&waker);
-            trace_log!("{}{:?}: reg {:?}", _tag, tokio_task_id!(), waker);
-        } else {
-            debug_assert!(o_waker.is_none());
-            let waker = cache.new_blocking(payload);
-            self.reg_waker(&waker);
-            trace_log!("{}{:?}: reg {:?}", _tag, tokio_task_id!(), waker);
-            o_waker.replace(WakerHanle::Multi(waker));
-        }
-    }
-
-    #[inline]
-    fn reg_waker_async(
-        &self, ctx: &mut Context, o_waker: &mut Option<WakerHanle<P>>, null_value: P, _tag: &str,
-    ) -> Option<Poll<()>> {
-        if let Some(WakerHanle::Multi(waker)) = o_waker.as_ref() {
-            match waker.try_change_state(WakerState::Woken, WakerState::Init) {
-                Ok(_) => {
-                    if waker.will_wake(ctx) {
-                        self.reg_waker(&waker);
-                        return None;
-                    }
-                }
-                Err(state) => {
-                    if state < WakerState::Woken as u8 {
-                        if waker.will_wake(ctx) {
-                            trace_log!("{} {:?}: will_wake {:?}", _tag, tokio_task_id!(), waker);
-                            // Normally only selection or multiplex future will get here.
-                            // No need to reg again, since waker is not consumed.
-                            return Some(Poll::Pending);
-                        } else {
-                            // Spurious woken by runtime, waker can not be re-used (issue 38)
-                            // If we se Woken here, only possible otherside has woken it
-                            if waker.get_state_relaxed() < WakerState::Woken as u8 {
-                                self.clear_wakers(waker, true, _tag);
-                            }
-                            trace_log!("{} {:?}: drop waker {:?}", _tag, tokio_task_id!(), waker);
-                        }
-                    } else if state == WakerState::Closed as u8 {
-                        return Some(Poll::Ready(()));
-                    }
-                }
-            }
-        }
-        let waker = ArcWaker::<P>::new_async(ctx, null_value);
-        self.reg_waker(&waker);
-        o_waker.replace(WakerHanle::Multi(waker));
-        return None;
     }
 
     #[inline(always)]
@@ -465,6 +293,72 @@ impl<P: Copy> RegistryMulti<P> {
                 self.is_empty.store(false, Ordering::SeqCst);
             }
             guard.queue.push_back(weak);
+        }
+    }
+
+    #[inline(always)]
+    fn _reg_waker_async(
+        &self, ctx: &mut Context, o_waker: &mut Option<ArcWaker<P>>, payload: P,
+    ) -> Option<Poll<()>> {
+        if let Some(waker) = o_waker.as_ref() {
+            match waker.try_change_state(WakerState::Woken, WakerState::Init) {
+                Ok(_) => {
+                    if waker.will_wake(ctx) {
+                        self.reg_waker(&waker);
+                        return None;
+                    }
+                }
+                Err(state) => {
+                    if state < WakerState::Woken as u8 {
+                        if waker.will_wake(ctx) {
+                            trace_log!(
+                                "{} {:?}: will_wake {:?}",
+                                self._tag,
+                                tokio_task_id!(),
+                                waker
+                            );
+                            // Normally only selection or multiplex future will get here.
+                            // No need to reg again, since waker is not consumed.
+                            return Some(Poll::Pending);
+                        } else {
+                            // Spurious woken by runtime, waker can not be re-used (issue 38)
+                            // If we se Woken here, only possible otherside has woken it
+                            if waker.get_state_relaxed() < WakerState::Woken as u8 {
+                                self._clear_wakers(waker, true);
+                            }
+                            trace_log!(
+                                "{} {:?}: drop waker {:?}",
+                                self._tag,
+                                tokio_task_id!(),
+                                waker
+                            );
+                        }
+                    } else if state == WakerState::Closed as u8 {
+                        return Some(Poll::Ready(()));
+                    }
+                }
+            }
+        }
+        let waker = ArcWaker::<P>::new_async(ctx, payload);
+        self.reg_waker(&waker);
+        o_waker.replace(waker);
+        return None;
+    }
+
+    #[inline(always)]
+    fn _reg_waker_blocking(
+        &self, o_waker: &mut Option<ArcWaker<P>>, cache: &WakerCache<P>, payload: P,
+    ) {
+        if let Some(waker) = o_waker.as_ref() {
+            waker.reset_init();
+            self.reg_waker(&waker);
+            trace_log!("{}{:?}: re-reg {:?}", self._tag, tokio_task_id!(), waker);
+        } else {
+            debug_assert!(o_waker.is_none());
+            let waker = cache.new_blocking(payload);
+            self.reg_waker(&waker);
+            trace_log!("{}{:?}: reg {:?}", self._tag, tokio_task_id!(), waker);
+            o_waker.replace(waker);
         }
     }
 
@@ -495,20 +389,20 @@ impl<P: Copy> RegistryMulti<P> {
     }
 
     #[inline(always)]
-    fn fire<F>(&self, handle: F, _tag: &str) -> WakeResult
+    fn _fire<F>(&self, handle: F) -> WakeResult
     where
         F: Fn(&ArcWaker<P>) -> WakeResult,
     {
         if let Some((waker, mut last_seq)) = self.pop() {
             let r = handle(&waker);
-            trace_log!("wake {} {:?} {:?}", _tag, waker, r);
+            trace_log!("wake {} {:?} {:?}", self._tag, waker, r);
             if r.is_done() {
                 return r;
             }
             last_seq = last_seq.wrapping_sub(1);
             while let Some((_waker, _)) = self.pop() {
                 let r = handle(&_waker);
-                trace_log!("wake {} {:?} {:?}", _tag, _waker, r);
+                trace_log!("wake {} {:?} {:?}", self._tag, _waker, r);
                 if r.is_done() {
                     return r;
                 }
@@ -516,7 +410,7 @@ impl<P: Copy> RegistryMulti<P> {
                 // Because some waker (issued by sink / stream) might be INIT all the time,
                 // prevent to dead loop situation when they are wake up and re-register again.
                 if _waker.get_seq() >= last_seq {
-                    trace_log!("wake {} stop at {}", _tag, last_seq);
+                    trace_log!("wake {} stop at {}", self._tag, last_seq);
                     return WakeResult::Next;
                 }
             }
@@ -526,20 +420,20 @@ impl<P: Copy> RegistryMulti<P> {
 
     /// Call when waker is cancelled
     #[inline(always)]
-    fn clear_wakers(&self, old_waker: &ArcWaker<P>, oneshot: bool, _tag: &str) {
+    fn _clear_wakers(&self, old_waker: &ArcWaker<P>, oneshot: bool) {
         // Don't need acurate, it's optional
         if self.is_empty.load(Ordering::Acquire) {
-            trace_log!("{}: skip", _tag);
+            trace_log!("{}: skip", self._tag);
             return;
         }
-        trace_log!("{}: enter clear_wakers", _tag);
+        trace_log!("{}: enter clear_wakers", self._tag);
         let old_seq = old_waker.get_seq();
         macro_rules! process {
             ($guard: expr, $weak: expr) => {{
                 if let Some(waker) = $weak.upgrade() {
                     let _seq = waker.get_seq();
                     if _seq == old_seq {
-                        trace_log!("{}: clear {:?} hit", _tag, waker);
+                        trace_log!("{}: clear {:?} hit", self._tag, waker);
                         true
                     } else {
                         // There might be later waker cancel due to success sending before commit_waiting.
@@ -548,13 +442,13 @@ impl<P: Copy> RegistryMulti<P> {
                         if state == WakerState::Init as u8 {
                             let _ = waker.wake();
                             if oneshot {
-                                trace_log!("{}: cancel {:?} one {}", _tag, waker, old_seq);
+                                trace_log!("{}: cancel {:?} one {}", self._tag, waker, old_seq);
                                 true
                             } else if _seq > old_seq {
-                                trace_log!("{}: cancel {:?}>{} ", _tag, waker, old_seq);
+                                trace_log!("{}: cancel {:?}>{} ", self._tag, waker, old_seq);
                                 true
                             } else {
-                                trace_log!("{}: cancel {:?}<{}", _tag, waker, old_seq);
+                                trace_log!("{}: cancel {:?}<{}", self._tag, waker, old_seq);
                                 false
                             }
                         } else if state == WakerState::Waiting as u8 {
@@ -594,36 +488,213 @@ impl<P: Copy> RegistryMulti<P> {
     }
 
     #[inline(always)]
-    fn close(&self, _tag: &str) {
+    fn _cache_waker(o_waker: Option<ArcWaker<P>>, cache: &WakerCache<P>) {
+        if let Some(waker) = o_waker {
+            if waker.get_state() >= WakerState::Woken as u8 {
+                cache.push(waker);
+            }
+        }
+    }
+}
+
+impl<P: 'static + Copy> Registry for RegistryMulti<P> {
+    type Waker = ArcWaker<P>;
+
+    #[inline(always)]
+    fn get_waker_state(&self, o_waker: &Option<ArcWaker<P>>, order: Ordering) -> u8 {
+        if let Some(waker) = o_waker {
+            waker._get_state(order)
+        } else {
+            unreachable!();
+        }
+    }
+
+    /// Cancel outdated wakers until me, make sure it does not accumulate
+    #[inline(always)]
+    fn clear_wakers(&self, waker: &ArcWaker<P>) {
+        self._clear_wakers(&waker, false);
+    }
+
+    #[inline(always)]
+    fn close(&self) {
         let mut guard = self.inner.lock();
         while let Some(weak) = guard.queue.pop_front() {
             if let Some(waker) = weak.upgrade() {
                 let _r = waker.close_wake();
-                trace_log!("close {} wake {:?} {}", _tag, waker, _r);
+                trace_log!("close {} wake {:?} {}", self._tag, waker, _r);
             }
         }
         self.is_empty.store(true, Ordering::SeqCst);
     }
 
     /// return waker queue size
-    #[inline(always)]
+    #[inline]
     fn len(&self) -> usize {
         let guard = self.inner.lock();
         guard.queue.len()
     }
+
+    #[inline(always)]
+    fn commit_waiting(&self, o_waker: &Option<ArcWaker<P>>) -> u8 {
+        if let Some(waker) = &o_waker {
+            return waker.commit_waiting();
+        } else {
+            unreachable!();
+        }
+    }
+
+    /// return false when waker is none
+    #[inline(always)]
+    fn abandon_waker(&self, o_waker: &mut Option<ArcWaker<P>>) -> Result<bool, u8> {
+        if let Some(waker) = o_waker.take() {
+            // which change Waiting/Init to Closed
+            match waker.abandon() {
+                Ok(()) => {
+                    trace_log!("tx: abandon cancel {:?}", waker);
+                    self.clear_wakers(&waker);
+                    Ok(true)
+                }
+                Err(state) => {
+                    return Err(state);
+                }
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// cancel one outdated waker, make sure it does not accumulate
+    #[inline(always)]
+    fn cancel_waker(&self, o_waker: &mut Option<ArcWaker<P>>) {
+        if let Some(waker) = o_waker.take() {
+            // If we se Woken here, only possible otherside has woken it
+            if waker.get_state_relaxed() >= WakerState::Woken as u8 {
+                return;
+            }
+            self._clear_wakers(&waker, true)
+        }
+    }
 }
 
+impl<T: Send + Unpin + 'static> RegistrySend<T> for RegistryMultiSend<T> {
+    #[inline(always)]
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
+            is_empty: AtomicBool::new(true),
+            _tag: "tx",
+        }
+    }
+
+    #[inline(always)]
+    fn use_direct_copy(&self) -> bool {
+        !self.is_empty()
+    }
+
+    #[inline(always)]
+    fn reg_waker_blocking(
+        &self, o_waker: &mut Option<ArcWaker<*const T>>, cache: &WakerCache<*const T>,
+        payload: *const T,
+    ) {
+        self._reg_waker_blocking(o_waker, cache, payload)
+    }
+
+    #[inline(always)]
+    fn reg_waker_async(
+        &self, ctx: &mut Context, o_waker: &mut Option<ArcWaker<*const T>>,
+    ) -> Option<Poll<()>> {
+        self._reg_waker_async(ctx, o_waker, std::ptr::null_mut())
+    }
+
+    /// remove outdated waker, make sure it does not accumulate.
+    ///
+    /// It's ok to set state with Relaxed here, two scenario:
+    /// * set Done while the state is Init, does not matter other thread see it or not.
+    /// * other thread might have wake it in the process, but we are dropping it anyway, and then
+    /// reg_waker with a new one.
+    #[inline(always)]
+    fn cancel_reuse_waker(
+        &self, o_waker: &mut Option<ArcWaker<*const T>>, state: WakerState,
+    ) -> u8 {
+        if let Some(waker) = o_waker.as_ref() {
+            let cur_state = waker.get_state();
+            // If we se Woken here, only possible otherside has woken it
+            if cur_state >= WakerState::Woken as u8 {
+                trace_log!("tx: cancel_reuse {:?} {}", waker, cur_state);
+                if cur_state < state as u8 {
+                    return state as u8;
+                } else {
+                    return cur_state;
+                }
+            } else {
+                self._clear_wakers(&waker, true);
+                let _ = o_waker.take();
+                return state as u8;
+            }
+        } else {
+            unreachable!();
+        }
+    }
+
+    #[inline(always)]
+    fn fire<F: Flavor>(&self, shared: &ChannelShared<F>) -> WakeResult
+    where
+        F: FlavorImpl<Item = T>,
+    {
+        return self._fire(|waker| shared.on_recv_try_send(waker));
+    }
+
+    #[inline(always)]
+    fn cache_waker(&self, o_waker: Option<ArcWaker<*const T>>, cache: &WakerCache<*const T>) {
+        Self::_cache_waker(o_waker, cache);
+    }
+}
+
+impl RegistryRecv for RegistryMultiRecv {
+    #[inline(always)]
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
+            is_empty: AtomicBool::new(true),
+            _tag: "rx",
+        }
+    }
+
+    #[inline(always)]
+    fn reg_waker_blocking(&self, o_waker: &mut Option<ArcWaker<()>>, cache: &WakerCache<()>) {
+        self._reg_waker_blocking(o_waker, cache, ())
+    }
+
+    #[inline(always)]
+    fn reg_waker_async(
+        &self, ctx: &mut Context, o_waker: &mut Option<ArcWaker<()>>,
+    ) -> Option<Poll<()>> {
+        self._reg_waker_async(ctx, o_waker, ())
+    }
+
+    #[inline(always)]
+    fn fire(&self) {
+        self._fire(|waker| waker.wake());
+    }
+
+    #[inline(always)]
+    fn cache_waker(&self, o_waker: Option<ArcWaker<()>>, cache: &WakerCache<()>) {
+        Self::_cache_waker(o_waker, cache);
+    }
+}
+
+/*
 #[cfg(test)]
 mod tests {
 
     use super::*;
-    use crate::locked_waker::RecvWaker;
+    use crate::locked_waker::Waker;
     use crate::waker::ArcWaker;
 
     #[test]
     fn print_waker_registry_size() {
         use std::mem::size_of;
-        println!("RegistrySender size {}", size_of::<RegistrySender<usize>>());
+        println!("RegistrySend size {}", size_of::<RegistrySend<usize>>());
         println!("RegistryRecv size {}", size_of::<RegistryRecv>());
         println!("RegistrySingle size {}", size_of::<RegistrySingle<()>>());
         println!("RegistryMulti size {}", size_of::<RegistryMulti<()>>());
@@ -745,3 +816,4 @@ mod tests {
         assert_eq!(reg.is_empty(), true);
     }
 }
+*/

@@ -1,4 +1,4 @@
-use super::{Flavor, FlavorMC, FlavorMP};
+use super::FlavorImpl;
 use crate::backoff::*;
 use core::cell::UnsafeCell;
 use core::mem::{needs_drop, MaybeUninit};
@@ -155,7 +155,7 @@ impl<T> Drop for One<T> {
     }
 }
 
-impl<T: Send + 'static + Unpin> Flavor for One<T> {
+impl<T: Send + 'static + Unpin> FlavorImpl for One<T> {
     type Item = T;
 
     #[inline(always)]
@@ -210,6 +210,3 @@ impl<T: Send + 'static + Unpin> Flavor for One<T> {
         crate::backoff::DEFAULT_LIMIT
     }
 }
-
-impl<T> FlavorMP for One<T> {}
-impl<T> FlavorMC for One<T> {}

@@ -211,7 +211,7 @@ impl<F: Flavor> AsyncRx<F> {
     /// Return Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline(always)]
     pub(crate) fn poll_item<const STREAM: bool>(
-        &self, ctx: &mut Context, o_waker: &mut Option<RecvWaker>,
+        &self, ctx: &mut Context, o_waker: &mut Option<<F::Recv as Registry>::Waker>,
     ) -> Result<F::Item, TryRecvError> {
         let shared = &self.shared;
         // When the result is not TryRecvError::Empty,
@@ -300,7 +300,7 @@ impl<F: Flavor> AsyncRx<F> {
 #[must_use]
 pub struct RecvFuture<'a, F: Flavor> {
     rx: &'a AsyncRx<F>,
-    waker: Option<RecvWaker>,
+    waker: Option<<F::Recv as Registry>::Waker>,
 }
 
 unsafe impl<F: Flavor> Send for RecvFuture<'_, F> {}
@@ -339,7 +339,7 @@ impl<F: Flavor> Future for RecvFuture<'_, F> {
 #[must_use]
 pub struct RecvTimeoutFuture<'a, F: Flavor, R> {
     rx: &'a AsyncRx<F>,
-    waker: Option<RecvWaker>,
+    waker: Option<<F::Recv as Registry>::Waker>,
     sleep: Pin<Box<dyn Future<Output = R>>>,
 }
 

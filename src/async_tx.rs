@@ -236,7 +236,7 @@ impl<F: Flavor> AsyncTx<F> {
     #[inline(always)]
     pub(crate) fn poll_send<'a, const SINK: bool>(
         &self, ctx: &'a mut Context, item: &MaybeUninit<F::Item>,
-        o_waker: &'a mut Option<SendWaker<F::Item>>,
+        o_waker: &'a mut Option<<F::Send as Registry>::Waker>,
     ) -> Poll<Result<(), ()>> {
         let shared = &self.shared;
         if shared.is_rx_closed() {
@@ -303,7 +303,7 @@ impl<F: Flavor> AsyncTx<F> {
 pub struct SendFuture<'a, F: Flavor> {
     tx: &'a AsyncTx<F>,
     item: MaybeUninit<F::Item>,
-    waker: Option<SendWaker<F::Item>>,
+    waker: Option<<F::Send as Registry>::Waker>,
 }
 
 unsafe impl<F: Flavor> Send for SendFuture<'_, F> {}
@@ -346,7 +346,7 @@ pub struct SendTimeoutFuture<'a, F: Flavor, R> {
     tx: &'a AsyncTx<F>,
     sleep: Pin<Box<dyn Future<Output = R>>>,
     item: MaybeUninit<F::Item>,
-    waker: Option<SendWaker<F::Item>>,
+    waker: Option<<F::Send as Registry>::Waker>,
 }
 
 unsafe impl<F: Flavor, R> Send for SendTimeoutFuture<'_, F, R> {}

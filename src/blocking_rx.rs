@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 use std::time::{Duration, Instant};
 
 /// A single consumer (receiver) that works in a blocking context.
@@ -85,7 +85,7 @@ impl<F: Flavor> Rx<F> {
         &self, deadline: Option<Instant>,
     ) -> Result<F::Item, RecvTimeoutError> {
         let shared = &self.shared;
-        let mut o_waker = None;
+        let mut o_waker: Option<<F::Recv as Registry>::Waker> = None;
         macro_rules! on_recv_no_waker {
             () => {{
                 trace_log!("rx: recv");
@@ -148,7 +148,7 @@ impl<F: Flavor> Rx<F> {
                         return Err(RecvTimeoutError::Timeout);
                     }
                 }
-                state = self.recvs.get_waker_state(&o_waker);
+                state = self.recvs.get_waker_state(&o_waker, Ordering::SeqCst);
                 trace_log!("rx: after park state={}", state);
             }
             if state == WakerState::Closed as u8 {
