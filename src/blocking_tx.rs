@@ -155,7 +155,7 @@ impl<F: Flavor> Tx<F> {
                             std::thread::park_timeout(dur);
                         }
                         Err(_) => {
-                            if shared.abandon_send_waker(&mut o_waker) {
+                            if shared.abandon_send_waker(o_waker.as_ref().unwrap()) {
                                 return Err(SendTimeoutError::Timeout(unsafe {
                                     item.assume_init_read()
                                 }));

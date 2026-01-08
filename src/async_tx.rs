@@ -312,9 +312,11 @@ impl<F: Flavor> Drop for SendFuture<'_, F> {
     #[inline]
     fn drop(&mut self) {
         // Cancelling the future, poll is not ready
-        if self.tx.shared.abandon_send_waker(&mut self.waker) {
-            if needs_drop::<F::Item>() {
-                unsafe { self.item.assume_init_drop() };
+        if let Some(waker) = self.waker.as_ref() {
+            if self.tx.shared.abandon_send_waker(waker) {
+                if needs_drop::<F::Item>() {
+                    unsafe { self.item.assume_init_drop() };
+                }
             }
         }
     }
@@ -354,10 +356,12 @@ unsafe impl<F: Flavor, R> Send for SendTimeoutFuture<'_, F, R> {}
 impl<F: Flavor, R> Drop for SendTimeoutFuture<'_, F, R> {
     #[inline]
     fn drop(&mut self) {
-        // Cancelling the future, poll is not ready
-        if self.tx.shared.abandon_send_waker(&mut self.waker) {
-            if needs_drop::<F::Item>() {
-                unsafe { self.item.assume_init_drop() };
+        if let Some(waker) = self.waker.as_ref() {
+            // Cancelling the future, poll is not ready
+            if self.tx.shared.abandon_send_waker(waker) {
+                if needs_drop::<F::Item>() {
+                    unsafe { self.item.assume_init_drop() };
+                }
             }
         }
     }
@@ -382,7 +386,7 @@ impl<F: Flavor, R> Future for SendTimeoutFuture<'_, F, R> {
             }
             Poll::Pending => {
                 if let Poll::Ready(_) = _self.sleep.as_mut().poll(ctx) {
-                    if _self.tx.shared.abandon_send_waker(&mut _self.waker) {
+                    if _self.tx.shared.abandon_send_waker(&_self.waker.take().unwrap()) {
                         return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
                             _self.item.assume_init_read()
                         })));

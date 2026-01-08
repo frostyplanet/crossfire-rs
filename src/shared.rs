@@ -211,10 +211,8 @@ impl<F: Flavor> ChannelShared<F> {
     /// Call on cancellation, return true to indicate drop temporary message
     /// return false to indicate already Done.
     #[inline(always)]
-    pub(crate) fn abandon_send_waker(
-        &self, o_waker: &mut Option<<F::Send as Registry>::Waker>,
-    ) -> bool {
-        match self.senders.abandon_waker(o_waker) {
+    pub(crate) fn abandon_send_waker(&self, waker: &<F::Send as Registry>::Waker) -> bool {
+        match self.senders.abandon_waker(waker) {
             Ok(r) => r,
             Err(state) => {
                 trace_log!("tx: abandon err  {:?} {}", waker, state);
@@ -234,8 +232,8 @@ impl<F: Flavor> ChannelShared<F> {
 
     /// Call on cancellation, return true to indicate drop temporary message
     #[inline(always)]
-    pub(crate) fn abandon_recv_waker(&self, o_waker: &mut Option<<F::Recv as Registry>::Waker>) {
-        if let Err(state) = self.recvs.abandon_waker(o_waker) {
+    pub(crate) fn abandon_recv_waker(&self, waker: &<F::Recv as Registry>::Waker) {
+        if let Err(state) = self.recvs.abandon_waker(waker) {
             trace_log!("rx: abandon err {:?} {}", waker, state);
             if state == WakerState::Woken as u8 {
                 // We are awake, but give up receiving, should notify another receiver for safety

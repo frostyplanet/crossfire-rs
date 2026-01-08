@@ -15,7 +15,7 @@ pub(crate) type RegistryMultiSend<T> = RegistryMulti<*const T>;
 pub(crate) type RegistryMultiRecv = RegistryMulti<()>;
 
 pub trait Registry: Send + 'static {
-    type Waker: Send + Unpin + 'static;
+    type Waker: Send + Unpin + 'static + Debug;
 
     fn get_waker_state(&self, o_waker: &Option<Self::Waker>, order: Ordering) -> u8;
 
@@ -35,7 +35,7 @@ pub trait Registry: Send + 'static {
     fn cancel_waker(&self, _o_waker: &mut Option<Self::Waker>) {}
 
     /// return false when waker is none
-    fn abandon_waker(&self, o_waker: &mut Option<Self::Waker>) -> Result<bool, u8>;
+    fn abandon_waker(&self, waker: &Self::Waker) -> Result<bool, u8>;
 }
 
 pub trait RegistrySend<T: Send + 'static>: Registry {
@@ -132,7 +132,7 @@ impl Registry for RegistryDummy {
     }
 
     #[inline(always)]
-    fn abandon_waker(&self, _o_waker: &mut Option<Self::Waker>) -> Result<bool, u8> {
+    fn abandon_waker(&self, _waker: &Self::Waker) -> Result<bool, u8> {
         Ok(false)
     }
 }
@@ -162,8 +162,8 @@ impl RegistrySingle {
     fn _reg_waker_async(&self, ctx: &mut Context) {
         // XXX don't know what the waker was, always generate new
         let waker = ThinWaker::Async(ctx.waker().clone());
-        self.cell.replace(waker);
         trace_log!("{}{:?}: reg {:?}", self._tag, tokio_task_id!(), waker);
+        self.cell.replace(waker);
         // should store into o_waker, AsyncTx need to drop item when SendFuture drop
     }
 
@@ -198,8 +198,8 @@ impl Registry for RegistrySingle {
     }
 
     #[inline(always)]
-    fn abandon_waker(&self, o_waker: &mut Option<()>) -> Result<bool, u8> {
-        Ok(o_waker.take().is_some())
+    fn abandon_waker(&self, _waker: &()) -> Result<bool, u8> {
+        Ok(true)
     }
 }
 
@@ -544,21 +544,17 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
 
     /// return false when waker is none
     #[inline(always)]
-    fn abandon_waker(&self, o_waker: &mut Option<ArcWaker<P>>) -> Result<bool, u8> {
-        if let Some(waker) = o_waker.take() {
-            // which change Waiting/Init to Closed
-            match waker.abandon() {
-                Ok(()) => {
-                    trace_log!("tx: abandon cancel {:?}", waker);
-                    self.clear_wakers(&waker);
-                    Ok(true)
-                }
-                Err(state) => {
-                    return Err(state);
-                }
+    fn abandon_waker(&self, waker: &ArcWaker<P>) -> Result<bool, u8> {
+        // which change Waiting/Init to Closed
+        match waker.abandon() {
+            Ok(()) => {
+                trace_log!("tx: abandon cancel {:?}", waker);
+                self.clear_wakers(&waker);
+                Ok(true)
             }
-        } else {
-            Ok(false)
+            Err(state) => {
+                return Err(state);
+            }
         }
     }
 

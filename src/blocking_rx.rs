@@ -144,7 +144,7 @@ impl<F: Flavor> Rx<F> {
                         std::thread::park_timeout(dur);
                     }
                     Err(_) => {
-                        shared.abandon_recv_waker(&mut o_waker);
+                        shared.abandon_recv_waker(o_waker.as_ref().unwrap());
                         return Err(RecvTimeoutError::Timeout);
                     }
                 }

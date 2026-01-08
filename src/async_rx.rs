@@ -308,7 +308,9 @@ unsafe impl<F: Flavor> Send for RecvFuture<'_, F> {}
 impl<F: Flavor> Drop for RecvFuture<'_, F> {
     #[inline]
     fn drop(&mut self) {
-        self.rx.shared.abandon_recv_waker(&mut self.waker);
+        if let Some(waker) = self.waker.as_ref() {
+            self.rx.shared.abandon_recv_waker(waker);
+        }
     }
 }
 
@@ -348,7 +350,9 @@ unsafe impl<F: Flavor, R> Send for RecvTimeoutFuture<'_, F, R> {}
 impl<F: Flavor, R> Drop for RecvTimeoutFuture<'_, F, R> {
     #[inline]
     fn drop(&mut self) {
-        self.rx.shared.abandon_recv_waker(&mut self.waker);
+        if let Some(waker) = self.waker.as_ref() {
+            self.rx.shared.abandon_recv_waker(waker);
+        }
     }
 }
 
