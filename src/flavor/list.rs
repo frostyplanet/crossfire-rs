@@ -1,5 +1,5 @@
 use super::{FlavorImpl, FlavorNew};
-use crossbeam_queue::SegQueue;
+use crate::crossbeam::seg_queue::SegQueue;
 use std::mem::MaybeUninit;
 
 pub struct List<T>(SegQueue<T>);

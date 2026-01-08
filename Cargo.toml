@@ -24,7 +24,6 @@ rust-version = "1.61"
 #crossfire = { path = "." }
 
 [dependencies]
-crossbeam-queue = "0.3.12"
 crossbeam-utils = "0.8"
 futures-core = "0.3"
 parking_lot = "0"
