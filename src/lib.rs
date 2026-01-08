@@ -142,7 +142,7 @@
 //! Cargo.toml:
 //! ```toml
 //! [dependencies]
-//! crossfire = "2.1"
+//! crossfire = "3.0"
 //! ```
 //!
 //! ### Feature flags
