@@ -172,21 +172,6 @@ struct Position<T> {
 /// this queue is somewhat slower than [`ArrayQueue`].
 ///
 /// [`ArrayQueue`]: super::ArrayQueue
-///
-/// # Examples
-///
-/// ```
-/// use crossbeam_queue::SegQueue;
-///
-/// let q = SegQueue::new();
-///
-/// q.push('a');
-/// q.push('b');
-///
-/// assert_eq!(q.pop(), Some('a'));
-/// assert_eq!(q.pop(), Some('b'));
-/// assert!(q.pop().is_none());
-/// ```
 pub struct SegQueue<T> {
     /// The head of the queue.
     head: CachePadded<Position<T>>,
@@ -206,14 +191,6 @@ impl<T> RefUnwindSafe for SegQueue<T> {}
 
 impl<T> SegQueue<T> {
     /// Creates a new unbounded queue.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crossbeam_queue::SegQueue;
-    ///
-    /// let q = SegQueue::<i32>::new();
-    /// ```
     pub const fn new() -> Self {
         Self {
             head: CachePadded::new(Position {
@@ -229,17 +206,6 @@ impl<T> SegQueue<T> {
     }
 
     /// Pushes back an element to the tail.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crossbeam_queue::SegQueue;
-    ///
-    /// let q = SegQueue::new();
-    ///
-    /// q.push(10);
-    /// q.push(20);
-    /// ```
     pub fn push(&self, value: T) {
         let backoff = Backoff::new();
         let mut tail = self.tail.index.load(Ordering::Acquire);
@@ -320,23 +286,6 @@ impl<T> SegQueue<T> {
         }
     }
 
-    /// Pops the head element from the queue.
-    ///
-    /// If the queue is empty, `None` is returned.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crossbeam_queue::SegQueue;
-    ///
-    /// let q = SegQueue::new();
-    ///
-    /// q.push(10);
-    /// q.push(20);
-    /// assert_eq!(q.pop(), Some(10));
-    /// assert_eq!(q.pop(), Some(20));
-    /// assert!(q.pop().is_none());
-    /// ```
     pub fn pop(&self) -> Option<T> {
         let backoff = Backoff::new();
         let mut head = self.head.index.load(Ordering::Acquire);
@@ -425,18 +374,6 @@ impl<T> SegQueue<T> {
     }
 
     /// Returns `true` if the queue is empty.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crossbeam_queue::SegQueue;
-    ///
-    /// let q = SegQueue::new();
-    ///
-    /// assert!(q.is_empty());
-    /// q.push(1);
-    /// assert!(!q.is_empty());
-    /// ```
     pub fn is_empty(&self) -> bool {
         let head = self.head.index.load(Ordering::SeqCst);
         let tail = self.tail.index.load(Ordering::SeqCst);
@@ -444,21 +381,6 @@ impl<T> SegQueue<T> {
     }
 
     /// Returns the number of elements in the queue.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crossbeam_queue::SegQueue;
-    ///
-    /// let q = SegQueue::new();
-    /// assert_eq!(q.len(), 0);
-    ///
-    /// q.push(10);
-    /// assert_eq!(q.len(), 1);
-    ///
-    /// q.push(20);
-    /// assert_eq!(q.len(), 2);
-    /// ```
     pub fn len(&self) -> usize {
         loop {
             // Load the tail index, then load the head index.

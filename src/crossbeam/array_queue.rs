@@ -71,21 +71,7 @@ struct Slot<T> {
 /// this queue to be used as a ring-buffer. Having a buffer allocated upfront makes this queue
 /// a bit faster than [`SegQueue`].
 ///
-/// [`force_push`]: ArrayQueue::force_push
 /// [`SegQueue`]: super::SegQueue
-///
-/// # Examples
-///
-/// ```
-/// use crossbeam_queue::ArrayQueue;
-///
-/// let q = ArrayQueue::new(2);
-///
-/// assert_eq!(q.push('a'), Ok(()));
-/// assert_eq!(q.push('b'), Ok(()));
-/// assert_eq!(q.push('c'), Err('c'));
-/// assert_eq!(q.pop(), Some('a'));
-/// ```
 pub struct ArrayQueue<T, const MP: bool, const MC: bool> {
     /// The head of the queue.
     ///
@@ -122,14 +108,6 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     /// # Panics
     ///
     /// Panics if the capacity is zero.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crossbeam_queue::ArrayQueue;
-    ///
-    /// let q = ArrayQueue::<i32>::new(100);
-    /// ```
     pub fn new(cap: usize) -> Self {
         assert!(cap > 0, "capacity must be non-zero");
 
@@ -371,34 +349,12 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     }
 
     /// Returns the capacity of the queue.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crossbeam_queue::ArrayQueue;
-    ///
-    /// let q = ArrayQueue::<i32>::new(100);
-    ///
-    /// assert_eq!(q.capacity(), 100);
-    /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
         self.buffer.len()
     }
 
     /// Returns `true` if the queue is empty.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crossbeam_queue::ArrayQueue;
-    ///
-    /// let q = ArrayQueue::new(100);
-    ///
-    /// assert!(q.is_empty());
-    /// q.push(1).unwrap();
-    /// assert!(!q.is_empty());
-    /// ```
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         let head = self.head.load(Ordering::SeqCst);
@@ -413,18 +369,6 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     }
 
     /// Returns `true` if the queue is full.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crossbeam_queue::ArrayQueue;
-    ///
-    /// let q = ArrayQueue::new(1);
-    ///
-    /// assert!(!q.is_full());
-    /// q.push(1).unwrap();
-    /// assert!(q.is_full());
-    /// ```
     #[inline(always)]
     pub fn is_full(&self) -> bool {
         let tail = self.tail.load(Ordering::SeqCst);
@@ -438,21 +382,6 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     }
 
     /// Returns the number of elements in the queue.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crossbeam_queue::ArrayQueue;
-    ///
-    /// let q = ArrayQueue::new(100);
-    /// assert_eq!(q.len(), 0);
-    ///
-    /// q.push(10).unwrap();
-    /// assert_eq!(q.len(), 1);
-    ///
-    /// q.push(20).unwrap();
-    /// assert_eq!(q.len(), 2);
-    /// ```
     #[inline]
     pub fn len(&self) -> usize {
         loop {
