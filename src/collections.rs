@@ -66,6 +66,7 @@ impl<T> ArcCell<T> {
     }
 }
 
+#[allow(dead_code)]
 pub struct WeakCell<T> {
     ptr: AtomicPtr<T>,
 }
@@ -86,10 +87,9 @@ impl<T> WeakCell<T> {
         Self { ptr: AtomicPtr::new(ptr::null_mut()) }
     }
 
-    #[cfg(test)]
     #[inline(always)]
-    pub fn exists(&self) -> bool {
-        self.ptr.load(Ordering::SeqCst) != ptr::null_mut()
+    pub fn is_empty(&self) -> bool {
+        self.ptr.load(Ordering::SeqCst).is_null()
     }
 
     #[inline(always)]
@@ -133,7 +133,7 @@ impl<T> WeakCell<T> {
     }
 
     #[inline(always)]
-    pub fn put(&self, item: Weak<T>) {
+    pub fn replace(&self, item: Weak<T>) {
         let old_ptr = self.ptr.swap(item.into_raw() as *mut T, Ordering::SeqCst);
         if old_ptr != ptr::null_mut() {
             let _ = unsafe { Weak::from_raw(old_ptr) };
@@ -149,22 +149,22 @@ mod tests {
         use super::*;
         use std::sync::Arc;
         let cell = WeakCell::new();
-        assert!(!cell.exists());
+        assert!(cell.is_empty());
         let item = Arc::new(1);
         cell.put(Arc::downgrade(&item));
-        assert!(cell.exists());
+        assert!(!cell.is_empty());
         let _item = cell.pop().unwrap();
-        assert!(!cell.exists());
+        assert!(cell.is_empty());
         assert!(Arc::ptr_eq(&item, &_item));
         cell.put(Arc::downgrade(&item));
-        assert!(cell.exists());
+        assert!(!cell.is_empty());
         // it is allow to fail under miri
         println!("clear");
         while !cell.clear() {
-            assert!(cell.exists());
+            assert!(!cell.is_empty());
             println!("try clear again");
         }
-        assert!(!cell.exists());
+        assert!(cell.is_empty());
         drop(_item);
         assert_eq!(Arc::strong_count(&item), 1);
         assert_eq!(Arc::weak_count(&item), 0);

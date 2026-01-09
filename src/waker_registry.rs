@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::collections::WeakCell;
+#[allow(unused_imports)]
 use crate::flavor::{Flavor, FlavorImpl, OneSpmc};
 use crate::shared::ChannelShared;
 #[cfg(feature = "trace_log")]
@@ -32,7 +35,9 @@ pub trait Registry: Send + 'static {
     }
 
     #[inline(always)]
-    fn cancel_waker(&self, _o_waker: &mut Option<Self::Waker>) {}
+    fn cancel_waker(&self, o_waker: &mut Option<Self::Waker>) {
+        let _ = o_waker.take();
+    }
 
     /// return false when waker is none
     fn abandon_waker(&self, waker: &Self::Waker) -> Result<bool, u8>;
@@ -67,10 +72,12 @@ pub trait RegistrySend<T: Send + 'static>: Registry {
     /// * set Done while the state is Init, does not matter other thread see it or not.
     /// * other thread might have wake it in the process, but we are dropping it anyway, and then
     /// reg_waker with a new one.
+    #[inline(always)]
     fn cancel_reuse_waker(
-        &self, _o_waker: &mut Option<<Self as Registry>::Waker>, _state: WakerState,
+        &self, o_waker: &mut Option<<Self as Registry>::Waker>, state: WakerState,
     ) -> u8 {
-        unreachable!();
+        let _ = o_waker.take();
+        state as u8
     }
 
     #[inline(always)]
@@ -144,8 +151,14 @@ impl<T: Send + 'static> RegistrySend<T> for RegistryDummy {
     }
 }
 
+type SingleWaker = ArcWaker<()>;
+//type SingleWaker = ThinWaker;
+
 pub struct RegistrySingle {
-    cell: OneSpmc<ThinWaker>,
+    cell: WeakCell<WakerInner<()>>,
+    // OneSpmc has comparable speed as WeakCell and does not allocate on waker registration,
+    // but since miri will report datarace issue, commented out for now.
+    //cell: OneSpmc<ThinWaker>,
     _tag: &'static str,
 }
 
@@ -159,27 +172,33 @@ impl RegistrySingle {
     }
 
     #[inline(always)]
-    fn _reg_waker_async(&self, ctx: &mut Context) {
+    fn _reg_waker_async(&self, ctx: &mut Context, o_waker: &mut Option<SingleWaker>) {
         // XXX don't know what the waker was, always generate new
-        let waker = ThinWaker::Async(ctx.waker().clone());
+        let waker = ArcWaker::<()>::new_async(ctx, ());
+        //let waker = ThinWaker::Async(ctx.waker().clone());
         trace_log!("{}{:?}: reg {:?}", self._tag, tokio_task_id!(), waker);
-        self.cell.replace(waker);
+        self.cell.replace(waker.weak());
+        o_waker.replace(waker);
+        //self.cell.replace(waker);
         // should store into o_waker, AsyncTx need to drop item when SendFuture drop
     }
 
     #[inline(always)]
-    fn _reg_waker_blocking(&self) {
-        let waker = ThinWaker::Blocking(thread::current());
+    fn _reg_waker_blocking(&self, o_waker: &mut Option<SingleWaker>) {
+        let waker = ArcWaker::<()>::new_blocking(());
+        //        let waker = ThinWaker::Blocking(thread::current());
         trace_log!("{}{:?}: reg {:?}", self._tag, tokio_task_id!(), waker);
-        self.cell.replace(waker);
+        self.cell.replace(waker.weak());
+        o_waker.replace(waker);
+        //self.cell.replace(waker);
     }
 }
 
 impl Registry for RegistrySingle {
-    type Waker = ();
+    type Waker = SingleWaker;
 
     #[inline(always)]
-    fn get_waker_state(&self, _o_waker: &Option<()>, _order: Ordering) -> u8 {
+    fn get_waker_state(&self, _o_waker: &Option<SingleWaker>, _order: Ordering) -> u8 {
         if self.cell.is_empty() {
             WakerState::Woken as u8
         } else {
@@ -198,7 +217,7 @@ impl Registry for RegistrySingle {
     }
 
     #[inline(always)]
-    fn abandon_waker(&self, _waker: &()) -> Result<bool, u8> {
+    fn abandon_waker(&self, _waker: &SingleWaker) -> Result<bool, u8> {
         Ok(true)
     }
 }
@@ -206,12 +225,8 @@ impl Registry for RegistrySingle {
 impl<T: Send + 'static> RegistrySend<T> for RegistrySingle {
     #[inline(always)]
     fn new() -> Self {
-        Self { cell: OneSpmc::new(), _tag: "tx" }
-    }
-
-    #[inline(always)]
-    fn cancel_reuse_waker(&self, _o_waker: &mut Option<()>, state: WakerState) -> u8 {
-        state as u8
+        //Self { cell: _OneSpmc::new(), _tag: "tx" }
+        Self { cell: WeakCell::new(), _tag: "tx" }
     }
 
     #[inline(always)]
@@ -225,17 +240,16 @@ impl<T: Send + 'static> RegistrySend<T> for RegistrySingle {
 
     #[inline(always)]
     fn reg_waker_blocking(
-        &self, o_waker: &mut Option<()>, _cache: &WakerCache<*const T>, _payload: *const T,
+        &self, o_waker: &mut Option<SingleWaker>, _cache: &WakerCache<*const T>, _payload: *const T,
     ) {
-        self._reg_waker_blocking();
-        o_waker.replace(());
+        self._reg_waker_blocking(o_waker);
     }
 
     #[inline(always)]
-    fn reg_waker_async(&self, ctx: &mut Context, o_waker: &mut Option<()>) -> Option<Poll<()>> {
-        self._reg_waker_async(ctx);
-        // for abandon
-        o_waker.replace(());
+    fn reg_waker_async(
+        &self, ctx: &mut Context, o_waker: &mut Option<SingleWaker>,
+    ) -> Option<Poll<()>> {
+        self._reg_waker_async(ctx, o_waker);
         None
     }
 }
@@ -243,7 +257,8 @@ impl<T: Send + 'static> RegistrySend<T> for RegistrySingle {
 impl RegistryRecv for RegistrySingle {
     #[inline(always)]
     fn new() -> Self {
-        Self { cell: OneSpmc::new(), _tag: "rx" }
+        //Self { cell: OneSpmc::new(), _tag: "rx" }
+        Self { cell: WeakCell::new(), _tag: "rx" }
     }
 
     #[inline(always)]
@@ -252,13 +267,15 @@ impl RegistryRecv for RegistrySingle {
     }
 
     #[inline(always)]
-    fn reg_waker_blocking(&self, _o_waker: &mut Option<()>, _cache: &WakerCache<()>) {
-        self._reg_waker_blocking()
+    fn reg_waker_blocking(&self, o_waker: &mut Option<SingleWaker>, _cache: &WakerCache<()>) {
+        self._reg_waker_blocking(o_waker)
     }
 
     #[inline(always)]
-    fn reg_waker_async(&self, ctx: &mut Context, _o_waker: &mut Option<()>) -> Option<Poll<()>> {
-        self._reg_waker_async(ctx);
+    fn reg_waker_async(
+        &self, ctx: &mut Context, o_waker: &mut Option<SingleWaker>,
+    ) -> Option<Poll<()>> {
+        self._reg_waker_async(ctx, o_waker);
         None
     }
 }
