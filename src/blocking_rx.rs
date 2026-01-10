@@ -284,7 +284,7 @@ impl<T> From<MAsyncRx<T>> for MRx<T> {
 
 /// For writing generic code with MRx & Rx
 pub trait BlockingRxTrait<T: Send + 'static>:
-    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>> + Sized
+    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>>
 {
     /// Receives a message from the channel. This method will block until a message is received or the channel is closed.
     ///
@@ -342,7 +342,9 @@ pub trait BlockingRxTrait<T: Send + 'static>:
         self.as_ref().is_disconnected()
     }
 
-    fn clone_to_vec(self, count: usize) -> Vec<Self>;
+    fn clone_to_vec(self, count: usize) -> Vec<Self>
+    where
+        Self: Sized;
 }
 
 impl<T: Send + 'static> BlockingRxTrait<T> for Rx<T> {

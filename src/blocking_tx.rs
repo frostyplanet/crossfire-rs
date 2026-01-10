@@ -346,7 +346,7 @@ impl<T> Deref for MTx<T> {
 
 /// For writing generic code with MTx & Tx
 pub trait BlockingTxTrait<T: Send + 'static>:
-    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>> + Sized
+    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>>
 {
     /// Sends a message. This method will block until the message is sent or the channel is closed.
     ///
@@ -404,7 +404,9 @@ pub trait BlockingTxTrait<T: Send + 'static>:
         self.as_ref().is_disconnected()
     }
 
-    fn clone_to_vec(self, count: usize) -> Vec<Self>;
+    fn clone_to_vec(self, count: usize) -> Vec<Self>
+    where
+        Self: Sized;
 }
 
 impl<T: Send + 'static> BlockingTxTrait<T> for Tx<T> {

@@ -421,7 +421,7 @@ impl<T: Unpin + Send + 'static, R> Future for SendTimeoutFuture<'_, T, R> {
 
 /// For writing generic code with MAsyncTx & AsyncTx
 pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
-    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>> + Sized + Into<AsyncSink<T>>
+    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>> + Into<AsyncSink<T>>
 {
     /// Try to send message, non-blocking
     ///
@@ -462,7 +462,9 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
         self.as_ref().is_disconnected()
     }
 
-    fn clone_to_vec(self, count: usize) -> Vec<Self>;
+    fn clone_to_vec(self, count: usize) -> Vec<Self>
+    where
+        Self: Sized;
 
     /// Send message. Will await when channel is full.
     ///

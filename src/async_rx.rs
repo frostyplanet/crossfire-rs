@@ -405,7 +405,7 @@ impl<T, R> Future for RecvTimeoutFuture<'_, T, R> {
 
 /// For writing generic code with MAsyncRx & AsyncRx
 pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
-    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>> + Sized + Into<AsyncStream<T>>
+    Send + 'static + fmt::Debug + fmt::Display + AsRef<ChannelShared<T>> + Into<AsyncStream<T>>
 {
     /// Receive message, will await when channel is empty.
     ///
@@ -487,7 +487,9 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
         self.as_ref().is_disconnected()
     }
 
-    fn clone_to_vec(self, count: usize) -> Vec<Self>;
+    fn clone_to_vec(self, count: usize) -> Vec<Self>
+    where
+        Self: Sized;
 }
 
 impl<T: Unpin + Send + 'static> AsyncRxTrait<T> for AsyncRx<T> {
