@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [2.1.10] - 2026-01-10
+
+### Added
+
+- Add `oneshot` module
+
+- Add test workflow for `compio`
+
+### Changed
+
+- Allow Blocking/Async Tx/Rx trait to be used as trait objects
+
 ## [2.1.9] - 2025-12-31
 
 - Fix speed regression on ARM (fix backoff)
