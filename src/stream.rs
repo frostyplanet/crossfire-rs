@@ -11,7 +11,7 @@ use std::task::*;
 /// Implements `futures_core::stream::Stream`.
 pub struct AsyncStream<F: Flavor> {
     rx: AsyncRx<F>,
-    waker: Option<RecvWaker>,
+    waker: Option<<F::Recv as Registry>::Waker>,
     ended: bool,
 }
 
@@ -111,9 +111,7 @@ impl<F: Flavor> stream::FusedStream for AsyncStream<F> {
 
 impl<F: Flavor> Drop for AsyncStream<F> {
     fn drop(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            self.rx.shared.abandon_recv_waker(waker);
-        }
+        self.rx.shared.abandon_recv_waker(&mut self.waker);
     }
 }
 

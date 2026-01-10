@@ -9,7 +9,7 @@ use std::task::*;
 /// An async sink that allows you to write custom futures with `poll_send(ctx)`.
 pub struct AsyncSink<F: Flavor> {
     tx: AsyncTx<F>,
-    waker: Option<SendWaker<F::Item>>,
+    waker: Option<<F::Send as Registry>::Waker>,
 }
 
 impl<F: Flavor> fmt::Debug for AsyncSink<F> {
@@ -99,8 +99,6 @@ impl<F: Flavor> AsyncSink<F> {
 
 impl<F: Flavor> Drop for AsyncSink<F> {
     fn drop(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            self.tx.shared.abandon_send_waker(waker);
-        }
+        self.tx.shared.abandon_send_waker(&mut self.waker);
     }
 }

@@ -211,7 +211,7 @@ impl<F: Flavor> AsyncRx<F> {
     /// Return Err([TryRecvError::Disconnected]) when all Tx dropped and channel is empty.
     #[inline(always)]
     pub(crate) fn poll_item<const STREAM: bool>(
-        &self, ctx: &mut Context, o_waker: &mut Option<RecvWaker>,
+        &self, ctx: &mut Context, o_waker: &mut Option<<F::Recv as Registry>::Waker>,
     ) -> Result<F::Item, TryRecvError> {
         let shared = &self.shared;
         // When the result is not TryRecvError::Empty,
@@ -224,14 +224,8 @@ impl<F: Flavor> AsyncRx<F> {
         }
         macro_rules! on_recv_waker {
             ($state: expr) => {{
-                if let Some(waker) = o_waker.take() {
-                    trace_log!("rx{:?}: recv {:?} {:?}", tokio_task_id!(), waker, $state);
-                    if ($state as u8) < (WakerState::Woken as u8) {
-                        shared.recvs.cancel_waker(&waker);
-                    }
-                } else {
-                    trace_log!("rx{:?}: recv", tokio_task_id!());
-                }
+                trace_log!("rx{:?}: recv {:?} {:?}", tokio_task_id!(), o_waker, $state);
+                shared.recvs.cancel_waker(o_waker);
             }};
         }
         macro_rules! try_recv {
@@ -244,34 +238,7 @@ impl<F: Flavor> AsyncRx<F> {
             };
         }
         loop {
-            if let Some(waker) = o_waker.as_ref() {
-                try_recv!(try_recv => {on_recv_waker!(WakerState::Woken)});
-                match waker.try_change_state(WakerState::Woken, WakerState::Init) {
-                    Ok(_) => {
-                        if !waker.will_wake(ctx) {
-                            let _ = o_waker.take();
-                        }
-                    }
-                    Err(state) => {
-                        if state < WakerState::Woken as u8 {
-                            if waker.will_wake(ctx) {
-                                // Spurious woken by runtime, or
-                                // Normally only selection or multiplex future will get here.
-                                // No need to reg again, since waker is not consumed.
-                                trace_log!("rx{:?}: will_wake {:?}", tokio_task_id!(), waker);
-                                break;
-                            } else {
-                                // Spurious woken by runtime, waker can not be re-used (issue 38)
-                                shared.recvs.cancel_waker(&waker);
-                                trace_log!("rx{:?}: drop waker {:?}", tokio_task_id!(), waker);
-                                let _ = o_waker.take(); // waker cannot be used again
-                            }
-                        } else if state == WakerState::Closed as u8 {
-                            break;
-                        }
-                    }
-                }
-            } else {
+            if o_waker.is_none() {
                 try_recv!(try_recv=>{ on_recv_no_waker!()});
                 // First call
                 if let Some(mut backoff) = shared.get_async_backoff() {
@@ -283,14 +250,11 @@ impl<F: Flavor> AsyncRx<F> {
                         }
                     }
                 }
-            }
-            if let Some(waker) = o_waker.take() {
-                shared.reg_recv(&waker);
-                o_waker.replace(waker);
             } else {
-                let waker = RecvWaker::new_async(ctx, ());
-                shared.reg_recv(&waker);
-                o_waker.replace(waker);
+                try_recv!(try_recv => {on_recv_waker!(WakerState::Woken)});
+            }
+            if shared.recvs.reg_waker_async(ctx, o_waker).is_some() {
+                break;
             }
             // NOTE: The other side put something while reg_send and did not see the waker,
             // should check the channel again, otherwise might incur a dead lock.
@@ -298,9 +262,8 @@ impl<F: Flavor> AsyncRx<F> {
             // because Miri is not happy about ArrayQueue pop ordering, which is not SeqCst
             try_recv!(try_recv_final =>{ on_recv_waker!(WakerState::Init)});
             if !STREAM {
-                let _waker = o_waker.as_ref().unwrap();
-                let state = shared.recvs.commit_waiting(&_waker);
-                trace_log!("rx{:?}: commit_waiting {:?} {}", tokio_task_id!(), _waker, state);
+                let state = shared.recvs.commit_waiting(o_waker);
+                trace_log!("rx{:?}: commit_waiting {:?} {}", tokio_task_id!(), o_waker, state);
                 if state == WakerState::Woken as u8 {
                     continue;
                 }
@@ -337,7 +300,7 @@ impl<F: Flavor> AsyncRx<F> {
 #[must_use]
 pub struct RecvFuture<'a, F: Flavor> {
     rx: &'a AsyncRx<F>,
-    waker: Option<RecvWaker>,
+    waker: Option<<F::Recv as Registry>::Waker>,
 }
 
 unsafe impl<F: Flavor> Send for RecvFuture<'_, F> {}
@@ -345,10 +308,7 @@ unsafe impl<F: Flavor> Send for RecvFuture<'_, F> {}
 impl<F: Flavor> Drop for RecvFuture<'_, F> {
     #[inline]
     fn drop(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            // cancelled
-            self.rx.shared.abandon_recv_waker(waker);
-        }
+        self.rx.shared.abandon_recv_waker(&mut self.waker);
     }
 }
 
@@ -379,7 +339,7 @@ impl<F: Flavor> Future for RecvFuture<'_, F> {
 #[must_use]
 pub struct RecvTimeoutFuture<'a, F: Flavor, R> {
     rx: &'a AsyncRx<F>,
-    waker: Option<RecvWaker>,
+    waker: Option<<F::Recv as Registry>::Waker>,
     sleep: Pin<Box<dyn Future<Output = R>>>,
 }
 
@@ -388,10 +348,7 @@ unsafe impl<F: Flavor, R> Send for RecvTimeoutFuture<'_, F, R> {}
 impl<F: Flavor, R> Drop for RecvTimeoutFuture<'_, F, R> {
     #[inline]
     fn drop(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            // cancelled
-            self.rx.shared.abandon_recv_waker(waker);
-        }
+        self.rx.shared.abandon_recv_waker(&mut self.waker);
     }
 }
 

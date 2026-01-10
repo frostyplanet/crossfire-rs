@@ -53,7 +53,7 @@
 //! - The crossbeam implementation of select is decouple from channel types and message type, which
 //! means the API is possible for crossfire too.
 
-use crate::flavor::{flavor_enum_dispatch, Flavor};
+use crate::flavor::{flavor_dispatch, Flavor, FlavorImpl};
 use crate::shared::*;
 pub use crate::{AsyncRxTrait, AsyncTxTrait, BlockingRxTrait, BlockingTxTrait};
 use std::mem::MaybeUninit;
@@ -72,7 +72,17 @@ macro_rules! wrap_compat {
     };
 }
 
-flavor_enum_dispatch!(CompatFlavor, wrap_compat);
+impl<T: Send + Unpin + 'static> FlavorImpl for CompatFlavor<T> {
+    type Item = T;
+    flavor_dispatch!(wrap_compat);
+}
+
+// There's not much performance difference between old RegistrySingle and RegistryMulti,
+// we just use RegistryMulti here since this is just for compatible reason.
+impl<T: Send + Unpin + 'static> Flavor for CompatFlavor<T> {
+    type Send = RegistryMultiSend<T>;
+    type Recv = RegistryMultiRecv;
+}
 
 #[inline(always)]
 fn new_list<T: Send + Unpin + 'static>() -> CompatFlavor<T> {
@@ -125,13 +135,7 @@ pub mod spsc {
 
     macro_rules! init_share {
         ($flavor: expr) => {{
-            let send_wakers = if $flavor.capacity().is_none() {
-                RegistrySender::Dummy
-            } else {
-                RegistrySender::new_single()
-            };
-            let recv_wakers = RegistryRecv::new_single();
-            ChannelShared::new($flavor, send_wakers, recv_wakers)
+            ChannelShared::new($flavor)
         }};
     }
 
@@ -206,13 +210,7 @@ pub mod mpsc {
 
     macro_rules! init_share {
         ($flavor: expr) => {{
-            let send_wakers = if $flavor.capacity().is_none() {
-                RegistrySender::Dummy
-            } else {
-                RegistrySender::new_multi()
-            };
-            let recv_wakers = RegistryRecv::new_single();
-            ChannelShared::new($flavor, send_wakers, recv_wakers)
+            ChannelShared::new($flavor)
         }};
     }
 
@@ -288,13 +286,7 @@ pub mod mpmc {
 
     macro_rules! init_share {
         ($flavor: expr) => {{
-            let send_wakers = if $flavor.capacity().is_none() {
-                RegistrySender::Dummy
-            } else {
-                RegistrySender::new_multi()
-            };
-            let recv_wakers = RegistryRecv::new_multi();
-            ChannelShared::new($flavor, send_wakers, recv_wakers)
+            ChannelShared::new($flavor)
         }};
     }
 

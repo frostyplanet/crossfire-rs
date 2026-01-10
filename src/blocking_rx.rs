@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 use std::time::{Duration, Instant};
 
 /// A single consumer (receiver) that works in a blocking context.
@@ -85,15 +85,16 @@ impl<F: Flavor> Rx<F> {
         &self, deadline: Option<Instant>,
     ) -> Result<F::Item, RecvTimeoutError> {
         let shared = &self.shared;
+        let mut o_waker: Option<<F::Recv as Registry>::Waker> = None;
         macro_rules! on_recv_no_waker {
             () => {{
                 trace_log!("rx: recv");
             }};
         }
         macro_rules! on_recv_waker {
-            ($waker: expr) => {{
-                trace_log!("rx: recv {:?}", $waker);
-                self.waker_cache.push($waker);
+            () => {{
+                trace_log!("rx: recv {:?}", o_waker);
+                self.recvs.cache_waker(o_waker, &self.waker_cache);
             }};
         }
         macro_rules! try_recv {
@@ -118,23 +119,19 @@ impl<F: Flavor> Rx<F> {
                 break;
             }
         }
-        let waker = self.waker_cache.new_blocking(());
         let mut state;
         'MAIN: loop {
-            if waker.get_state() == WakerState::Woken as u8 {
-                waker.reset_init();
-            }
-            shared.reg_recv(&waker);
+            shared.recvs.reg_waker_blocking(&mut o_waker, &self.waker_cache);
             // NOTE: special API before we park
             // because Miri is not happy about ArrayQueue pop ordering, which is not SeqCst
             if let Some(item) = shared.inner.try_recv_final() {
                 shared.on_recv();
-                trace_log!("rx: recv cancel {:?} Init", waker);
-                self.recvs.cancel_waker(&waker);
+                trace_log!("rx: recv cancel {:?} Init", o_waker);
+                self.recvs.cancel_waker(&mut o_waker);
                 return Ok(item);
             }
-            state = shared.recvs.commit_waiting(&waker);
-            trace_log!("rx: {:?} commit_waiting state={}", waker, state);
+            state = shared.recvs.commit_waiting(&o_waker);
+            trace_log!("rx: {:?} commit_waiting state={}", o_waker, state);
             if shared.is_tx_closed() {
                 break 'MAIN;
             }
@@ -147,24 +144,25 @@ impl<F: Flavor> Rx<F> {
                         std::thread::park_timeout(dur);
                     }
                     Err(_) => {
-                        let _ = shared.abandon_recv_waker(waker);
+                        shared.abandon_recv_waker(&mut o_waker);
                         return Err(RecvTimeoutError::Timeout);
                     }
                 }
-                state = waker.get_state();
+                state = self.recvs.get_waker_state(&o_waker, Ordering::SeqCst);
+                trace_log!("rx: after park state={}", state);
             }
             if state == WakerState::Closed as u8 {
                 break 'MAIN;
             }
             backoff.reset();
             loop {
-                try_recv!({ on_recv_waker!(waker) });
+                try_recv!({ on_recv_waker!() });
                 if backoff.snooze() {
                     break;
                 }
             }
         }
-        try_recv!({ on_recv_waker!(waker) });
+        try_recv!({ on_recv_waker!() });
         // make sure all msgs received, since we have soonze
         return Err(RecvTimeoutError::Disconnected);
     }

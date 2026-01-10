@@ -1,11 +1,11 @@
 use crate::backoff::*;
 pub(crate) use crate::crossbeam::err::*;
 pub(crate) use crate::flavor::Flavor;
-pub(crate) use crate::locked_waker::*;
 use crate::trace_log;
+pub(crate) use crate::waker::*;
 pub(crate) use crate::waker_registry::*;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{fence, AtomicUsize, Ordering};
+use std::sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,17 +13,15 @@ pub struct ChannelShared<F: Flavor> {
     pub(crate) inner: F,
     tx_count: AtomicUsize,
     rx_count: AtomicUsize,
-    pub(crate) senders: RegistrySender<F::Item>,
-    pub(crate) recvs: RegistryRecv,
+    pub(crate) senders: F::Send,
+    pub(crate) recvs: F::Recv,
     pub(crate) backoff_limit: u16,
     pub(crate) large: bool,
     pub(crate) may_direct_copy: bool,
 }
 
 impl<F: Flavor> ChannelShared<F> {
-    pub(crate) fn new(
-        inner: F, senders: RegistrySender<F::Item>, recvs: RegistryRecv,
-    ) -> Arc<Self> {
+    pub(crate) fn new(inner: F) -> Arc<Self> {
         let mut large = false;
         if let Some(bound) = inner.capacity() {
             if bound >= 10 {
@@ -33,8 +31,8 @@ impl<F: Flavor> ChannelShared<F> {
         Arc::new(Self {
             tx_count: AtomicUsize::new(1),
             rx_count: AtomicUsize::new(1),
-            senders,
-            recvs,
+            senders: F::Send::new(),
+            recvs: F::Recv::new(),
             backoff_limit: inner.backoff_limit(),
             large,
             may_direct_copy: inner.may_direct_copy(),
@@ -136,57 +134,46 @@ impl<F: Flavor> ChannelShared<F> {
         }
     }
 
-    /// Register waker for current rx
-    #[inline(always)]
-    pub(crate) fn reg_recv(&self, o_waker: &RecvWaker) {
-        self.recvs.reg_waker(o_waker)
-    }
-
     /// if need_wake == true, called from on_recv(), when return None indicates try to wake up next.
     /// when need_wake == false, will always return Some(state).
     ///
     /// NOTE: when return state=Done, the waker is not set to Done
     #[inline]
-    pub(crate) fn sender_reg_and_try<const SINK: bool>(
-        &self, item: &MaybeUninit<F::Item>, waker: SendWaker<F::Item>,
-    ) -> (u8, Option<SendWaker<F::Item>>) {
-        self.senders.reg_waker(&waker);
+    pub(crate) fn sender_double_check<const SINK: bool>(
+        &self, item: &MaybeUninit<F::Item>, o_waker: &mut Option<<F::Send as Registry>::Waker>,
+    ) -> u8 {
         // Not allow Spurious wake and enter this function again;
         if let Some(res) = self.inner.try_send_oneshot(item.as_ptr()) {
             if res {
                 self.on_send();
-                return self.senders.cancel_reuse_waker(waker, WakerState::Done);
+                return self.senders.cancel_reuse_waker(o_waker, WakerState::Done);
             } else {
-                if SINK {
-                    if self.is_rx_closed() {
-                        return (WakerState::Closed as u8, None);
-                    } else {
-                        // outside logic only recognize Waiting
-                        return (WakerState::Waiting as u8, Some(waker));
-                    }
+                let state = if SINK {
+                    self.senders.commit_waiting(&o_waker)
                 } else {
-                    let state = self.senders.commit_waiting(&waker);
-                    // let on_recv do it's job,
-                    if self.is_rx_closed() {
-                        return (WakerState::Closed as u8, None);
-                    } else {
-                        return (state, Some(waker));
-                    }
+                    WakerState::Waiting as u8
+                };
+                if self.is_rx_closed() {
+                    return WakerState::Closed as u8;
                 }
+                return state;
             }
         } else {
             // Unlikely to be disconnected,
-            return self.senders.cancel_reuse_waker(waker, WakerState::Woken);
+            return self.senders.cancel_reuse_waker(o_waker, WakerState::Woken);
         }
     }
 
     /// Wait a little more for the waker state change,
     /// NOTE: it's important to yield when you have more sender than receiver
     #[inline(always)]
-    pub(crate) fn sender_snooze(&self, waker: &SendWaker<F::Item>, backoff: &mut Backoff) -> u8 {
+    pub(crate) fn sender_snooze(
+        &self, o_waker: &Option<<F::Send as Registry>::Waker>, backoff: &mut Backoff,
+    ) -> u8 {
         backoff.reset();
         loop {
-            let state = waker.get_state_relaxed();
+            let state = self.senders.get_waker_state(o_waker, Ordering::Relaxed);
+            compiler_fence(Ordering::AcqRel);
             if state >= WakerState::Woken as u8 {
                 return state;
             }
@@ -224,61 +211,40 @@ impl<F: Flavor> ChannelShared<F> {
     /// Call on cancellation, return true to indicate drop temporary message
     /// return false to indicate already Done.
     #[inline(always)]
-    pub(crate) fn abandon_send_waker(&self, waker: SendWaker<F::Item>) -> bool {
-        match waker.abandon() {
-            Ok(()) => {
-                trace_log!("tx: abandon cancel {:?}", waker);
-                self.senders.clear_wakers(&waker);
-                return true;
-            }
+    pub(crate) fn abandon_send_waker(
+        &self, o_waker: &mut Option<<F::Send as Registry>::Waker>,
+    ) -> bool {
+        match self.senders.abandon_waker(o_waker) {
+            Ok(r) => r,
             Err(state) => {
                 trace_log!("tx: abandon err  {:?} {}", waker, state);
                 if state == WakerState::Woken as u8 {
                     // We are awake, but give up sending, should notify another sender for safety
                     self.on_recv();
-                    return true;
                 } else if state == WakerState::Closed as u8 {
-                    return true;
-                } else if state == WakerState::Init as u8 {
-                    // For dropping AsyncSink, clear only one
-                    self.senders.cancel_waker(&waker);
-                    return true;
                 } else {
                     debug_assert_eq!(state, WakerState::Done as u8);
                     // Unused code for direct_copy
                     return false;
                 }
+                return true;
             }
         }
     }
 
     /// Call on cancellation, return true to indicate drop temporary message
     #[inline(always)]
-    pub(crate) fn abandon_recv_waker(&self, waker: RecvWaker) -> bool {
-        match waker.abandon() {
-            Ok(()) => {
-                trace_log!("rx: abandon cancel {:?}", waker);
-                self.recvs.clear_wakers(&waker);
-                return true;
-            }
-            Err(state) => {
-                trace_log!("rx: abandon err {:?} {}", waker, state);
-                if state == WakerState::Woken as u8 {
-                    // We are awake, but give up receiving, should notify another receiver for safety
-                    self.on_send();
-                    return true;
-                } else if state == WakerState::Closed as u8 {
-                    // Closed
-                    return true;
-                } else if state == WakerState::Init as u8 {
-                    // For AsyncStream::poll_item, clear only one
-                    self.recvs.cancel_waker(&waker);
-                    return true;
-                } else {
-                    debug_assert_eq!(state, WakerState::Done as u8);
-                    // Unused code for direct_copy
-                    return false;
-                }
+    pub(crate) fn abandon_recv_waker(&self, o_waker: &mut Option<<F::Recv as Registry>::Waker>) {
+        if let Err(state) = self.recvs.abandon_waker(o_waker) {
+            trace_log!("rx: abandon err {:?} {}", waker, state);
+            if state == WakerState::Woken as u8 {
+                // We are awake, but give up receiving, should notify another receiver for safety
+                self.on_send();
+            } else if state == WakerState::Closed as u8 {
+                // Closed
+            } else {
+                debug_assert_eq!(state, WakerState::Done as u8);
+                // Unused code for direct_copy
             }
         }
     }
