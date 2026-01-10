@@ -189,15 +189,7 @@ impl<F: Flavor> Rx<F> {
     /// Returns Err([TryRecvError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline]
     pub fn try_recv(&self) -> Result<F::Item, TryRecvError> {
-        if let Some(item) = self.shared.inner.try_recv() {
-            self.shared.on_recv();
-            return Ok(item);
-        } else {
-            if self.shared.is_tx_closed() {
-                return Err(TryRecvError::Disconnected);
-            }
-            return Err(TryRecvError::Empty);
-        }
+        self.shared.try_recv()
     }
 
     /// Receives a message from the channel with a timeout.

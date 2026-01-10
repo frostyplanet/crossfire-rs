@@ -40,6 +40,19 @@ impl<F: Flavor> ChannelShared<F> {
         })
     }
 
+    #[inline(always)]
+    pub(crate) fn try_recv(&self) -> Result<F::Item, TryRecvError> {
+        if let Some(item) = self.inner.try_recv_final() {
+            self.on_recv();
+            return Ok(item);
+        } else {
+            if self.is_tx_closed() {
+                return Err(TryRecvError::Disconnected);
+            }
+            return Err(TryRecvError::Empty);
+        }
+    }
+
     /// The number of messages in the channel.
     #[inline(always)]
     pub fn len(&self) -> usize {

@@ -191,15 +191,7 @@ impl<F: Flavor> AsyncRx<F> {
     /// Returns Err([TryRecvError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline(always)]
     pub fn try_recv(&self) -> Result<F::Item, TryRecvError> {
-        if let Some(item) = self.shared.inner.try_recv() {
-            self.shared.on_recv();
-            return Ok(item);
-        } else {
-            if self.shared.is_tx_closed() {
-                return Err(TryRecvError::Disconnected);
-            }
-            return Err(TryRecvError::Empty);
-        }
+        return self.shared.try_recv();
     }
 
     /// Internal function might change in the future. For public version, use AsyncStream::poll_item() instead
