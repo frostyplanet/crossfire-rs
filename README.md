@@ -80,7 +80,7 @@ make test
 <table cellpadding="30">
 <tr><th>arch</th><th>runtime</th><th>workflow</th><th>status</th></tr>
 <tr>
-<td align="center" rowspan="4">x86_64</td>
+<td align="center" rowspan="5">x86_64</td>
 <td>threaded</td>
 <td><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_threaded_x86.yml">cron_master_threaded_x86</a> </td>
 <td>STABLE</td>
@@ -97,7 +97,11 @@ make test
 <tr><td>smol</td>
 <td><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_smol_x86.yml">cron_master_smol-x86</a></td>
 <td>STABLE</td>
-<tr><td align="center" rowspan="4">arm</td>
+<tr><td>compio</td>
+<td><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_compio_x86.yml">cron_master_compio-x86</a></td>
+<td>STABLE</td>
+</tr>
+<tr><td align="center" rowspan="5">arm</td>
 <td>threaded</td>
 <td>
 <a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_threaded_arm.yml">cron_master_threaded_arm</a><br/>
@@ -122,6 +126,11 @@ STABLE
 <tr>
 <td>smol</td>
 <td><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_smol_arm.yml">cron_master_smol_arm</a> </td>
+<td>STABLE</td>
+</tr>
+<tr>
+<td>compio</td>
+<td><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_compio_arm.yml">cron_master_compio_arm</a> </td>
 <td>STABLE</td>
 </tr>
 <tr>
