@@ -62,12 +62,11 @@
 // Since mixing send and receive operations is rare, and the waker types for senders and receivers
 // are different, we only implement `select` for receive operations.
 //
-// In `shared.rs`, `SelectHandle` is implemented for `ChannelShare<F::Recv=RegistryMultiRecv>`
-// and `ChannelShare<F::Recv=RegistrySingle>`.
+// In `shared.rs`, `SelectHandle` is implemented for `ChannelShare<F>`
 //
 // ## SelectWaker
 //
-// `SelectWaker` is wrapped in an `Arc<SelectWaker>`.
+// `SelectWaker` is wrapped in an `Arc<SelectWaker>`, holding the actual waker
 //
 // ### RegistryMultiRecv
 // - Requires `reg_waker()` to be called only once, so the `registered` flag is saved as `true`.
@@ -84,29 +83,11 @@
 // - During registration, it clones the `ArcWaker` (generated at the start of the select flow inside `Arc<SelectWaker>`)
 //   into `RegistrySingle`. A new method can be added to abstract this process.
 //
-// ## Select Flow
-//
-// ### Select::select loop
-// 1. `try_select` from all handlers (no need to check for closed channels yet).
-// 2. Initialize an `ArcWaker` in `SelectWaker`.
-// 3. Register all handlers (handlers with `registered=true` may be skipped).
-// 4. Check `try_select` again to handle race conditions and check if any channel is closed.
-// 5. Park on `SelectWaker`.
-//
 // ### Select::drop
 // - Unregister using `cancel_waker()` for all handles.
 //
-// ## Hint and Indexing
-// - When no channel is removed, `channel_id` equals the `hint`, which is used to fast-path the check
-//   after waking up from park.
-// - The `hint` does not need to be strictly accurate because in an MPMC environment, different selects
-//   on multiple channels might contend.
-// - If a `RecvHandle` is removed, the `channel_id` of subsequent handlers needs to be updated to
-//   correspond to their index in the vector.
-//
 // ## Safety and Validation
-// - `channel`: `*const u8` is used to validate the `SelectResult`.
-// - `SelectResult` is returned to the user and contains a pointer to the slot.
+// - `SelectResult` is returned to the user and contains a pointer of receiver to the slot.
 // - If the user incorrectly uses a `SelectResult` from one channel on a different receiver,
 //   this pointer address is checked, causing a panic to ensure safety.
 
@@ -115,8 +96,10 @@ use crate::flavor::Token;
 use crate::shared::{check_timeout, ChannelShared};
 use crate::waker::*;
 use crate::ReceiverType;
-use crate::{RecvError, RecvTimeoutError};
+use crate::{RecvError, RecvTimeoutError, TryRecvError};
 use std::cell::UnsafeCell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::mem::transmute;
 use std::ops::Add;
 use std::sync::{
@@ -124,38 +107,75 @@ use std::sync::{
     Arc, Weak,
 };
 use std::task::Context;
+use std::thread;
 use std::time::{Duration, Instant};
 
-#[allow(private_bounds)]
-pub(crate) trait SelectHandle: Send {
-    /// If final_check is true, should check channel closing, should use SeqCst ordering
-    fn try_select(&self, final_check: bool) -> Option<Token>;
-
-    /// For RegistryMulti return true means the waker will be persistent, otherwise return false
-    fn reg_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool;
-
-    fn cancel_waker(&self, waker: &Arc<SelectWaker>);
-}
-
-/// The select interface only support select from receivers
+/// The select interface only support select from receivers.
+///
+/// - The user add receivers for subscription.
+/// - call [Select::select] or [Select::select_timeout] and get [SelectResult]
+/// - Handle [SelectResult] with corrasponding channel receiver.
+/// - The `Select` object and be reused in a loop.
+/// - On drop it will automatically cancel all registeration.
 pub struct Select<'a> {
     handlers: Vec<RecvHandle<'a>>,
     waker: Arc<SelectWaker>,
+    mode: SelectMode,
+    next_index: usize,
+    rng: u64,
+}
+
+#[derive(PartialEq)]
+#[repr(u8)]
+enum SelectMode {
+    RR,
+    Rand,
+    Bias,
 }
 
 impl<'a> Select<'a> {
-    #[inline]
+    /// Initialize Select with fair, round-robin stratergy
     pub fn new() -> Self {
+        Self::_new(SelectMode::RR)
+    }
+
+    /// Initialize Select with fair stratergy (check start from random channel)
+    #[inline]
+    pub fn new_random() -> Self {
+        Self::_new(SelectMode::Rand)
+    }
+
+    /// Initialize Select with bias stratergy (check according to the order of `add()`)
+    #[inline]
+    pub fn new_bias() -> Self {
+        Self::_new(SelectMode::Bias)
+    }
+
+    #[inline]
+    fn _new(mode: SelectMode) -> Self {
+        let rng = if let SelectMode::Rand = mode {
+            let mut hasher = DefaultHasher::new();
+            Instant::now().hash(&mut hasher);
+            thread::current().id().hash(&mut hasher);
+            hasher.finish()
+        } else {
+            0
+        };
+
         Self {
+            mode,
             handlers: Vec::with_capacity(32),
             waker: Arc::new(SelectWaker {
                 o_waker: UnsafeCell::new(None),
                 cell: WeakCell::new(),
                 hint: AtomicUsize::new(0),
             }),
+            next_index: 0,
+            rng,
         }
     }
 
+    /// Add a channel receiver for watch
     #[inline]
     pub fn add<R: ReceiverType>(&mut self, recv: &'a R)
     where
@@ -169,19 +189,84 @@ impl<'a> Select<'a> {
         });
     }
 
+    /// Remove a channel receiver from watch
     pub fn remove<R: ReceiverType>(&mut self, recv: &R) {
         let channel = recv as *const R as *const u8;
         if let Some(index) = self.handlers.iter().position(|h| h.channel == channel) {
             self.handlers[index].shared.cancel_waker(&self.waker);
             self.handlers.remove(index);
-
-            for handler in &mut self.handlers {
-                handler.registered = false;
-                handler.shared.cancel_waker(&self.waker);
+            if !self.handlers.is_empty() {
+                if self.next_index >= self.handlers.len() {
+                    self.next_index = 0;
+                }
+                for handler in &mut self.handlers {
+                    handler.registered = false;
+                    handler.shared.cancel_waker(&self.waker);
+                }
             }
         }
     }
 
+    /// Attempts to select a message from any of the registered receivers without blocking.
+    ///
+    /// Returns:
+    /// - `Ok(SelectResult)` if a message is immediately available from any channel.
+    /// - `Err(TryRecvError::Empty)` if no messages are ready, but at least one channel is still connected.
+    /// - `Err(TryRecvError::Disconnected)` if all registered channels are disconnected or removed from select.
+    pub fn try_select(&mut self) -> Result<SelectResult, TryRecvError> {
+        if self.handlers.is_empty() {
+            return Err(TryRecvError::Disconnected);
+        }
+        if let Some(res) = self._try_select_begin(true) {
+            return Ok(res);
+        }
+        Err(TryRecvError::Empty)
+    }
+
+    #[inline(always)]
+    fn _try_select_begin(&mut self, final_check: bool) -> Option<SelectResult> {
+        let len = self.handlers.len();
+        debug_assert!(len > 0);
+        let start_index = match self.mode {
+            SelectMode::Bias => 0,
+            SelectMode::RR => {
+                if self.next_index >= self.handlers.len() {
+                    0
+                } else {
+                    self.next_index
+                }
+            }
+            SelectMode::Rand => {
+                let mut x = self.rng;
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                self.rng = x;
+                (x as usize) % len
+            }
+        };
+        let mut idx = start_index;
+        for _ in 0..len {
+            if let Ok(res) = self.handlers[idx].try_select(final_check) {
+                if SelectMode::RR == self.mode {
+                    self.next_index = idx + 1;
+                }
+                return Some(res); // Message available
+            }
+            idx += 1;
+            if idx >= len {
+                idx = 0;
+            }
+        }
+        None
+    }
+
+    /// Blocking current thread and wait for message from multiple receivers or close event
+    ///
+    /// See [crate::select] document for usage
+    ///
+    /// # Return conditions:
+    ///
     /// - Return Ok(SelectResult) when one of the channel has result or close.
     /// - For closed channel, you have to remove the receiver from select, otherwise the select
     /// will already return immediately.
@@ -194,6 +279,12 @@ impl<'a> Select<'a> {
         }
     }
 
+    /// Blocking current thread and wait with a timeout, for message from multiple receivers or close event
+    ///
+    /// See [crate::select] document for usage
+    ///
+    /// # Return conditions:
+    ///
     /// - Return Ok(SelectResult) when one of the channel has result or close.
     /// - For closed channel, you have to remove the receiver from select, otherwise the select
     /// will already return immediately.
@@ -210,22 +301,30 @@ impl<'a> Select<'a> {
 
     #[inline(always)]
     fn _select_blocking(&mut self, deadline: Option<Instant>) -> Result<SelectResult, bool> {
-        for handler in self.handlers.iter() {
-            if let Ok(res) = handler.try_select(false) {
-                return Ok(res);
-            }
-        }
+        // Initial non-blocking check, respecting SelectMode
         if self.handlers.is_empty() {
-            return Err(true);
+            return Err(true); // All handlers are disconnected or removed
         }
+        if let Some(res) = self._try_select_begin(false) {
+            return Ok(res);
+        }
+        let is_rr = self.mode == SelectMode::RR;
+        // If try_select returned None, we check if all handlers are gone.
+        let len = self.handlers.len();
         loop {
             // init SelectWaker
             self.waker.init_blocking();
+            // Register all handlers (handlers with `registered=true` may be skipped).
             for (i, handler) in self.handlers.iter_mut().enumerate() {
                 handler.reg_waker(i, &self.waker);
             }
-            for handler in self.handlers.iter() {
+            // After registration, do another check, this time with final_check=true
+            for (i, handler) in self.handlers.iter().enumerate() {
+                // final_check=true also check if any channel is closed.
                 if let Ok(res) = handler.try_select(true) {
+                    if is_rr {
+                        self.next_index = i + 1;
+                    }
                     return Ok(res);
                 }
             }
@@ -240,13 +339,18 @@ impl<'a> Select<'a> {
                     return Err(false);
                 }
             }
+            // wake up, first check the one with hint
             let mut idx = self.waker.hint.load(Ordering::Acquire);
-            for _ in 0..self.handlers.len() {
+            for _ in 0..len {
                 // Ensure idx is within bounds for the current iteration.
-                if idx >= self.handlers.len() {
+                if idx >= len {
                     idx = 0;
                 }
+                // final_check=true also check if any channel is closed.
                 if let Ok(res) = self.handlers[idx].try_select(true) {
+                    if is_rr {
+                        self.next_index = idx + 1;
+                    }
                     return Ok(res);
                 }
                 idx += 1;
@@ -369,4 +473,15 @@ impl<R: ReceiverType> PartialEq<R> for SelectResult {
     fn eq(&self, other: &R) -> bool {
         self.is_from(other)
     }
+}
+
+#[allow(private_bounds)]
+pub(crate) trait SelectHandle: Send {
+    /// If final_check is true, should check channel closing, should use SeqCst ordering
+    fn try_select(&self, final_check: bool) -> Option<Token>;
+
+    /// For RegistryMulti return true means the waker will be persistent, otherwise return false
+    fn reg_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool;
+
+    fn cancel_waker(&self, waker: &Arc<SelectWaker>);
 }
