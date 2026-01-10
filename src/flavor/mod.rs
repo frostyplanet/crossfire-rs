@@ -13,7 +13,7 @@ mod one_spmc;
 pub(crate) use one_spmc::{OneSpmc, OneSpsc};
 
 /// Essential struct for select and read interface
-pub struct Token {
+pub(crate) struct Token {
     pub(crate) pos: *const u8,
     pub(crate) stamp: usize,
 }
@@ -62,7 +62,7 @@ pub trait FlavorImpl: Send + 'static {
     }
 }
 
-pub trait FlavorSelect: FlavorImpl {
+pub(crate) trait FlavorSelect: FlavorImpl {
     /// Note: this is internal function, it does not check if the token has other result
     fn try_select(&self, final_check: bool) -> Option<Token>;
 

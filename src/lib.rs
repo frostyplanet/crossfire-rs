@@ -208,6 +208,7 @@
 //! If you like to use poll function directly for complex behavior, you can call
 //! [AsyncSink::poll_send()](crate::sink::AsyncSink::poll_send()) or [AsyncStream::poll_item()](crate::stream::AsyncStream::poll_item()) with Context.
 
+#[allow(private_bounds)]
 pub mod flavor;
 mod shared;
 pub use shared::ChannelShared;
@@ -217,6 +218,7 @@ pub use backoff::detect_backoff_cfg;
 
 mod collections;
 mod waker;
+#[allow(private_bounds)]
 mod waker_registry;
 
 pub mod mpmc;
@@ -226,10 +228,12 @@ pub mod spsc;
 
 mod blocking_tx;
 pub use blocking_tx::*;
+#[allow(private_bounds)]
 mod blocking_rx;
 pub use blocking_rx::*;
 mod async_tx;
 pub use async_tx::*;
+#[allow(private_bounds)]
 mod async_rx;
 pub use async_rx::*;
 
@@ -240,6 +244,7 @@ pub mod stream;
 
 mod crossbeam;
 pub use crossbeam::err::*;
+#[allow(private_bounds)]
 pub mod select;
 
 /// logging macro for development

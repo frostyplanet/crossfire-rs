@@ -20,7 +20,7 @@ use std::task::{Context, Poll};
 pub(crate) type RegistryMultiSend<T> = RegistryMulti<*const T>;
 pub(crate) type RegistryMultiRecv = RegistryMulti<()>;
 
-pub trait Registry: Send + 'static {
+pub(crate) trait Registry: Send + 'static {
     type Waker: Send + Unpin + 'static + Debug;
 
     fn get_waker_state(&self, o_waker: &Option<Self::Waker>, order: Ordering) -> u8;
@@ -46,7 +46,7 @@ pub trait Registry: Send + 'static {
     fn abandon_waker(&self, waker: &Self::Waker) -> Result<bool, u8>;
 }
 
-pub trait RegistrySend<T: Send + 'static>: Registry {
+pub(crate) trait RegistrySend<T: Send + 'static>: Registry {
     fn new() -> Self;
 
     #[inline(always)]
@@ -98,7 +98,7 @@ pub trait RegistrySend<T: Send + 'static>: Registry {
     }
 }
 
-pub trait RegistryRecv: Registry {
+pub(crate) trait RegistryRecv: Registry {
     fn new() -> Self;
 
     #[inline(always)]
