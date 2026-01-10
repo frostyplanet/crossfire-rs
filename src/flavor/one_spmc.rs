@@ -8,20 +8,32 @@ use std::sync::atomic::{
     Ordering::{self, Acquire, Relaxed, SeqCst},
 };
 
-/// This is a spmc without stamp, use lockless technique simular to OFLIT.
+/// This is a spsc without stamp, allow replace() on the sender side.
 ///
 /// The sender side allow to push and drop it's own previous value, if receivers had not consumed it.
-pub struct OneSpmc<T> {
+pub type OneSpsc<T> = OneSp<T, false>;
+
+/// This is a spmc without stamp, allow replace() on the sender side.
+///
+/// The sender side allow to push and drop it's own previous value, if receivers had not consumed it.
+///
+/// NOTE: use lockless technique simular to OFLIT, miri will probably report data racing issue,
+/// but it's intendtional.
+/// This module cannot not seperate pop into start_read/read interface,
+/// so it cannot implment Flavor interface.
+pub type OneSpmc<T> = OneSp<T, true>;
+
+pub struct OneSp<T, const MC: bool> {
     pos: CachePadded<AtomicU64>,
 
     /// The value in this slot.
     slots: [Slot<T>; 2],
 }
 
-unsafe impl<T: Send> Sync for OneSpmc<T> {}
-unsafe impl<T: Send> Send for OneSpmc<T> {}
+unsafe impl<T: Send, const MC: bool> Sync for OneSp<T, MC> {}
+unsafe impl<T: Send, const MC: bool> Send for OneSp<T, MC> {}
 
-impl<T> OneSpmc<T> {
+impl<T, const MC: bool> OneSp<T, MC> {
     #[inline]
     pub fn new() -> Self {
         Self { pos: CachePadded::new(AtomicU64::new(0)), slots: [Slot::init(), Slot::init()] }
@@ -46,10 +58,23 @@ impl<T> OneSpmc<T> {
         head == tail
     }
 
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        if self.is_empty() {
+            0
+        } else {
+            1
+        }
+    }
+
     #[inline]
-    pub fn replace(&self, value: T) {
+    pub fn push(&self, value: T) -> Result<(), T> {
         let item = MaybeUninit::new(value);
-        self._replace(item.as_ptr());
+        if self.try_push(item.as_ptr(), Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(unsafe { item.assume_init_read() })
+        }
     }
 
     #[inline]
@@ -66,6 +91,61 @@ impl<T> OneSpmc<T> {
         } else {
             return false;
         }
+    }
+}
+
+impl<T, const MC: bool> Drop for OneSp<T, MC> {
+    fn drop(&mut self) {
+        if needs_drop::<T>() {
+            let pos = *self.pos.get_mut();
+            let (head, tail) = Self::unpack(pos);
+            if head != tail {
+                let index = tail & 0x1;
+                self.slots[index as usize].drop();
+            }
+        }
+    }
+}
+
+impl<T: Send + 'static> OneSpsc<T> {
+    #[inline(always)]
+    pub fn pop(&self) -> Option<T> {
+        self._pop(Ordering::SeqCst)
+    }
+
+    #[inline(always)]
+    fn _pop(&self, order: Ordering) -> Option<T> {
+        if let Some(tail) = self.start_read(order) {
+            let index = (tail & 0x1) as usize;
+            let item = self.slots[index as usize].read();
+            let new_pos = Self::pack(tail, tail);
+            self.pos.store(new_pos, SeqCst);
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn start_read(&self, order: Ordering) -> Option<u32> {
+        let pos = self.pos.load(order);
+        compiler_fence(Ordering::SeqCst);
+        loop {
+            let (head, tail) = Self::unpack(pos);
+            if head == tail {
+                return None;
+            }
+            debug_assert_eq!(head.wrapping_add(1), tail);
+            return Some(tail);
+        }
+    }
+}
+
+impl<T> OneSpmc<T> {
+    #[inline]
+    pub fn replace(&self, value: T) {
+        let item = MaybeUninit::new(value);
+        self._replace(item.as_ptr());
     }
 
     /// return Ok(true) on ok, Ok(false) on full, Err(()) to spin
@@ -127,24 +207,13 @@ impl<T> OneSpmc<T> {
             let new_pos = Self::pack(tail, tail);
             match self.pos.compare_exchange_weak(pos, new_pos, SeqCst, order) {
                 Err(_pos) => {
+                    // Other might read the value, or send might use replace to cancel the value,
+                    // should be cas suc to confirm
                     pos = _pos;
                 }
                 Ok(_) => {
                     return Some(unsafe { value_copy.assume_init_read() });
                 }
-            }
-        }
-    }
-}
-
-impl<T> Drop for OneSpmc<T> {
-    fn drop(&mut self) {
-        if needs_drop::<T>() {
-            let pos = *self.pos.get_mut();
-            let (head, tail) = Self::unpack(pos);
-            if head != tail {
-                let index = tail & 0x1;
-                self.slots[index as usize].drop();
             }
         }
     }
@@ -174,12 +243,17 @@ impl<T> Slot<T> {
     }
 
     #[inline(always)]
+    fn read(&self) -> T {
+        unsafe { self.value.get().read().assume_init() }
+    }
+
+    #[inline(always)]
     fn drop(&self) {
         unsafe { self.value.get().read().assume_init_drop() };
     }
 }
 
-impl<T: Send + Unpin + 'static> FlavorImpl for OneSpmc<T> {
+impl<T: Send + Unpin + 'static> FlavorImpl for OneSpsc<T> {
     type Item = T;
 
     #[inline(always)]
@@ -203,9 +277,7 @@ impl<T: Send + Unpin + 'static> FlavorImpl for OneSpmc<T> {
 
     #[inline(always)]
     fn is_full(&self) -> bool {
-        let pos = self.pos.load(SeqCst);
-        let (head, tail) = Self::unpack(pos);
-        head != tail
+        !Self::is_empty(self)
     }
 
     #[inline(always)]
@@ -225,7 +297,7 @@ impl<T: Send + Unpin + 'static> FlavorImpl for OneSpmc<T> {
 
     #[inline]
     fn try_recv_final(&self) -> Option<T> {
-        self._pop(Ordering::SeqCst)
+        self.pop()
     }
 
     #[inline]
@@ -246,9 +318,9 @@ impl<T: Send + Unpin + 'static> FlavorImpl for OneSpmc<T> {
     }
 }
 
-impl<T> FlavorNew for OneSpmc<T> {
+impl<T> FlavorNew for OneSpsc<T> {
     #[inline]
     fn new() -> Self {
-        OneSpmc::new()
+        OneSpsc::new()
     }
 }
