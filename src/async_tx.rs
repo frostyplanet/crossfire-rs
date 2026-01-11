@@ -1,3 +1,4 @@
+use crate::flavor::FlavorMP;
 use crate::sink::AsyncSink;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
@@ -610,12 +611,14 @@ impl<F: Flavor> From<MAsyncTx<F>> for AsyncTx<F> {
     }
 }
 
-impl<F: Flavor> MAsyncTx<F> {
+impl<F: Flavor + FlavorMP> MAsyncTx<F> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self(AsyncTx::new(shared))
     }
+}
 
+impl<F: Flavor> MAsyncTx<F> {
     #[inline]
     pub fn into_sink(self) -> AsyncSink<F> {
         AsyncSink::new(self.0)
@@ -640,11 +643,11 @@ impl<F: Flavor> Deref for MAsyncTx<F> {
 impl<F: Flavor> From<MTx<F>> for MAsyncTx<F> {
     fn from(value: MTx<F>) -> Self {
         value.add_tx();
-        Self::new(value.shared.clone())
+        Self(AsyncTx::new(value.shared.clone()))
     }
 }
 
-impl<F: Flavor> AsyncTxTrait<F::Item> for MAsyncTx<F> {
+impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F> {
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         let mut v = Vec::with_capacity(count);
@@ -757,16 +760,16 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for AsyncTx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
-        Self::new(shared)
+        AsyncTx::new(shared)
     }
 }
 
 impl<F: Flavor> NotClonable for AsyncTx<F> {}
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for MAsyncTx<F> {
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMP> SenderType for MAsyncTx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
-        Self::new(shared)
+        MAsyncTx::new(shared)
     }
 }

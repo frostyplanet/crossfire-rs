@@ -1,5 +1,5 @@
 use crate::backoff::*;
-use crate::flavor::FlavorSelect;
+use crate::flavor::{FlavorMC, FlavorSelect};
 use crate::select::SelectResult;
 use crate::{shared::*, trace_log, AsyncRx, MAsyncRx, NotClonable, ReceiverType};
 use std::cell::Cell;
@@ -260,7 +260,10 @@ impl<F: Flavor> fmt::Display for MRx<F> {
 
 unsafe impl<F: Flavor> Sync for MRx<F> {}
 
-impl<F: Flavor> MRx<F> {
+impl<F: Flavor> MRx<F>
+where
+    F: FlavorMC,
+{
     #[inline(always)]
     pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self(Rx::new(shared))
@@ -295,7 +298,7 @@ impl<F: Flavor> From<MRx<F>> for Rx<F> {
 impl<F: Flavor> From<MAsyncRx<F>> for MRx<F> {
     fn from(value: MAsyncRx<F>) -> Self {
         value.add_rx();
-        Self::new(value.shared.clone())
+        Self(Rx::new(value.shared.clone()))
     }
 }
 
@@ -422,7 +425,7 @@ impl<F: Flavor> BlockingRxTrait<F::Item> for Rx<F> {
     }
 }
 
-impl<F: Flavor> BlockingRxTrait<F::Item> for MRx<F> {
+impl<F: Flavor + FlavorMC> BlockingRxTrait<F::Item> for MRx<F> {
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         let mut v = Vec::with_capacity(count);
@@ -520,17 +523,17 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for Rx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
-        Self::new(shared)
+        Rx::new(shared)
     }
 }
 
 impl<F: Flavor> NotClonable for Rx<F> {}
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for MRx<F> {
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMC> ReceiverType for MRx<F> {
     type Flavor = F;
 
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
-        Self::new(shared)
+        MRx::new(shared)
     }
 }

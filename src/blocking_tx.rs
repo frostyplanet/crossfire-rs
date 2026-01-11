@@ -1,4 +1,5 @@
 use crate::backoff::*;
+use crate::flavor::FlavorMP;
 use crate::{shared::*, trace_log, AsyncTx, MAsyncTx, NotClonable, SenderType};
 use std::cell::Cell;
 use std::fmt;
@@ -317,13 +318,13 @@ impl<F: Flavor> From<MTx<F>> for Tx<F> {
 impl<F: Flavor> From<MAsyncTx<F>> for MTx<F> {
     fn from(value: MAsyncTx<F>) -> Self {
         value.add_tx();
-        Self::new(value.shared.clone())
+        Self(Tx::new(value.shared.clone()))
     }
 }
 
 unsafe impl<F: Flavor> Sync for MTx<F> {}
 
-impl<F: Flavor> MTx<F> {
+impl<F: Flavor + FlavorMP> MTx<F> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self(Tx::new(shared))
@@ -474,7 +475,7 @@ impl<F: Flavor> BlockingTxTrait<F::Item> for Tx<F> {
     }
 }
 
-impl<F: Flavor> BlockingTxTrait<F::Item> for MTx<F> {
+impl<F: Flavor + FlavorMP> BlockingTxTrait<F::Item> for MTx<F> {
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         let mut v = Vec::with_capacity(count);
@@ -579,10 +580,10 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for Tx<F> {
 
 impl<F: Flavor> NotClonable for Tx<F> {}
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for MTx<F> {
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMP> SenderType for MTx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
-        Self::new(shared)
+        MTx::new(shared)
     }
 }

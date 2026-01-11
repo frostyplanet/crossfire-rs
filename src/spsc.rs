@@ -40,7 +40,8 @@ use crate::async_tx::*;
 use crate::blocking_rx::*;
 use crate::blocking_tx::*;
 use crate::flavor::{
-    flavor_dispatch, flavor_select_dispatch, Flavor, FlavorImpl, FlavorNew, FlavorWrap,
+    flavor_dispatch, flavor_select_dispatch, Flavor, FlavorBounded, FlavorImpl, FlavorNew,
+    FlavorWrap,
 };
 use crate::shared::*;
 use crate::{NotClonable, ReceiverType, SenderType};
@@ -85,6 +86,13 @@ impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
 
 impl<T: Send + Unpin + 'static> FlavorSelect for Array<T> {
     flavor_select_dispatch!(wrap_array);
+}
+
+impl<T: Send + Unpin + 'static> FlavorBounded for Array<T> {
+    #[inline(always)]
+    fn new_with_bound(size: usize) -> Self {
+        Self::new(size)
+    }
 }
 
 impl<T: Send + Unpin + 'static> Flavor for Array<T> {

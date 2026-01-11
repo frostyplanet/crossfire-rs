@@ -1,4 +1,4 @@
-use crate::flavor::FlavorSelect;
+use crate::flavor::{FlavorMC, FlavorSelect};
 use crate::select::SelectResult;
 use crate::stream::AsyncStream;
 #[cfg(feature = "trace_log")]
@@ -606,12 +606,14 @@ impl<F: Flavor> From<MAsyncRx<F>> for AsyncRx<F> {
     }
 }
 
-impl<F: Flavor> MAsyncRx<F> {
+impl<F: Flavor + FlavorMC> MAsyncRx<F> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self(AsyncRx::new(shared))
     }
+}
 
+impl<F: Flavor> MAsyncRx<F> {
     #[inline]
     pub fn into_stream(self) -> AsyncStream<F> {
         AsyncStream::new(self.0)
@@ -636,11 +638,11 @@ impl<F: Flavor> Deref for MAsyncRx<F> {
 impl<F: Flavor> From<MRx<F>> for MAsyncRx<F> {
     fn from(value: MRx<F>) -> Self {
         value.add_rx();
-        Self::new(value.shared.clone())
+        Self(AsyncRx::new(value.shared.clone()))
     }
 }
 
-impl<F: Flavor> AsyncRxTrait<F::Item> for MAsyncRx<F> {
+impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for MAsyncRx<F> {
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         let mut v = Vec::with_capacity(count);
@@ -756,16 +758,16 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for AsyncRx<F>
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
-        Self::new(shared)
+        AsyncRx::new(shared)
     }
 }
 
 impl<F: Flavor> NotClonable for AsyncRx<F> {}
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for MAsyncRx<F> {
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMC> ReceiverType for MAsyncRx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
-        Self::new(shared)
+        MAsyncRx::new(shared)
     }
 }

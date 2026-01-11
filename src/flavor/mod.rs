@@ -151,6 +151,14 @@ pub trait Flavor: Send + 'static + FlavorImpl {
 pub trait FlavorMP {}
 pub trait FlavorMC {}
 
+pub trait FlavorNew {
+    fn new() -> Self;
+}
+
+pub trait FlavorBounded {
+    fn new_with_bound(size: usize) -> Self;
+}
+
 pub struct FlavorWrap<F: FlavorImpl, S, R> {
     inner: F,
     _phan: PhantomData<fn(&S, &R)>,
@@ -185,6 +193,18 @@ where
     #[inline(always)]
     fn new() -> Self {
         Self::from_inner(<F as FlavorNew>::new())
+    }
+}
+
+impl<F, S, R> FlavorBounded for FlavorWrap<F, S, R>
+where
+    F: FlavorImpl + FlavorBounded,
+    S: RegistrySend<F::Item>,
+    R: RegistryRecv,
+{
+    #[inline(always)]
+    fn new_with_bound(size: usize) -> Self {
+        Self::from_inner(<F as FlavorBounded>::new_with_bound(size))
     }
 }
 
@@ -245,10 +265,6 @@ where
     R: RegistryRecv,
 {
     flavor_select_dispatch!(wrap_new_type);
-}
-
-pub trait FlavorNew {
-    fn new() -> Self;
 }
 
 #[cfg(test)]
