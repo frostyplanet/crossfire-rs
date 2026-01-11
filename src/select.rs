@@ -1,62 +1,10 @@
-//! # Select
+//! # selection between channels
 //!
-//! This module provides a `Select` struct that allows selecting from multiple receivers.
-//! It supports both `mpmc`, `mpsc`, and `spsc` channels.
+//! This module provides:
+//! - [Select] struct that allows selecting from multiple receivers.
+//! which is type erase interface similar to the select in crossbeam-channel, supports both `mpmc`, `mpsc`, and `spsc` channels.
 //!
-//! ## Example
-//!
-//! ```rust
-//! use crossfire::{mpmc, mpsc, RecvError};
-//! use crossfire::select::Select;
-//!
-//! let (tx1, rx1) = mpmc::bounded_blocking::<i32>(10);
-//! let (tx2, rx2) = mpsc::bounded_blocking::<i32>(10);
-//!
-//! // Send some messages
-//! tx1.send(100).unwrap();
-//! tx2.send(200).unwrap();
-//!
-//! // Drop senders to simulate disconnection after messages are sent
-//! drop(tx1);
-//! drop(tx2);
-//!
-//! let mut select = Select::new();
-//! select.add(&rx1);
-//! select.add(&rx2);
-//!
-//! // Loop until all channels are disconnected and removed from select
-//! loop {
-//!     // When `select()` returns `Err(RecvError)`, it means all channels
-//!     // previously added to `select` have been disconnected or removed.
-//!     // In such a case, there's nothing left to select from, so we break.
-//!     let res = match select.select() {
-//!         Ok(res) => res,
-//!         Err(RecvError) => {
-//!             println!("All channels disconnected or removed from select. Breaking loop.");
-//!             break;
-//!         },
-//!     };
-//!
-//!     // Handle the result from the ready receiver
-//!     if res == rx1 {
-//!         match rx1.read_select(res) {
-//!             Ok(val) => println!("Received from rx1: {}", val),
-//!             Err(RecvError) => { // Now RecvError
-//!                 println!("rx1 disconnected, removing from select.");
-//!                 select.remove(&rx1); // Remove disconnected receiver
-//!             },
-//!         }
-//!     } else if res == rx2 {
-//!         match rx2.read_select(res) {
-//!             Ok(val) => println!("Received from rx2: {}", val),
-//!             Err(RecvError) => { // Now RecvError
-//!                 println!("rx2 disconnected, removing from select.");
-//!                 select.remove(&rx2); // Remove disconnected receiver
-//!             },
-//!         }
-//!     }
-//! }
-//! ```
+
 // Internal Implementation Details:
 //
 // Since mixing send and receive operations is rare, and the waker types for senders and receivers
@@ -114,9 +62,65 @@ use std::time::{Duration, Instant};
 ///
 /// - The user add receivers for subscription.
 /// - call [Select::select] or [Select::select_timeout] and get [SelectResult]
-/// - Handle [SelectResult] with corrasponding channel receiver.
-/// - The `Select` object and be reused in a loop.
+/// - Use [read_select](crate::Rx::read_select) to handle [SelectResult]. (**Safety**: If `SelectResult`
+///  dropped without processed, will result in message leak/hang.)
+/// - Although the `Select` object has a lifecycle, should live inside a function scope, it and be reused in a loop.
 /// - On drop it will automatically cancel all registeration.
+///
+/// ## Example
+///
+/// ```rust
+/// use crossfire::{mpmc, mpsc, RecvError};
+/// use crossfire::select::Select;
+///
+/// let (tx1, rx1) = mpmc::bounded_blocking::<i32>(10);
+/// let (tx2, rx2) = mpsc::bounded_blocking::<i32>(10);
+///
+/// // Send some messages
+/// tx1.send(100).unwrap();
+/// tx2.send(200).unwrap();
+///
+/// // Drop senders to simulate disconnection after messages are sent
+/// drop(tx1);
+/// drop(tx2);
+///
+/// let mut select = Select::new();
+/// select.add(&rx1);
+/// select.add(&rx2);
+///
+/// // Loop until all channels are disconnected and removed from select
+/// loop {
+///     // When `select()` returns `Err(RecvError)`, it means all channels
+///     // previously added to `select` have been disconnected or removed.
+///     // In such a case, there's nothing left to select from, so we break.
+///     let res = match select.select() {
+///         Ok(res) => res,
+///         Err(RecvError) => {
+///             println!("All channels disconnected or removed from select. Breaking loop.");
+///             break;
+///         },
+///     };
+///
+///     // Handle the result from the ready receiver
+///     if res == rx1 {
+///         match rx1.read_select(res) {
+///             Ok(val) => println!("Received from rx1: {}", val),
+///             Err(RecvError) => { // Now RecvError
+///                 println!("rx1 disconnected, removing from select.");
+///                 select.remove(&rx1); // Remove disconnected receiver
+///             },
+///         }
+///     } else if res == rx2 {
+///         match rx2.read_select(res) {
+///             Ok(val) => println!("Received from rx2: {}", val),
+///             Err(RecvError) => { // Now RecvError
+///                 println!("rx2 disconnected, removing from select.");
+///                 select.remove(&rx2); // Remove disconnected receiver
+///             },
+///         }
+///     }
+/// }
+/// ```
 pub struct Select<'a> {
     handlers: Vec<RecvHandle<'a>>,
     waker: Arc<SelectWaker>,
@@ -457,6 +461,11 @@ impl SelectWaker {
     }
 }
 
+/// The result from [Select::select], use for calling `read_select()` on the receiver type, may contains event to receive or disconnected event
+///
+/// **Safety**: If `SelectResult` dropped without processed, will result in message leak/hang.
+///
+/// See the example of select interface.
 pub struct SelectResult {
     // for validation
     pub(crate) channel: *const u8,
@@ -464,12 +473,16 @@ pub struct SelectResult {
 }
 
 impl SelectResult {
+    /// Check if the result is for specified receiver
+    #[inline]
     pub fn is_from<R: ReceiverType>(&self, rx: &R) -> bool {
         self.channel == rx as *const R as *const u8
     }
 }
 
 impl<R: ReceiverType> PartialEq<R> for SelectResult {
+    /// Short cut for [SelectResult::is_from()]
+    #[inline]
     fn eq(&self, other: &R) -> bool {
         self.is_from(other)
     }

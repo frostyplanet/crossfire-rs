@@ -221,7 +221,7 @@ impl<F: Flavor> Rx<F> {
         self.shared.is_tx_closed()
     }
 
-    /// This method use with select, guarantee non-blocking
+    /// This method use with [select](crate::select::Select::select), guarantee non-blocking
     /// # Panics
     ///
     /// Panics if SelectResult from other receiver is passed.

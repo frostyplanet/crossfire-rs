@@ -196,7 +196,7 @@ impl<F: Flavor> AsyncRx<F> {
         return self.shared.try_recv();
     }
 
-    /// This method use with select, guarantee non-blocking
+    /// This method use with [select](crate::select::Select), guarantee non-blocking
     ///
     /// # Panics
     ///
