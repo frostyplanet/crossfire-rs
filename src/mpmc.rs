@@ -152,7 +152,7 @@ where
     S: SenderType<Flavor = F> + Clone,
     R: ReceiverType<Flavor = F> + Clone,
 {
-    let shared = ChannelShared::new(flavor);
+    let shared = ChannelShared::new(flavor, F::Send::new(), F::Recv::new());
     (S::new(shared.clone()), R::new(shared))
 }
 

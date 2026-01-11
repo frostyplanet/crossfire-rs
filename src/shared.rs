@@ -1,7 +1,7 @@
 use crate::backoff::*;
 pub(crate) use crate::crossbeam::err::*;
 pub(crate) use crate::flavor::{Flavor, FlavorSelect, Token};
-use crate::select::{SelectHandle, SelectWaker};
+use crate::select::select::SelectHandle;
 use crate::trace_log;
 pub(crate) use crate::waker::*;
 pub(crate) use crate::waker_registry::*;
@@ -22,7 +22,7 @@ pub struct ChannelShared<F: Flavor> {
 }
 
 impl<F: Flavor> ChannelShared<F> {
-    pub(crate) fn new(inner: F) -> Arc<Self> {
+    pub(crate) fn new(inner: F, senders: F::Send, recvs: F::Recv) -> Arc<Self> {
         let mut large = false;
         if let Some(bound) = inner.capacity() {
             if bound >= 10 {
@@ -32,8 +32,8 @@ impl<F: Flavor> ChannelShared<F> {
         Arc::new(Self {
             tx_count: AtomicUsize::new(1),
             rx_count: AtomicUsize::new(1),
-            senders: F::Send::new(),
-            recvs: F::Recv::new(),
+            senders,
+            recvs,
             backoff_limit: inner.backoff_limit(),
             large,
             may_direct_copy: inner.may_direct_copy(),
@@ -62,7 +62,9 @@ impl<F: Flavor> ChannelShared<F> {
         if token.pos.is_null() {
             return Err(RecvError);
         } else {
-            Ok(self.inner.read_with_token(token))
+            let item = self.inner.read_with_token(token);
+            self.on_recv();
+            return Ok(item);
         }
     }
 
@@ -239,7 +241,7 @@ impl<F: Flavor> ChannelShared<F> {
     #[inline(always)]
     pub(crate) fn abandon_send_waker(&self, waker: &<F::Send as Registry>::Waker) -> bool {
         match self.senders.abandon_waker(waker) {
-            Ok(r) => r,
+            Ok(_) => true,
             Err(state) => {
                 trace_log!("tx: abandon err  {:?} {}", waker, state);
                 if state == WakerState::Woken as u8 {
@@ -293,7 +295,7 @@ impl<F: Flavor + FlavorSelect> SelectHandle for ChannelShared<F> {
         if let Some(token) = self.inner.try_select(final_check) {
             return Some(token);
         }
-        if self.get_tx_count() == 0 {
+        if final_check && self.get_tx_count() == 0 {
             return Some(Token::default());
         }
         None

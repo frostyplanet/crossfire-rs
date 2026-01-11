@@ -1,10 +1,3 @@
-//! # selection between channels
-//!
-//! This module provides:
-//! - [Select] struct that allows selecting from multiple receivers.
-//! which is type erase interface similar to the select in crossbeam-channel, supports both `mpmc`, `mpsc`, and `spsc` channels.
-//!
-
 // Internal Implementation Details:
 //
 // Since mixing send and receive operations is rare, and the waker types for senders and receivers
@@ -39,22 +32,19 @@
 // - If the user incorrectly uses a `SelectResult` from one channel on a different receiver,
 //   this pointer address is checked, causing a panic to ensure safety.
 
-use crate::collections::WeakCell;
+use super::SelectMode;
+use crate::backoff::*;
 use crate::flavor::Token;
 use crate::shared::{check_timeout, ChannelShared};
-use crate::waker::*;
+use crate::trace_log;
+use crate::waker::WakerState;
+use crate::waker_registry::SelectWaker;
 use crate::ReceiverType;
 use crate::{RecvError, RecvTimeoutError, TryRecvError};
-use std::cell::UnsafeCell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::mem::transmute;
 use std::ops::Add;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Weak,
-};
-use std::task::Context;
+use std::sync::{atomic::Ordering, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -64,7 +54,7 @@ use std::time::{Duration, Instant};
 /// - call [Select::select] or [Select::select_timeout] and get [SelectResult]
 /// - Use [read_select](crate::Rx::read_select) to handle [SelectResult]. (**Safety**: If `SelectResult`
 ///  dropped without processed, will result in message leak/hang.)
-/// - Although the `Select` object has a lifecycle, should live inside a function scope, it and be reused in a loop.
+/// - Although the `Select` object has a lifecycle and should live inside a function scope, it can be reused in a loop.
 /// - On drop it will automatically cancel all registeration.
 ///
 /// ## Example
@@ -129,34 +119,26 @@ pub struct Select<'a> {
     rng: u64,
 }
 
-#[derive(PartialEq)]
-#[repr(u8)]
-enum SelectMode {
-    RR,
-    Rand,
-    Bias,
-}
-
 impl<'a> Select<'a> {
-    /// Initialize Select with fair, round-robin stratergy
+    /// Initialize Select with fair, round-robin strategy
     pub fn new() -> Self {
-        Self::_new(SelectMode::RR)
+        Self::new_with(SelectMode::RR)
     }
 
-    /// Initialize Select with fair stratergy (check start from random channel)
+    /// Initialize Select with fair strategy (check start from random channel)
     #[inline]
     pub fn new_random() -> Self {
-        Self::_new(SelectMode::Rand)
+        Self::new_with(SelectMode::Rand)
     }
 
-    /// Initialize Select with bias stratergy (check according to the order of `add()`)
+    /// Initialize Select with bias strategy (check according to the order of `add()`)
     #[inline]
     pub fn new_bias() -> Self {
-        Self::_new(SelectMode::Bias)
+        Self::new_with(SelectMode::Bias)
     }
 
     #[inline]
-    fn _new(mode: SelectMode) -> Self {
+    pub fn new_with(mode: SelectMode) -> Self {
         let rng = if let SelectMode::Rand = mode {
             let mut hasher = DefaultHasher::new();
             Instant::now().hash(&mut hasher);
@@ -169,11 +151,7 @@ impl<'a> Select<'a> {
         Self {
             mode,
             handlers: Vec::with_capacity(32),
-            waker: Arc::new(SelectWaker {
-                o_waker: UnsafeCell::new(None),
-                cell: WeakCell::new(),
-                hint: AtomicUsize::new(0),
-            }),
+            waker: Arc::new(SelectWaker::new()),
             next_index: 0,
             rng,
         }
@@ -221,17 +199,42 @@ impl<'a> Select<'a> {
         if self.handlers.is_empty() {
             return Err(TryRecvError::Disconnected);
         }
-        if let Some(res) = self._try_select_begin(true) {
+        let idx = self._try_select_begin();
+        if let Some(res) = self._try_select(idx, true) {
             return Ok(res);
         }
         Err(TryRecvError::Empty)
     }
 
     #[inline(always)]
-    fn _try_select_begin(&mut self, final_check: bool) -> Option<SelectResult> {
+    fn _try_select(&mut self, mut idx: usize, final_check: bool) -> Option<SelectResult> {
         let len = self.handlers.len();
         debug_assert!(len > 0);
-        let start_index = match self.mode {
+        for _ in 0..len {
+            // Ensure idx is within bounds for the current iteration.
+            if idx >= len {
+                idx = 0;
+            }
+            // final_check=true also check if any channel is closed.
+            if let Ok(res) = self.handlers[idx].try_select(final_check) {
+                trace_log!("select ok idx={}", idx);
+                if self.mode == SelectMode::RR {
+                    self.next_index = idx + 1;
+                }
+                return Some(res);
+            } else {
+                if final_check {
+                    trace_log!("select: final_check {}", idx);
+                }
+            }
+            idx += 1;
+        }
+        None
+    }
+
+    #[inline(always)]
+    fn _try_select_begin(&mut self) -> usize {
+        return match self.mode {
             SelectMode::Bias => 0,
             SelectMode::RR => {
                 if self.next_index >= self.handlers.len() {
@@ -246,23 +249,9 @@ impl<'a> Select<'a> {
                 x ^= x >> 7;
                 x ^= x << 17;
                 self.rng = x;
-                (x as usize) % len
+                (x as usize) % self.handlers.len()
             }
         };
-        let mut idx = start_index;
-        for _ in 0..len {
-            if let Ok(res) = self.handlers[idx].try_select(final_check) {
-                if SelectMode::RR == self.mode {
-                    self.next_index = idx + 1;
-                }
-                return Some(res); // Message available
-            }
-            idx += 1;
-            if idx >= len {
-                idx = 0;
-            }
-        }
-        None
     }
 
     /// Blocking current thread and wait for message from multiple receivers or close event
@@ -309,13 +298,23 @@ impl<'a> Select<'a> {
         if self.handlers.is_empty() {
             return Err(true); // All handlers are disconnected or removed
         }
-        if let Some(res) = self._try_select_begin(false) {
+        let mut idx = self._try_select_begin();
+        if let Some(res) = self._try_select(idx, false) {
             return Ok(res);
         }
-        let is_rr = self.mode == SelectMode::RR;
+        let cfg = BackoffConfig::default();
+        let mut backoff = Backoff::new(cfg);
+        backoff.snooze();
         // If try_select returned None, we check if all handlers are gone.
-        let len = self.handlers.len();
         loop {
+            loop {
+                if let Some(res) = self._try_select(idx, false) {
+                    return Ok(res);
+                }
+                if backoff.snooze() {
+                    break;
+                }
+            }
             // init SelectWaker
             self.waker.init_blocking();
             // Register all handlers (handlers with `registered=true` may be skipped).
@@ -323,42 +322,30 @@ impl<'a> Select<'a> {
                 handler.reg_waker(i, &self.waker);
             }
             // After registration, do another check, this time with final_check=true
-            for (i, handler) in self.handlers.iter().enumerate() {
-                // final_check=true also check if any channel is closed.
-                if let Ok(res) = handler.try_select(true) {
-                    if is_rr {
-                        self.next_index = i + 1;
+            if let Some(res) = self._try_select(idx, true) {
+                return Ok(res);
+            }
+            trace_log!("select: park");
+            let mut state = WakerState::Init as u8;
+            while state < WakerState::Woken as u8 {
+                match check_timeout(deadline) {
+                    Ok(None) => {
+                        std::thread::park();
                     }
-                    return Ok(res);
+                    Ok(Some(dur)) => {
+                        std::thread::park_timeout(dur);
+                    }
+                    Err(_) => {
+                        return Err(false);
+                    }
                 }
+                state = self.waker.get_waker_state(Ordering::SeqCst);
+                trace_log!("select: unpark state={}", state);
             }
-            match check_timeout(deadline) {
-                Ok(None) => {
-                    std::thread::park();
-                }
-                Ok(Some(dur)) => {
-                    std::thread::park_timeout(dur);
-                }
-                Err(_) => {
-                    return Err(false);
-                }
-            }
+            // NOTE: there may be spurious wakeup, but since the SelectWaker is registered in
             // wake up, first check the one with hint
-            let mut idx = self.waker.hint.load(Ordering::Acquire);
-            for _ in 0..len {
-                // Ensure idx is within bounds for the current iteration.
-                if idx >= len {
-                    idx = 0;
-                }
-                // final_check=true also check if any channel is closed.
-                if let Ok(res) = self.handlers[idx].try_select(true) {
-                    if is_rr {
-                        self.next_index = idx + 1;
-                    }
-                    return Ok(res);
-                }
-                idx += 1;
-            }
+            idx = self.waker.get_hint();
+            trace_log!("select: hint idx {}", idx);
         }
     }
 }
@@ -369,6 +356,12 @@ impl<'a> Drop for Select<'a> {
         for handler in &self.handlers {
             handler.shared.cancel_waker(&self.waker);
         }
+    }
+}
+
+impl<'a> std::fmt::Debug for Select<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Select")
     }
 }
 
@@ -395,69 +388,9 @@ impl<'a> RecvHandle<'a> {
             return;
         }
         if self.shared.reg_waker(index, global_waker) {
+            trace_log!("select: reg waker");
             self.registered = true;
         }
-    }
-}
-
-pub(crate) struct SelectWakerMulti(Arc<SelectWaker>, usize);
-
-impl SelectWakerMulti {
-    #[inline(always)]
-    pub(crate) fn wake(&self) {
-        if let Some(waker) = self.0.cell.pop() {
-            self.0.hint.store(self.1, Ordering::Relaxed);
-            waker.wake();
-        }
-    }
-
-    #[inline(always)]
-    pub(crate) fn eq(&self, waker: &Arc<SelectWaker>) -> bool {
-        Arc::ptr_eq(&self.0, waker)
-    }
-}
-
-pub(crate) struct SelectWaker {
-    cell: WeakCell<WakerInner<()>>,
-    // does not need to be corrent, just a hint for the try_select
-    hint: AtomicUsize,
-    o_waker: UnsafeCell<Option<ArcWaker<()>>>,
-}
-unsafe impl Send for SelectWaker {}
-unsafe impl Sync for SelectWaker {}
-
-impl SelectWaker {
-    #[inline(always)]
-    fn init_blocking(&self) {
-        let waker = ArcWaker::new_blocking(());
-        let weak = waker.weak();
-        self.get_waker().replace(waker);
-        self.cell.replace(weak);
-        self.hint.store(0, Ordering::Release)
-    }
-
-    #[inline(always)]
-    fn init_async(&self, ctx: &mut Context) {
-        let waker = ArcWaker::new_async(ctx, ());
-        let weak = waker.weak();
-        self.get_waker().replace(waker);
-        self.cell.replace(weak);
-        self.hint.store(0, Ordering::Release)
-    }
-
-    #[inline(always)]
-    fn get_waker(&self) -> &mut Option<ArcWaker<()>> {
-        unsafe { transmute(self.o_waker.get()) }
-    }
-
-    #[inline(always)]
-    pub(crate) fn clone_weak(&self) -> Weak<WakerInner<()>> {
-        self.get_waker().as_ref().unwrap().weak()
-    }
-
-    #[inline(always)]
-    pub(crate) fn to_multi_waker(self: Arc<SelectWaker>, channel_id: usize) -> SelectWakerMulti {
-        SelectWakerMulti(self, channel_id)
     }
 }
 

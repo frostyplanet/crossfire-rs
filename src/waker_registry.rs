@@ -2,21 +2,22 @@
 use crate::collections::WeakCell;
 #[allow(unused_imports)]
 use crate::flavor::{Flavor, FlavorImpl, OneSpmc};
-use crate::select::{SelectWaker, SelectWakerMulti};
 use crate::shared::ChannelShared;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
 use crate::trace_log;
 use crate::waker::*;
 use parking_lot::Mutex;
+use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::sync::{
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicU8, AtomicUsize, Ordering},
     Arc, Weak,
 };
 use std::task::{Context, Poll};
 
+// pub(crate) on type alias does not matter, mpmc::List alias works because RegistryMulti is pub
 pub(crate) type RegistryMultiSend<T> = RegistryMulti<*const T>;
 pub(crate) type RegistryMultiRecv = RegistryMulti<()>;
 
@@ -30,7 +31,10 @@ pub(crate) trait Registry: Send + 'static {
 
     fn close(&self);
 
-    fn len(&self) -> usize;
+    #[inline(always)]
+    fn len(&self) -> usize {
+        0
+    }
 
     #[inline(always)]
     fn commit_waiting(&self, _o_waker: &Option<Self::Waker>) -> u8 {
@@ -42,8 +46,10 @@ pub(crate) trait Registry: Send + 'static {
         let _ = o_waker.take();
     }
 
-    /// return false when waker is none
-    fn abandon_waker(&self, waker: &Self::Waker) -> Result<bool, u8>;
+    #[inline(always)]
+    fn abandon_waker(&self, _waker: &Self::Waker) -> Result<(), u8> {
+        Ok(())
+    }
 }
 
 pub(crate) trait RegistrySend<T: Send + 'static>: Registry {
@@ -140,16 +146,6 @@ impl Registry for RegistryDummy {
 
     #[inline(always)]
     fn close(&self) {}
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        0
-    }
-
-    #[inline(always)]
-    fn abandon_waker(&self, _waker: &Self::Waker) -> Result<bool, u8> {
-        Ok(false)
-    }
 }
 
 impl<T: Send + 'static> RegistrySend<T> for RegistryDummy {
@@ -218,16 +214,6 @@ impl Registry for RegistrySingle {
     fn close(&self) {
         self._fire();
     }
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        0
-    }
-
-    #[inline(always)]
-    fn abandon_waker(&self, _waker: &SingleWaker) -> Result<bool, u8> {
-        Ok(true)
-    }
 }
 
 impl<T: Send + 'static> RegistrySend<T> for RegistrySingle {
@@ -289,6 +275,7 @@ impl RegistryRecv for RegistrySingle {
 
     #[inline(always)]
     fn reg_select_waker(&self, _channel_id: usize, waker: &Arc<SelectWaker>) -> bool {
+        trace_log!("{}: reg for select", self._tag);
         self.cell.replace(waker.clone_weak());
         false
     }
@@ -296,7 +283,7 @@ impl RegistryRecv for RegistrySingle {
 
 struct RegistryMultiInner<P> {
     queue: VecDeque<Weak<WakerInner<P>>>,
-    selectors: Vec<SelectWakerMulti>,
+    selectors: Vec<SelectWakerWrapper>,
     seq: u32,
 }
 
@@ -593,13 +580,13 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
 
     /// return false when waker is none
     #[inline(always)]
-    fn abandon_waker(&self, waker: &ArcWaker<P>) -> Result<bool, u8> {
+    fn abandon_waker(&self, waker: &ArcWaker<P>) -> Result<(), u8> {
         // which change Waiting/Init to Closed
         match waker.abandon() {
             Ok(()) => {
                 trace_log!("tx: abandon cancel {:?}", waker);
                 self.clear_wakers(&waker);
-                Ok(true)
+                Ok(())
             }
             Err(state) => {
                 return Err(state);
@@ -720,8 +707,9 @@ impl RegistryRecv for RegistryMultiRecv {
 
     #[inline(always)]
     fn reg_select_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool {
+        trace_log!("{}: reg for select", self._tag);
         let mut guard = self.inner.lock();
-        guard.selectors.push(SelectWaker::to_multi_waker(waker.clone(), channel_id));
+        guard.selectors.push(SelectWaker::to_wrapper(waker.clone(), channel_id));
         self.state.fetch_or(MULTI_HAS_SELECT, Ordering::SeqCst);
         true
     }
@@ -736,6 +724,147 @@ impl RegistryRecv for RegistryMultiRecv {
         if guard.selectors.is_empty() {
             self.state.fetch_xor(MULTI_HAS_SELECT, Ordering::SeqCst);
         }
+    }
+}
+
+// Due to it's type alias in crate::select::Mux, should be pub
+pub struct SelectWakerWrapper(Arc<SelectWaker>, usize);
+
+impl SelectWakerWrapper {
+    #[inline(always)]
+    pub(crate) fn wake(&self) {
+        if let Some(waker) = self.0.cell.pop() {
+            trace_log!("rx: wake select");
+            self.0.hint.store(self.1, Ordering::Release);
+            waker.wake();
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn eq(&self, waker: &Arc<SelectWaker>) -> bool {
+        Arc::ptr_eq(&self.0, waker)
+    }
+}
+
+// For multiplex
+impl Registry for SelectWakerWrapper {
+    type Waker = ArcWaker<()>;
+
+    #[inline(always)]
+    fn get_waker_state(&self, _o_waker: &Option<ArcWaker<()>>, _order: Ordering) -> u8 {
+        unreachable!();
+    }
+
+    #[inline(always)]
+    fn close(&self) {
+        // decrease the opened_channels count to hint Multiplex
+        self.0.close();
+        self.wake();
+    }
+}
+
+// For multiplex
+impl RegistryRecv for SelectWakerWrapper {
+    fn new() -> Self {
+        unreachable!();
+    }
+
+    #[inline(always)]
+    fn fire(&self) {
+        self.wake();
+    }
+
+    fn reg_select_waker(&self, _channel_id: usize, _waker: &Arc<SelectWaker>) -> bool {
+        unreachable!();
+    }
+}
+
+pub(crate) struct SelectWaker {
+    cell: WeakCell<WakerInner<()>>,
+    // does not need to be corrent, just a hint for the try_select
+    hint: AtomicUsize,
+    o_waker: UnsafeCell<Option<ArcWaker<()>>>,
+    // For multiplex, not for select
+    opened_channels: AtomicUsize,
+}
+
+unsafe impl Send for SelectWaker {}
+unsafe impl Sync for SelectWaker {}
+
+impl SelectWaker {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self {
+            cell: WeakCell::new(),
+            hint: AtomicUsize::new(0),
+            o_waker: UnsafeCell::new(None),
+            opened_channels: AtomicUsize::new(0),
+        }
+    }
+
+    #[inline(always)]
+    pub fn init_blocking(&self) {
+        let weak = if let Some(waker) = self.get_waker().as_ref() {
+            waker.reset_init();
+            waker.weak()
+        } else {
+            let waker = ArcWaker::new_blocking(());
+            let weak = waker.weak();
+            self.get_waker().replace(waker);
+            weak
+        };
+        self.cell.replace(weak);
+        self.hint.store(0, Ordering::Release)
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub fn init_async(&self, ctx: &mut Context) {
+        let waker = ArcWaker::new_async(ctx, ());
+        let weak = waker.weak();
+        self.get_waker().replace(waker);
+        self.cell.replace(weak);
+        self.hint.store(0, Ordering::Release)
+    }
+
+    #[inline(always)]
+    fn get_waker(&self) -> &mut Option<ArcWaker<()>> {
+        unsafe { std::mem::transmute(self.o_waker.get()) }
+    }
+
+    #[inline(always)]
+    fn clone_weak(&self) -> Weak<WakerInner<()>> {
+        self.get_waker().as_ref().unwrap().weak()
+    }
+
+    #[inline(always)]
+    pub fn add_opened(&self) {
+        self.opened_channels.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    pub fn get_opened_count(&self) -> usize {
+        self.opened_channels.load(Ordering::SeqCst)
+    }
+
+    #[inline(always)]
+    pub fn to_wrapper(self: Arc<SelectWaker>, idx: usize) -> SelectWakerWrapper {
+        SelectWakerWrapper(self, idx)
+    }
+
+    #[inline(always)]
+    pub fn get_hint(&self) -> usize {
+        self.hint.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub fn close(&self) {
+        self.opened_channels.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    pub fn get_waker_state(&self, order: Ordering) -> u8 {
+        self.get_waker().as_ref().unwrap()._get_state(order)
     }
 }
 
