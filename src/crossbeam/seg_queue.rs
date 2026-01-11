@@ -35,6 +35,7 @@
 //! DEALINGS IN THE SOFTWARE.
 //
 
+use crate::flavor::Token;
 use core::cell::UnsafeCell;
 use core::fmt;
 use core::marker::PhantomData;
@@ -42,10 +43,9 @@ use core::mem::MaybeUninit;
 use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr;
 use core::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
+use crossbeam_utils::{Backoff, CachePadded};
 use std::alloc::{alloc_zeroed, handle_alloc_error, Layout};
 use std::boxed::Box;
-
-use crossbeam_utils::{Backoff, CachePadded};
 
 // Bits indicating the state of a slot:
 // * If a value has been written into the slot, `WRITE` is set.
@@ -286,7 +286,26 @@ impl<T> SegQueue<T> {
         }
     }
 
+    #[inline(always)]
+    pub fn start_read(&self) -> Option<Token> {
+        if let Some((block, offset)) = self._pop() {
+            Some(Token::new(block as *const u8, offset))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
     pub fn pop(&self) -> Option<T> {
+        if let Some((block, offset)) = self._pop() {
+            Some(self._read(block, offset))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn _pop(&self) -> Option<(*mut Block<T>, usize)> {
         let backoff = Backoff::new();
         let mut head = self.head.index.load(Ordering::Acquire);
         let mut block = self.head.block.load(Ordering::Acquire);
@@ -348,21 +367,7 @@ impl<T> SegQueue<T> {
                         self.head.block.store(next, Ordering::Release);
                         self.head.index.store(next_index, Ordering::Release);
                     }
-
-                    // Read the value.
-                    let slot = (*block).slots.get_unchecked(offset);
-                    slot.wait_write();
-                    let value = slot.value.get().read().assume_init();
-
-                    // Destroy the block if we've reached the end, or if another thread wanted to
-                    // destroy but couldn't because we were busy reading from the slot.
-                    if offset + 1 == BLOCK_CAP {
-                        Block::destroy(block, 0);
-                    } else if slot.state.fetch_or(READ, Ordering::AcqRel) & DESTROY != 0 {
-                        Block::destroy(block, offset + 1);
-                    }
-
-                    return Some(value);
+                    return Some((block, offset));
                 },
                 Err(h) => {
                     head = h;
@@ -370,6 +375,31 @@ impl<T> SegQueue<T> {
                     backoff.spin();
                 }
             }
+        }
+    }
+
+    #[inline(always)]
+    pub fn read(&self, token: Token) -> T {
+        let block = token.pos as *mut Block<T>;
+        let offset = token.stamp;
+        self._read(block, offset)
+    }
+
+    #[inline(always)]
+    fn _read(&self, block: *mut Block<T>, offset: usize) -> T {
+        unsafe {
+            let slot = (*block).slots.get_unchecked(offset);
+            // Read the value.
+            slot.wait_write();
+            let value = slot.value.get().read().assume_init();
+            // Destroy the block if we've reached the end, or if another thread wanted to
+            // destroy but couldn't because we were busy reading from the slot.
+            if offset + 1 == BLOCK_CAP {
+                Block::destroy(block, 0);
+            } else if slot.state.fetch_or(READ, Ordering::AcqRel) & DESTROY != 0 {
+                Block::destroy(block, offset + 1);
+            }
+            return value;
         }
     }
 

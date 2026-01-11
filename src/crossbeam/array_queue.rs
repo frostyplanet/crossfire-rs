@@ -1,6 +1,7 @@
 //! Modify by frostyplanet@gmail.com for the crossfire crate:
 //!
 //!   - Optimise for single consumer scenario;
+//!   - Add token interface according to crossbeam-channel
 //!   - Modified push() to push_with_ptr();
 //!   - Add try_push_oneshot() which combinds the logic of push and check_full in one step;
 //!   - Remove unused functions.
@@ -44,11 +45,11 @@
 
 use core::cell::UnsafeCell;
 
+use crate::flavor::Token;
 use core::mem::{self, MaybeUninit};
 use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr;
 use core::sync::atomic::{self, AtomicUsize, Ordering};
-
 use crossbeam_utils::{Backoff, CachePadded};
 
 /// A slot in a queue.
@@ -257,7 +258,27 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     }
 
     #[inline]
+    pub fn start_read(&self, final_check: bool) -> Option<Token> {
+        if let Some((slot, stamp)) = self._start_read(final_check) {
+            Some(Token::new(slot as *const Slot<T> as *const u8, stamp))
+        } else {
+            None
+        }
+    }
+
+    #[inline]
     pub fn pop(&self, final_check: bool) -> Option<T> {
+        if let Some((slot, stamp)) = self._start_read(final_check) {
+            let msg = unsafe { slot.value.get().read().assume_init() };
+            slot.stamp.store(stamp, Ordering::Release);
+            Some(msg)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn _start_read<'a>(&'a self, final_check: bool) -> Option<(&'a Slot<T>, usize)> {
         let mut head;
         if final_check {
             // because we need to check is_empty before park,
@@ -269,83 +290,75 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
         }
         let backoff = Backoff::new();
         loop {
-            match self._try_pop(head) {
-                Ok(item) => return Some(item),
-                Err(Ok(new_head)) => {
-                    head = new_head;
-                    backoff.spin();
-                }
-                Err(Err(stamp)) => {
-                    if stamp == head {
-                        // Check full
-                        let tail = if MP || MC {
-                            // NOTE: The fence is preventing live lock
-                            atomic::fence(Ordering::SeqCst);
-                            self.tail.load(Ordering::Relaxed)
-                        } else {
-                            self.tail.load(Ordering::SeqCst)
-                        };
-                        // If the tail equals the head, that means the channel is empty.
-                        if tail == head {
-                            return None;
-                        }
+            // Deconstruct the head.
+            let index = head & (self.one_lap - 1);
+            // Inspect the corresponding slot.
+            debug_assert!(index < self.buffer.len());
+            let slot = unsafe { self.buffer.get_unchecked(index) };
+            let stamp = slot.stamp.load(Ordering::Acquire);
+
+            // If the stamp is ahead of the head by 1, we may attempt to pop.
+            if head + 1 == stamp {
+                let new = if index + 1 < self.capacity() {
+                    // Same lap, incremented index.
+                    // Set to `{ lap: lap, index: index + 1 }`.
+                    head + 1
+                } else {
+                    let lap = head & !(self.one_lap - 1);
+                    // One lap forward, index wraps around to zero.
+                    // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
+                    lap.wrapping_add(self.one_lap)
+                };
+                if MC {
+                    // Try moving the head.
+                    if let Err(new_head) = self.head.compare_exchange_weak(
+                        head,
+                        new,
+                        Ordering::SeqCst,
+                        Ordering::Relaxed,
+                    ) {
+                        head = new_head;
                         backoff.spin();
-                    } else {
-                        // Snooze because we need to wait for the stamp to get updated.
-                        backoff.snooze();
+                        continue;
                     }
-                    if MC {
-                        head = self.head.load(Ordering::Relaxed);
-                    }
+                } else {
+                    self.head.store(new, Ordering::SeqCst);
                 }
+                let new_head = head.wrapping_add(self.one_lap);
+                return Some((slot, new_head));
+            } else {
+                if stamp == head {
+                    // Check full
+                    let tail = if MP || MC {
+                        // NOTE: The fence is preventing live lock
+                        atomic::fence(Ordering::SeqCst);
+                        self.tail.load(Ordering::Relaxed)
+                    } else {
+                        self.tail.load(Ordering::SeqCst)
+                    };
+                    // If the tail equals the head, that means the channel is empty.
+                    if tail == head {
+                        return None;
+                    }
+                    backoff.spin();
+                } else {
+                    // Snooze because we need to wait for the stamp to get updated.
+                    backoff.snooze();
+                }
+                if MC {
+                    head = self.head.load(Ordering::Relaxed);
+                }
+                continue;
             }
         }
     }
 
-    /// Attempts to pop an element from the queue.
-    ///
-    /// Receive item returns Ok(Ok(item));
-    /// If the queue is empty or disconnected, Ok(Err(TryRecvError)) is returned;
-    /// otherwise return Err(stamp, Option<new_head>).
-    /// # Examples
     #[inline(always)]
-    fn _try_pop(&self, head: usize) -> Result<T, Result<usize, usize>> {
-        // Deconstruct the head.
-        let index = head & (self.one_lap - 1);
-        // Inspect the corresponding slot.
-        debug_assert!(index < self.buffer.len());
-        let slot = unsafe { self.buffer.get_unchecked(index) };
-        let stamp = slot.stamp.load(Ordering::Acquire);
-
-        // If the stamp is ahead of the head by 1, we may attempt to pop.
-        if head + 1 == stamp {
-            let new = if index + 1 < self.capacity() {
-                // Same lap, incremented index.
-                // Set to `{ lap: lap, index: index + 1 }`.
-                head + 1
-            } else {
-                let lap = head & !(self.one_lap - 1);
-                // One lap forward, index wraps around to zero.
-                // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
-                lap.wrapping_add(self.one_lap)
-            };
-            if MC {
-                // Try moving the head.
-                if let Err(h) =
-                    self.head.compare_exchange_weak(head, new, Ordering::SeqCst, Ordering::Relaxed)
-                {
-                    return Err(Ok(h));
-                }
-            } else {
-                self.head.store(new, Ordering::SeqCst);
-            }
-            // Read the value from the slot and update the stamp.
-            let msg = unsafe { slot.value.get().read().assume_init() };
-            slot.stamp.store(head.wrapping_add(self.one_lap), Ordering::Release);
-            return Ok(msg);
-        } else {
-            return Err(Err(stamp));
-        }
+    pub fn read(&self, token: Token) -> T {
+        let slot: &Slot<T> = unsafe { &*token.pos.cast::<Slot<T>>() };
+        let msg = unsafe { slot.value.get().read().assume_init() };
+        slot.stamp.store(token.stamp, Ordering::Release);
+        return msg;
     }
 
     /// Returns the capacity of the queue.

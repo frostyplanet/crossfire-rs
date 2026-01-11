@@ -1,3 +1,5 @@
+use crate::flavor::FlavorSelect;
+use crate::select::SelectResult;
 use crate::stream::AsyncStream;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
@@ -192,6 +194,23 @@ impl<F: Flavor> AsyncRx<F> {
     #[inline(always)]
     pub fn try_recv(&self) -> Result<F::Item, TryRecvError> {
         return self.shared.try_recv();
+    }
+
+    /// This method use with select, guarantee non-blocking
+    ///
+    /// # Panics
+    ///
+    /// Panics if SelectResult from other receiver is passed.
+    #[inline(always)]
+    pub fn read_select(&self, result: SelectResult) -> Result<F::Item, RecvError>
+    where
+        F: FlavorSelect,
+    {
+        assert_eq!(
+            self as *const Self as *const u8, result.channel,
+            "invalid use select with another channel"
+        );
+        self.as_ref().read_with_token(result.token)
     }
 
     /// Internal function might change in the future. For public version, use AsyncStream::poll_item() instead
@@ -733,7 +752,8 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MAsyncRx<F> {
     }
 }
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType<F> for AsyncRx<F> {
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for AsyncRx<F> {
+    type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self::new(shared)
@@ -742,7 +762,8 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType<F> for AsyncRx
 
 impl<F: Flavor> NotClonable for AsyncRx<F> {}
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType<F> for MAsyncRx<F> {
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for MAsyncRx<F> {
+    type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self::new(shared)

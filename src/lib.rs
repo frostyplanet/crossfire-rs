@@ -240,6 +240,7 @@ pub mod stream;
 
 mod crossbeam;
 pub use crossbeam::err::*;
+pub mod select;
 
 /// logging macro for development
 #[macro_export(local_inner_macros)]
@@ -271,13 +272,16 @@ use flavor::Flavor;
 use std::sync::Arc;
 
 /// type limiter for channel builder
-pub trait SenderType<F: Flavor> {
-    fn new(shared: Arc<ChannelShared<F>>) -> Self;
+pub trait SenderType {
+    type Flavor: Flavor;
+    fn new(shared: Arc<ChannelShared<Self::Flavor>>) -> Self;
 }
 
 /// type limiter for channel builder
-pub trait ReceiverType<F: Flavor> {
-    fn new(shared: Arc<ChannelShared<F>>) -> Self;
+pub trait ReceiverType: AsRef<ChannelShared<Self::Flavor>> {
+    type Flavor: Flavor;
+
+    fn new(shared: Arc<ChannelShared<Self::Flavor>>) -> Self;
 }
 
 pub trait NotClonable {}

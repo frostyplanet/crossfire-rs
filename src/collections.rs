@@ -151,12 +151,12 @@ mod tests {
         let cell = WeakCell::new();
         assert!(cell.is_empty());
         let item = Arc::new(1);
-        cell.put(Arc::downgrade(&item));
+        cell.replace(Arc::downgrade(&item));
         assert!(!cell.is_empty());
         let _item = cell.pop().unwrap();
         assert!(cell.is_empty());
         assert!(Arc::ptr_eq(&item, &_item));
-        cell.put(Arc::downgrade(&item));
+        cell.replace(Arc::downgrade(&item));
         assert!(!cell.is_empty());
         // it is allow to fail under miri
         println!("clear");

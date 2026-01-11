@@ -569,7 +569,8 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MTx<F> {
     }
 }
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType<F> for Tx<F> {
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for Tx<F> {
+    type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self::new(shared)
@@ -578,7 +579,8 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType<F> for Tx<F> {
 
 impl<F: Flavor> NotClonable for Tx<F> {}
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType<F> for MTx<F> {
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for MTx<F> {
+    type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self::new(shared)

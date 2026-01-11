@@ -1,4 +1,4 @@
-use super::{FlavorImpl, FlavorNew};
+use super::{FlavorImpl, FlavorNew, FlavorSelect, Token};
 use crate::crossbeam::seg_queue::SegQueue;
 use std::mem::MaybeUninit;
 
@@ -40,9 +40,19 @@ impl<T: Send + Unpin + 'static> FlavorImpl for List<T> {
         true
     }
 
-    #[inline(always)]
+    #[inline]
     fn try_recv(&self) -> Option<T> {
         self.0.pop()
+    }
+
+    #[inline]
+    fn try_recv_final(&self) -> Option<T> {
+        if !self.0.is_empty() {
+            // TODO review atomic ordering in SegQueue
+            self.0.pop()
+        } else {
+            None
+        }
     }
 
     #[inline]
@@ -60,5 +70,22 @@ impl<T> FlavorNew for List<T> {
     #[inline]
     fn new() -> Self {
         List::new()
+    }
+}
+
+impl<T: Send + Unpin + 'static> FlavorSelect for List<T> {
+    #[inline]
+    fn try_select(&self, final_check: bool) -> Option<Token> {
+        if final_check {
+            if self.0.is_empty() {
+                return None;
+            }
+        }
+        self.0.start_read()
+    }
+
+    #[inline(always)]
+    fn read_with_token(&self, token: Token) -> T {
+        self.0.read(token)
     }
 }

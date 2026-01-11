@@ -1,4 +1,4 @@
-use super::FlavorImpl;
+use super::{FlavorImpl, FlavorSelect, Token};
 use crate::crossbeam::array_queue::ArrayQueue;
 use std::mem::MaybeUninit;
 
@@ -47,13 +47,13 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for A
         return unsafe { self.0.try_push_oneshot(item) };
     }
 
-    #[inline(always)]
-    fn try_recv(&self) -> Option<Self::Item> {
+    #[inline]
+    fn try_recv(&self) -> Option<T> {
         self.0.pop(false)
     }
 
     #[inline]
-    fn try_recv_final(&self) -> Option<Self::Item> {
+    fn try_recv_final(&self) -> Option<T> {
         self.0.pop(true)
     }
 
@@ -84,5 +84,17 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for A
         } else {
             false
         }
+    }
+}
+
+impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorSelect for Array<T, MP, MC> {
+    #[inline]
+    fn try_select(&self, final_check: bool) -> Option<Token> {
+        self.0.start_read(final_check)
+    }
+
+    #[inline(always)]
+    fn read_with_token(&self, token: Token) -> T {
+        self.0.read(token)
     }
 }

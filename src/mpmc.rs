@@ -47,7 +47,8 @@ use crate::async_tx::*;
 use crate::blocking_rx::*;
 use crate::blocking_tx::*;
 use crate::flavor::{
-    flavor_dispatch, Flavor, FlavorImpl, FlavorMC, FlavorMP, FlavorNew, FlavorWrap,
+    flavor_dispatch, flavor_select_dispatch, Flavor, FlavorImpl, FlavorMC, FlavorMP, FlavorNew,
+    FlavorWrap,
 };
 use crate::shared::*;
 use crate::{ReceiverType, SenderType};
@@ -93,6 +94,10 @@ impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
     flavor_dispatch!(wrap_array);
 }
 
+impl<T: Send + Unpin + 'static> FlavorSelect for Array<T> {
+    flavor_select_dispatch!(wrap_array);
+}
+
 impl<T: Send + Unpin + 'static> Flavor for Array<T> {
     type Send = RegistryMultiSend<T>;
     type Recv = RegistryMultiRecv;
@@ -114,8 +119,8 @@ impl<T: Send + Unpin + 'static> Flavor for Array<T> {
 pub fn new<F, S, R>() -> (S, R)
 where
     F: Flavor + FlavorNew + FlavorMP + FlavorMC,
-    S: SenderType<F> + Clone,
-    R: ReceiverType<F> + Clone,
+    S: SenderType<Flavor = F> + Clone,
+    R: ReceiverType<Flavor = F> + Clone,
 {
     build::<F, S, R>(F::new())
 }
@@ -137,8 +142,8 @@ where
 pub fn build<F, S, R>(flavor: F) -> (S, R)
 where
     F: Flavor + FlavorMP + FlavorMC,
-    S: SenderType<F> + Clone,
-    R: ReceiverType<F> + Clone,
+    S: SenderType<Flavor = F> + Clone,
+    R: ReceiverType<Flavor = F> + Clone,
 {
     let shared = ChannelShared::new(flavor);
     (S::new(shared.clone()), R::new(shared))
@@ -148,7 +153,7 @@ where
 fn unbounded_new<T, R>() -> (MTx<List<T>>, R)
 where
     T: Send + 'static + Unpin,
-    R: ReceiverType<List<T>> + Clone,
+    R: ReceiverType<Flavor = List<T>> + Clone,
 {
     build::<List<T>, MTx<List<T>>, R>(List::<T>::from_inner(crate::flavor::List::<T>::new()))
 }
@@ -172,8 +177,8 @@ where
 fn bounded_new<T, S, R>(size: usize) -> (S, R)
 where
     T: Send + 'static + Unpin,
-    S: SenderType<Array<T>> + Clone,
-    R: ReceiverType<Array<T>> + Clone,
+    S: SenderType<Flavor = Array<T>> + Clone,
+    R: ReceiverType<Flavor = Array<T>> + Clone,
 {
     build::<Array<T>, S, R>(Array::<T>::new(size))
 }

@@ -1,4 +1,4 @@
-use super::{FlavorImpl, FlavorNew};
+use super::{FlavorImpl, FlavorNew, FlavorSelect, Token};
 use core::cell::UnsafeCell;
 use core::mem::{needs_drop, MaybeUninit};
 use crossbeam_utils::CachePadded;
@@ -322,5 +322,33 @@ impl<T> FlavorNew for OneSpsc<T> {
     #[inline]
     fn new() -> Self {
         OneSpsc::new()
+    }
+}
+
+impl<T: Send + 'static + Unpin> FlavorSelect for OneSpsc<T> {
+    #[inline]
+    fn try_select(&self, final_check: bool) -> Option<Token> {
+        if let Some(tail) =
+            self.start_read(if final_check { Ordering::SeqCst } else { Ordering::Acquire })
+        {
+            let index = (tail & 0x1) as usize;
+            let new_pos = Self::pack(tail, tail);
+
+            Some(Token::new(
+                &self.slots[index as usize] as *const Slot<T> as *const u8,
+                new_pos as usize,
+            ))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn read_with_token(&self, token: Token) -> T {
+        let slot: &Slot<T> = unsafe { &*token.pos.cast::<Slot<T>>() };
+        let item = slot.read();
+        // NOTE: This is only valid for SPSC
+        self.pos.store(token.stamp as u64, SeqCst);
+        item
     }
 }

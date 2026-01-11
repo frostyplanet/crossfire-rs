@@ -53,7 +53,7 @@
 //! - The crossbeam implementation of select is decouple from channel types and message type, which
 //! means the API is possible for crossfire too.
 
-use crate::flavor::{flavor_dispatch, Flavor, FlavorImpl};
+use crate::flavor::{flavor_dispatch, flavor_select_dispatch, Flavor, FlavorImpl};
 use crate::shared::*;
 pub use crate::{AsyncRxTrait, AsyncTxTrait, BlockingRxTrait, BlockingTxTrait};
 use std::mem::MaybeUninit;
@@ -75,6 +75,10 @@ macro_rules! wrap_compat {
 impl<T: Send + Unpin + 'static> FlavorImpl for CompatFlavor<T> {
     type Item = T;
     flavor_dispatch!(wrap_compat);
+}
+
+impl<T: Send + Unpin + 'static> FlavorSelect for CompatFlavor<T> {
+    flavor_select_dispatch!(wrap_compat);
 }
 
 // There's not much performance difference between old RegistrySingle and RegistryMulti,

@@ -39,7 +39,9 @@ use crate::async_rx::*;
 use crate::async_tx::*;
 use crate::blocking_rx::*;
 use crate::blocking_tx::*;
-use crate::flavor::{flavor_dispatch, Flavor, FlavorImpl, FlavorMP, FlavorNew, FlavorWrap};
+use crate::flavor::{
+    flavor_dispatch, flavor_select_dispatch, Flavor, FlavorImpl, FlavorMP, FlavorNew, FlavorWrap,
+};
 use crate::shared::*;
 use crate::{NotClonable, ReceiverType, SenderType};
 use std::mem::MaybeUninit;
@@ -82,6 +84,9 @@ impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
     type Item = T;
     flavor_dispatch!(wrap_array);
 }
+impl<T: Send + Unpin + 'static> FlavorSelect for Array<T> {
+    flavor_select_dispatch!(wrap_array);
+}
 
 impl<T: Send + Unpin + 'static> Flavor for Array<T> {
     type Send = RegistryMultiSend<T>;
@@ -104,8 +109,8 @@ impl<T: Send + Unpin + 'static> Flavor for Array<T> {
 pub fn new<F, S, R>() -> (S, R)
 where
     F: Flavor + FlavorNew + FlavorMP,
-    S: SenderType<F> + Clone,
-    R: ReceiverType<F> + NotClonable,
+    S: SenderType<Flavor = F> + Clone,
+    R: ReceiverType<Flavor = F> + NotClonable,
 {
     build::<F, S, R>(F::new())
 }
@@ -127,8 +132,8 @@ where
 pub fn build<F, S, R>(flavor: F) -> (S, R)
 where
     F: Flavor + FlavorMP,
-    S: SenderType<F> + Clone,
-    R: ReceiverType<F> + NotClonable,
+    S: SenderType<Flavor = F> + Clone,
+    R: ReceiverType<Flavor = F> + NotClonable,
 {
     let shared = ChannelShared::new(flavor);
     (S::new(shared.clone()), R::new(shared))
@@ -138,7 +143,7 @@ where
 fn unbounded_new<T, R>() -> (MTx<List<T>>, R)
 where
     T: Send + 'static + Unpin,
-    R: ReceiverType<List<T>> + NotClonable,
+    R: ReceiverType<Flavor = List<T>> + NotClonable,
 {
     build::<List<T>, MTx<List<T>>, R>(List::<T>::from_inner(crate::flavor::List::<T>::new()))
 }
@@ -162,8 +167,8 @@ where
 fn bounded_new<T, S, R>(size: usize) -> (S, R)
 where
     T: Send + 'static + Unpin,
-    S: SenderType<Array<T>> + Clone,
-    R: ReceiverType<Array<T>> + NotClonable,
+    S: SenderType<Flavor = Array<T>> + Clone,
+    R: ReceiverType<Flavor = Array<T>> + NotClonable,
 {
     build::<Array<T>, S, R>(Array::<T>::new(size))
 }

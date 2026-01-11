@@ -10,7 +10,27 @@ pub(crate) use list::*;
 mod one;
 pub(crate) use one::*;
 mod one_spmc;
-pub(crate) use one_spmc::*;
+pub(crate) use one_spmc::{OneSpmc, OneSpsc};
+
+/// Essential struct for select and read interface
+pub struct Token {
+    pub(crate) pos: *const u8,
+    pub(crate) stamp: usize,
+}
+
+impl Token {
+    #[inline]
+    pub(crate) fn new(pos: *const u8, stamp: usize) -> Self {
+        Self { pos, stamp }
+    }
+}
+
+impl Default for Token {
+    #[inline]
+    fn default() -> Self {
+        Self { pos: std::ptr::null_mut(), stamp: 0 }
+    }
+}
 
 pub trait FlavorImpl: Send + 'static {
     type Item: Send + 'static + Unpin;
@@ -32,14 +52,7 @@ pub trait FlavorImpl: Send + 'static {
 
     fn try_recv(&self) -> Option<Self::Item>;
 
-    #[inline(always)]
-    fn try_recv_final(&self) -> Option<Self::Item> {
-        if !self.is_empty() {
-            self.try_recv()
-        } else {
-            None
-        }
-    }
+    fn try_recv_final(&self) -> Option<Self::Item>;
 
     fn backoff_limit(&self) -> u16;
 
@@ -47,6 +60,14 @@ pub trait FlavorImpl: Send + 'static {
     fn may_direct_copy(&self) -> bool {
         false
     }
+}
+
+pub trait FlavorSelect: FlavorImpl {
+    /// Note: this is internal function, it does not check if the token has other result
+    fn try_select(&self, final_check: bool) -> Option<Token>;
+
+    /// Note: this is internal function, it does not check if the token is valid
+    fn read_with_token(&self, token: Token) -> Self::Item;
 }
 
 // because enum_dispatch does not support associate type
@@ -104,6 +125,23 @@ macro_rules! flavor_dispatch {
     };
 }
 pub(super) use flavor_dispatch;
+
+// because enum_dispatch does not support associate type
+macro_rules! flavor_select_dispatch {
+    ($wrap_method: ident) => {
+        #[inline(always)]
+        fn try_select(&self, final_check: bool) -> Option<Token> {
+            $wrap_method!(self, try_select final_check)
+        }
+
+        #[inline(always)]
+        fn read_with_token(&self, token: Token) -> Self::Item {
+            $wrap_method!(self, read_with_token token)
+        }
+    };
+}
+#[allow(unused_imports)]
+pub(super) use flavor_select_dispatch;
 
 pub trait Flavor: Send + 'static + FlavorImpl {
     type Send: RegistrySend<Self::Item>;
@@ -199,6 +237,16 @@ where
     type Item = F::Item;
     flavor_dispatch!(wrap_new_type);
 }
+
+impl<F, S, R> FlavorSelect for FlavorWrap<F, S, R>
+where
+    F: FlavorImpl + FlavorSelect,
+    S: RegistrySend<F::Item>,
+    R: RegistryRecv,
+{
+    flavor_select_dispatch!(wrap_new_type);
+}
+
 pub trait FlavorNew {
     fn new() -> Self;
 }

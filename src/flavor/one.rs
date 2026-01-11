@@ -1,4 +1,4 @@
-use super::{FlavorImpl, FlavorNew};
+use super::{FlavorImpl, FlavorNew, FlavorSelect, Token};
 use crate::backoff::*;
 use core::cell::UnsafeCell;
 use core::mem::{needs_drop, MaybeUninit};
@@ -66,7 +66,7 @@ impl<T> One<T> {
     }
 
     #[inline(always)]
-    fn _pop(&self, order: Ordering) -> Option<T> {
+    fn _start_read(&self, order: Ordering) -> Option<(u16, u16)> {
         let mut pos = self.pos.load(order);
         compiler_fence(Acquire);
         loop {
@@ -82,9 +82,23 @@ impl<T> One<T> {
                 }
                 Ok(_) => {
                     let index = head & 0x1;
-                    return Some(self.slots[index as usize].read(next_head));
+                    return Some((index, next_head));
                 }
             }
+        }
+    }
+
+    #[inline(always)]
+    pub fn pop(&self) -> Option<T> {
+        self._pop(Ordering::SeqCst)
+    }
+
+    #[inline(always)]
+    fn _pop(&self, order: Ordering) -> Option<T> {
+        if let Some((index, new_head)) = self._start_read(order) {
+            Some(self.slots[index as usize].read(new_head))
+        } else {
+            None
         }
     }
 }
@@ -196,12 +210,12 @@ impl<T: Send + 'static + Unpin> FlavorImpl for One<T> {
     }
 
     #[inline(always)]
-    fn try_recv(&self) -> Option<T> {
+    fn try_recv(&self) -> Option<Self::Item> {
         self._pop(Relaxed)
     }
 
     #[inline(always)]
-    fn try_recv_final(&self) -> Option<T> {
+    fn try_recv_final(&self) -> Option<Self::Item> {
         self._pop(SeqCst)
     }
 
@@ -215,5 +229,27 @@ impl<T> FlavorNew for One<T> {
     #[inline]
     fn new() -> Self {
         One::new()
+    }
+}
+
+impl<T: Send + Unpin + 'static> FlavorSelect for One<T> {
+    #[inline]
+    fn try_select(&self, final_check: bool) -> Option<Token> {
+        if let Some((index, head)) =
+            self._start_read(if final_check { Ordering::SeqCst } else { Ordering::Acquire })
+        {
+            Some(Token::new(
+                &self.slots[index as usize] as *const Slot<T> as *const u8,
+                head as usize,
+            ))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn read_with_token(&self, token: Token) -> T {
+        let slot: &Slot<T> = unsafe { &*token.pos.cast::<Slot<T>>() };
+        slot.read(token.stamp as u16)
     }
 }

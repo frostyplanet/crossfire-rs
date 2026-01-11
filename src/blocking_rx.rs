@@ -1,4 +1,6 @@
 use crate::backoff::*;
+use crate::flavor::FlavorSelect;
+use crate::select::SelectResult;
 use crate::{shared::*, trace_log, AsyncRx, MAsyncRx, NotClonable, ReceiverType};
 use std::cell::Cell;
 use std::fmt;
@@ -217,6 +219,22 @@ impl<F: Flavor> Rx<F> {
     #[inline(always)]
     pub fn is_disconnected(&self) -> bool {
         self.shared.is_tx_closed()
+    }
+
+    /// This method use with select, guarantee non-blocking
+    /// # Panics
+    ///
+    /// Panics if SelectResult from other receiver is passed.
+    #[inline(always)]
+    pub fn read_select(&self, result: SelectResult) -> Result<F::Item, RecvError>
+    where
+        F: FlavorSelect,
+    {
+        assert_eq!(
+            self as *const Self as *const u8, result.channel,
+            "invalid use select with another channel"
+        );
+        self.as_ref().read_with_token(result.token)
     }
 }
 
@@ -498,7 +516,8 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MRx<F> {
     }
 }
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType<F> for Rx<F> {
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for Rx<F> {
+    type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self::new(shared)
@@ -507,7 +526,9 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType<F> for Rx<F> {
 
 impl<F: Flavor> NotClonable for Rx<F> {}
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType<F> for MRx<F> {
+impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for MRx<F> {
+    type Flavor = F;
+
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self::new(shared)

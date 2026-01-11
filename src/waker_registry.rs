@@ -2,6 +2,7 @@
 use crate::collections::WeakCell;
 #[allow(unused_imports)]
 use crate::flavor::{Flavor, FlavorImpl, OneSpmc};
+use crate::select::{SelectWaker, SelectWakerMulti};
 use crate::shared::ChannelShared;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
@@ -10,8 +11,10 @@ use crate::waker::*;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Weak;
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc, Weak,
+};
 use std::task::{Context, Poll};
 
 pub(crate) type RegistryMultiSend<T> = RegistryMulti<*const T>;
@@ -117,6 +120,11 @@ pub trait RegistryRecv: Registry {
 
     #[inline(always)]
     fn cache_waker(&self, _o_waker: Option<<Self as Registry>::Waker>, _cache: &WakerCache<()>) {}
+
+    fn reg_select_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool;
+
+    #[inline(always)]
+    fn cancel_select_waker(&self, _waker: &Arc<SelectWaker>) {}
 }
 
 #[derive(Debug)]
@@ -278,15 +286,33 @@ impl RegistryRecv for RegistrySingle {
         self._reg_waker_async(ctx, o_waker);
         None
     }
+
+    #[inline(always)]
+    fn reg_select_waker(&self, _channel_id: usize, waker: &Arc<SelectWaker>) -> bool {
+        self.cell.replace(waker.clone_weak());
+        false
+    }
 }
 
 struct RegistryMultiInner<P> {
     queue: VecDeque<Weak<WakerInner<P>>>,
+    selectors: Vec<SelectWakerMulti>,
     seq: u32,
 }
 
+impl<P> RegistryMultiInner<P> {
+    #[inline(always)]
+    fn new() -> Self {
+        Self { queue: VecDeque::with_capacity(32), selectors: Vec::with_capacity(32), seq: 0 }
+    }
+}
+
+const MULTI_EMPTY: u8 = 0;
+const MULTI_HAS_SELECT: u8 = 1;
+const MULTI_HAS_WAKER: u8 = 2;
+
 pub struct RegistryMulti<P> {
-    is_empty: AtomicBool,
+    state: AtomicU8,
     inner: Mutex<RegistryMultiInner<P>>,
     _tag: &'static str,
 }
@@ -294,7 +320,7 @@ pub struct RegistryMulti<P> {
 impl<P: Copy> RegistryMulti<P> {
     #[inline(always)]
     fn is_empty(&self) -> bool {
-        self.is_empty.load(Ordering::Acquire)
+        self.state.load(Ordering::Acquire) == MULTI_EMPTY
     }
 
     #[inline(always)]
@@ -306,7 +332,7 @@ impl<P: Copy> RegistryMulti<P> {
             guard.seq = seq;
             waker.set_seq(seq);
             if guard.queue.is_empty() {
-                self.is_empty.store(false, Ordering::SeqCst);
+                self.state.fetch_or(MULTI_HAS_WAKER, Ordering::SeqCst);
             }
             guard.queue.push_back(weak);
         }
@@ -380,23 +406,26 @@ impl<P: Copy> RegistryMulti<P> {
 
     #[inline(always)]
     fn pop(&self) -> Option<(ArcWaker<P>, u32)> {
-        if self.is_empty.load(Ordering::SeqCst) {
+        if self.state.load(Ordering::SeqCst) == MULTI_EMPTY {
             return None;
         }
         let mut res = None;
         {
             let mut guard = self.inner.lock();
+            for select in &guard.selectors {
+                select.wake();
+            }
             loop {
                 if let Some(weak) = guard.queue.pop_front() {
                     if let Some(inner) = weak.upgrade() {
                         res = Some((ArcWaker::from_arc(inner), guard.seq));
                         if guard.queue.is_empty() {
-                            self.is_empty.store(true, Ordering::SeqCst);
+                            self.state.fetch_xor(MULTI_HAS_WAKER, Ordering::SeqCst);
                         }
                         break;
                     }
                 } else {
-                    self.is_empty.store(true, Ordering::SeqCst);
+                    self.state.fetch_xor(MULTI_HAS_WAKER, Ordering::SeqCst);
                     break;
                 }
             }
@@ -438,7 +467,7 @@ impl<P: Copy> RegistryMulti<P> {
     #[inline(always)]
     fn _clear_wakers(&self, old_waker: &ArcWaker<P>, oneshot: bool) {
         // Don't need acurate, it's optional
-        if self.is_empty.load(Ordering::Acquire) {
+        if self.state.load(Ordering::Acquire) & MULTI_HAS_WAKER == 0 {
             trace_log!("{}: skip", self._tag);
             return;
         }
@@ -483,7 +512,7 @@ impl<P: Copy> RegistryMulti<P> {
         if let Some(weak) = guard.queue.pop_front() {
             if process!(guard, weak) {
                 if guard.queue.is_empty() {
-                    self.is_empty.store(true, Ordering::SeqCst);
+                    self.state.fetch_xor(MULTI_HAS_WAKER, Ordering::SeqCst);
                 }
                 return;
             }
@@ -491,12 +520,12 @@ impl<P: Copy> RegistryMulti<P> {
                 if let Some(_weak) = guard.queue.pop_front() {
                     if process!(guard, _weak) {
                         if guard.queue.is_empty() {
-                            self.is_empty.store(true, Ordering::SeqCst);
+                            self.state.fetch_xor(MULTI_HAS_WAKER, Ordering::SeqCst);
                         }
                         return;
                     }
                 } else {
-                    self.is_empty.store(true, Ordering::SeqCst);
+                    self.state.fetch_xor(MULTI_HAS_WAKER, Ordering::SeqCst);
                     return;
                 }
             }
@@ -534,13 +563,16 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
     #[inline(always)]
     fn close(&self) {
         let mut guard = self.inner.lock();
+        for selector in &guard.selectors {
+            selector.wake();
+        }
         while let Some(weak) = guard.queue.pop_front() {
             if let Some(waker) = weak.upgrade() {
                 let _r = waker.close_wake();
                 trace_log!("close {} wake {:?} {}", self._tag, waker, _r);
             }
         }
-        self.is_empty.store(true, Ordering::SeqCst);
+        self.state.store(0, Ordering::SeqCst);
     }
 
     /// return waker queue size
@@ -591,11 +623,7 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
 impl<T: Send + Unpin + 'static> RegistrySend<T> for RegistryMultiSend<T> {
     #[inline(always)]
     fn new() -> Self {
-        Self {
-            inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
-            is_empty: AtomicBool::new(true),
-            _tag: "tx",
-        }
+        Self { inner: Mutex::new(RegistryMultiInner::new()), state: AtomicU8::new(0), _tag: "tx" }
     }
 
     #[inline(always)]
@@ -665,11 +693,7 @@ impl<T: Send + Unpin + 'static> RegistrySend<T> for RegistryMultiSend<T> {
 impl RegistryRecv for RegistryMultiRecv {
     #[inline(always)]
     fn new() -> Self {
-        Self {
-            inner: Mutex::new(RegistryMultiInner { queue: VecDeque::with_capacity(32), seq: 0 }),
-            is_empty: AtomicBool::new(true),
-            _tag: "rx",
-        }
+        Self { inner: Mutex::new(RegistryMultiInner::new()), state: AtomicU8::new(0), _tag: "rx" }
     }
 
     #[inline(always)]
@@ -692,6 +716,26 @@ impl RegistryRecv for RegistryMultiRecv {
     #[inline(always)]
     fn cache_waker(&self, o_waker: Option<ArcWaker<()>>, cache: &WakerCache<()>) {
         Self::_cache_waker(o_waker, cache);
+    }
+
+    #[inline(always)]
+    fn reg_select_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool {
+        let mut guard = self.inner.lock();
+        guard.selectors.push(SelectWaker::to_multi_waker(waker.clone(), channel_id));
+        self.state.fetch_or(MULTI_HAS_SELECT, Ordering::SeqCst);
+        true
+    }
+
+    #[inline(always)]
+    fn cancel_select_waker(&self, waker: &Arc<SelectWaker>) {
+        let mut guard = self.inner.lock();
+        if let Some((i, _)) = guard.selectors.iter().enumerate().find(|&(_, entry)| entry.eq(waker))
+        {
+            guard.selectors.remove(i);
+        }
+        if guard.selectors.is_empty() {
+            self.state.fetch_xor(MULTI_HAS_SELECT, Ordering::SeqCst);
+        }
     }
 }
 

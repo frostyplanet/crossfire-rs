@@ -1,6 +1,7 @@
 use crate::backoff::*;
 pub(crate) use crate::crossbeam::err::*;
-pub(crate) use crate::flavor::Flavor;
+pub(crate) use crate::flavor::{Flavor, FlavorSelect, Token};
+use crate::select::{SelectHandle, SelectWaker};
 use crate::trace_log;
 pub(crate) use crate::waker::*;
 pub(crate) use crate::waker_registry::*;
@@ -50,6 +51,18 @@ impl<F: Flavor> ChannelShared<F> {
                 return Err(TryRecvError::Disconnected);
             }
             return Err(TryRecvError::Empty);
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_with_token(&self, token: Token) -> Result<F::Item, RecvError>
+    where
+        F: FlavorSelect,
+    {
+        if token.pos.is_null() {
+            return Err(RecvError);
+        } else {
+            Ok(self.inner.read_with_token(token))
         }
     }
 
@@ -271,6 +284,29 @@ impl<F: Flavor> ChannelShared<F> {
             return None;
         }
         Some(Backoff::new(cfg))
+    }
+}
+
+impl<F: Flavor + FlavorSelect> SelectHandle for ChannelShared<F> {
+    #[inline(always)]
+    fn try_select(&self, final_check: bool) -> Option<Token> {
+        if let Some(token) = self.inner.try_select(final_check) {
+            return Some(token);
+        }
+        if self.get_tx_count() == 0 {
+            return Some(Token::default());
+        }
+        None
+    }
+
+    #[inline(always)]
+    fn reg_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool {
+        self.recvs.reg_select_waker(channel_id, waker)
+    }
+
+    #[inline(always)]
+    fn cancel_waker(&self, waker: &Arc<SelectWaker>) {
+        self.recvs.cancel_select_waker(waker)
     }
 }
 
