@@ -53,13 +53,13 @@ unsafe impl<F: Flavor> Send for Rx<F> {}
 
 impl<F: Flavor> fmt::Debug for Rx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Rx")
+        write!(f, "Rx{:p}", self)
     }
 }
 
 impl<F: Flavor> fmt::Display for Rx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Rx")
+        write!(f, "Rx{:p}", self)
     }
 }
 
@@ -248,13 +248,13 @@ pub struct MRx<F: Flavor>(pub(crate) Rx<F>);
 
 impl<F: Flavor> fmt::Debug for MRx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MRx")
+        write!(f, "MRx{:p}", self)
     }
 }
 
 impl<F: Flavor> fmt::Display for MRx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MRx")
+        write!(f, "MRx{:p}", self)
     }
 }
 

@@ -42,6 +42,7 @@ use crate::waker_registry::SelectWaker;
 use crate::ReceiverType;
 use crate::{RecvError, RecvTimeoutError, TryRecvError};
 use std::collections::hash_map::DefaultHasher;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
 use std::sync::{atomic::Ordering, Arc};
@@ -403,6 +404,12 @@ pub struct SelectResult {
     // for validation
     pub(crate) channel: *const u8,
     pub(crate) token: Token,
+}
+
+impl fmt::Debug for SelectResult {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "SelectResult(from {:p})", self.channel)
+    }
 }
 
 impl SelectResult {

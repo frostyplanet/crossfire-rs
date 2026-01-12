@@ -65,13 +65,13 @@ unsafe impl<F: Flavor> Send for AsyncRx<F> {}
 
 impl<F: Flavor> fmt::Debug for AsyncRx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "AsyncRx")
+        write!(f, "AsyncRx{:p}", self)
     }
 }
 
 impl<F: Flavor> fmt::Display for AsyncRx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "AsyncRx")
+        write!(f, "AsyncRx{:p}", self)
     }
 }
 
@@ -579,13 +579,13 @@ pub struct MAsyncRx<F: Flavor>(pub(crate) AsyncRx<F>);
 
 impl<F: Flavor> fmt::Debug for MAsyncRx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MAsyncRx")
+        write!(f, "MAsyncRx{:p}", self)
     }
 }
 
 impl<F: Flavor> fmt::Display for MAsyncRx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MAsyncRx")
+        write!(f, "MAsyncRx{:p}", self)
     }
 }
 

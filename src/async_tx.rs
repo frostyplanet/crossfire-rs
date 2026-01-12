@@ -61,13 +61,13 @@ pub struct AsyncTx<F: Flavor> {
 
 impl<F: Flavor> fmt::Debug for AsyncTx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "AsyncTx")
+        write!(f, "AsyncTx{:p}", self)
     }
 }
 
 impl<F: Flavor> fmt::Display for AsyncTx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "AsyncTx")
+        write!(f, "AsyncTx{:p}", self)
     }
 }
 
@@ -584,13 +584,13 @@ pub struct MAsyncTx<F: Flavor>(pub(crate) AsyncTx<F>);
 
 impl<F: Flavor> fmt::Debug for MAsyncTx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MAsyncTx")
+        write!(f, "MAsyncTx{:p}", self)
     }
 }
 
 impl<F: Flavor> fmt::Display for MAsyncTx<F> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MAsyncTx")
+        write!(f, "MAsyncTx{:p}", self)
     }
 }
 
