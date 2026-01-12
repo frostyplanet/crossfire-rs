@@ -376,7 +376,7 @@ impl<P: Copy> RegistryMulti<P> {
 
     #[inline(always)]
     fn _reg_waker_blocking(
-        &self, o_waker: &mut Option<ArcWaker<P>>, cache: &WakerCache<P>, payload: P,
+        &self, o_waker: &mut Option<ArcWaker<P>>, _cache: &WakerCache<P>, payload: P,
     ) {
         if let Some(waker) = o_waker.as_ref() {
             waker.reset_init();
@@ -384,7 +384,8 @@ impl<P: Copy> RegistryMulti<P> {
             trace_log!("{}{:?}: re-reg {:?}", self._tag, tokio_task_id!(), waker);
         } else {
             debug_assert!(o_waker.is_none());
-            let waker = cache.new_blocking(payload);
+            //let waker = cache.new_blocking(payload);
+            let waker = ArcWaker::<P>::new_blocking(payload);
             self.reg_waker(&waker);
             trace_log!("{}{:?}: reg {:?}", self._tag, tokio_task_id!(), waker);
             o_waker.replace(waker);
@@ -520,12 +521,13 @@ impl<P: Copy> RegistryMulti<P> {
     }
 
     #[inline(always)]
-    fn _cache_waker(o_waker: Option<ArcWaker<P>>, cache: &WakerCache<P>) {
-        if let Some(waker) = o_waker {
-            if waker.get_state() >= WakerState::Woken as u8 {
-                cache.push(waker);
-            }
-        }
+    fn _cache_waker(_o_waker: Option<ArcWaker<P>>, _cache: &WakerCache<P>) {
+        // XXX: skip cache for now, untill we find out miri report of race
+        //if let Some(waker) = o_waker {
+        //    if waker.get_state() >= WakerState::Woken as u8 {
+        //        cache.push(waker);
+        //    }
+        //}
     }
 }
 

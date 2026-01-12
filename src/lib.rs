@@ -216,7 +216,9 @@ pub use shared::ChannelShared;
 mod backoff;
 pub use backoff::detect_backoff_cfg;
 
+#[allow(dead_code)]
 mod collections;
+#[allow(dead_code)]
 mod waker;
 #[allow(private_bounds)]
 mod waker_registry;
