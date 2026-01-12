@@ -1,12 +1,15 @@
 # General
-- All comment and document must be in English.
-- Omit unnecessary obvious comment during coding.
-- For the document, must be concise, well organize into catelog, no duplicated topic, no redundant information. Relative topic should be organize in near position.
-- If you don't know 3rd-party API, should lookup on `https://docs.rs/<crate>`.
-- Do not run cargo clippy
+- All comments and documents must be in English.
+- Omit unnecessary obvious comments during coding.
+- Documents must be concise, well organized into categories, with no duplicated topics or redundant information. Related topics should be organized in close proximity.
+- If you don't know a 3rd-party API, look it up on `https://docs.rs/<crate>`.
+- Do not run cargo clippy.
+- Always use shorter token paths by importing traits or structures.
+- Avoid importing namespaces inside functions.
+
+# Test
+
+- Because crate::spsc, mpsc, mpmc module have the same type alias, in the test just use `crossfire::*`, and distinguish the types and functions with `spsc::`, `mpsc::`, `mpmc::` prefix.
 - Run test with `make test`. In order to prevent too long output truncated by AI tool, run test with `make test <test_name>` when you have a targeted test case.
-- Always use shorter token path by importing the trait or structure.
-
-# Execution plan
-
-Create execution plan with steps when going large design, store into `docs/(topic)_steps.md`, wait for review.
+- Do not use cargo test to run the test, always use `make test`. Test case cannot be run concurrently with cargo test default param.
+- For statement that don't expect to fail, use `expect()` rather than `unwarp()`
