@@ -32,6 +32,9 @@ impl Default for Token {
     }
 }
 
+/// Internal flavor interface
+///
+/// It cannot be hidden. You don't need to import or use it
 pub trait FlavorImpl: Send + 'static {
     type Item: Send + 'static + Unpin;
 

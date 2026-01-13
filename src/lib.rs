@@ -12,26 +12,27 @@
 //!
 //! ## Version history
 //!
-//! * v1.0: Released in 2022.12 and used in production.
+//! * v1.0: Used in production since 2022.12.
 //!
-//! * v2.0: Released in 2025.6. Refactored the codebase and API
+//! * v2.0: [2025.6] Refactored the codebase and API
 //! by removing generic types from the ChannelShared type, which made it easier to code with.
 //!
-//! * v2.1: Released in 2025.9. Removed the dependency on crossbeam-channel
+//! * v2.1: [2025.9] Removed the dependency on crossbeam-channel
 //! and implemented with [a modified version of crossbeam-queue](https://github.com/frostyplanet/crossfire-rs/wiki/crossbeam-related),
-//! which brings performance improvements for both async and blocking contexts.
+//! which brings massive performance improvements for both async and blocking contexts.
+//!
+//! * v3.0: [2026.1] Refactored API back to generic, with new features like [select], because enum dispatch became bottle neck when adding more channel flavor.
+//! async performance has improved, especially +33% for bounded spsc on x86, +20% for one-sized.
+//! Checkout [compat] for migiration from v2.x.
 //!
 //! ## Test status
-//!
-//! **WARNING**: Because v2.1 has push the speed to a level no one has gone before, it can put a pure pressure to the async runtime.
-//! Some hidden bug (especially atomic ops on weaker ordering platform) might occur.
 //!
 //! Refer to the [README](https://github.com/frostyplanet/crossfire-rs?tab=readme-ov-file#test-status) page for known issue on specified platform and runtime.
 //!
 //! ## Performance
 //!
 //! Being a lockless channel, crossfire outperforms other async-capable channels.
-//! And thanks to a lighter notification mechanism, some cases in blocking context are even
+//! And thanks to a lighter notification mechanism, most cases in blocking context are even
 //! better than the original crossbeam-channel,
 //!
 //! benchmark data is posted on [wiki](https://github.com/frostyplanet/crossfire-rs/wiki/benchmark-v2.1.0-vs-v2.0.26-2025%E2%80%9009%E2%80%9021).
@@ -45,25 +46,45 @@
 //! The benchmark is written in the criterion framework. You can run the benchmark by:
 //!
 //! ``` shell
-//! cargo bench --bench crossfire
+//! make bench crossfire
+//! make bench crossfire_select
 //! ```
 //!
 //! ## APIs
 //!
-//! ### Modules and functions
+//! ### Concurrency Modules
 //!
-//! There are 3 modules: [spsc], [mpsc], [mpmc]. Each has different underlying implementation
-//! optimized to it concurrent model.
+//! - [spsc], [mpsc], [mpmc]. Each has different underlying implementation
+//! optimized to its concurrent model.
 //! The SP or SC interface is only for non-concurrent operation. It's more memory-efficient in waker registration,
 //! and has atomic ops cost reduced in the lockless algorithm.
 //!
-//! - Each module has [build()](crate::mpmc::build()) function, which can apply to all the channel flavors.
-//! - Altough the [One](crate::mpmc::One) flavor can be used standalone, it's also wrapped inside enum `Array`,
-//! to provide unified type for bounded channel.
-//! - **NOTE** : Although the name [Array](crate::mpmc::Array), [List](crate::mpmc::List) are the same between spsc/mpsc/mpmc module,
+//! - [oneshot] has its special sender/receiver type because using `Tx` / `Rx` will be too heavy.
+//!
+//! - [select]:
+//!     - [Select<'a>](crate::select::Select): crossbeam-channel style type erased API, borrows receiver address and select with "token"
+//!     - [Multiplex](crate::select::Multiplex): Multiplex stream that owns multiple receiver, select from the same type of
+//!     channel flavors, for the same type of message.
+//!
+//! ### Flavors
+//!
+//! - `List` (which use crossbeam `SegQueue`)
+//! - `Array` (which is an enum that wraps crossbeam `ArrayQueue`, and a `One` if init with size<=1)
+//!   - For a bounded channel, a 0 size case is not supported yet. (rewrite as 1 size).
+//! - `One` (which derives from `ArrayQueue` algorithm, but have better performance in size=1
+//! scenario, because it have two slots to allow reader and writer works concurrently)
+//! - `Null` (See the doc [crate::null]), for cancellation purpose channel, that only wakeup on
+//! closing.
+//!
+//! **NOTE** :
+//! Although the name [Array](crate::mpmc::Array), [List](crate::mpmc::List) are the same between spsc/mpsc/mpmc module,
 //! they are different type alias local to its parent module. We suggest distinguish by
 //! namespace when import for use.
-//! - **NOTE** :  For a bounded channel, a 0 size case is not supported yet. (rewrite as 1 size).
+//!
+//! ### Channel builder function
+//!
+//! Aside from function `bounded_*`, `unbounded_*` which specify the sender / receiver type,
+//! each module has [build()](crate::mpmc::build()) and [new()](crate::mpmc::new()) function, which can apply to any channel flavors, and any async/blocking combinations.
 //!
 //!
 //! ### Types
@@ -88,7 +109,7 @@
 //!
 //! </table>
 //!
-//! For the SP / SC version, [AsyncTx], [AsyncRx], [Tx], and [Rx] are not `Clone` and without `Sync`.
+//! *Safety*: For the SP / SC version, [AsyncTx], [AsyncRx], [Tx], and [Rx] are not `Clone` and without `Sync`.
 //! Although can be moved to other threads, but not allowed to use send/recv while in an Arc. (Refer to the compile_fail
 //! examples in the type document).
 //!
@@ -125,9 +146,7 @@
 //! - [recv_timeout()](crate::AsyncRx::recv_timeout()), we guarantee the result is atomic.
 //! Alternatively, you can use [recv_with_timer()](crate::AsyncRx::recv_with_timer())
 //!
-//! * Between blocking context and async context, and between different async runtime instances.
-//!
-//! * The async waker footprint.
+//! * The waker footprint:
 //!
 //! When using a multi-producer and multi-consumer scenario, there's a small memory overhead to pass along a `Weak`
 //! reference of wakers.
@@ -135,7 +154,16 @@
 //! it might trigger an immediate cleanup if the try-lock is successful, otherwise will rely on lazy cleanup.
 //! (This won't be an issue because weak wakers will be consumed by actual message send and recv).
 //! On an idle-select scenario, like a notification for close, the waker will be reused as much as possible
-//! if poll() returns pending.//!
+//! if poll() returns pending.
+//!
+//! * Handle written future:
+//!
+//! The future object created by [AsyncTx::send()], [AsyncTx::send_timeout()], [AsyncRx::recv()],
+//! [AsyncRx::recv_timeout()] is `Sized`. You don't need to put them in `Box`.
+//!
+//! If you like to use poll function directly for complex behavior, you can call
+//! [AsyncSink::poll_send()](crate::sink::AsyncSink::poll_send()) or [AsyncStream::poll_item()](crate::stream::AsyncStream::poll_item()) with Context.
+
 //!
 //! ## Usage
 //!
@@ -157,7 +185,9 @@
 //!
 //! * `trace_log`: Development mode, to enable internal log while testing or benchmark, to debug deadlock issues.
 //!
-//! ### Example with tokio::select!
+//! ### Example
+//!
+//! blocking / async sender receiver mixed together
 //!
 //! ```rust
 //!
@@ -169,44 +199,57 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let (tx, rx) = mpsc::bounded_async::<i32>(100);
-//!     for _ in 0..10 {
-//!         let _tx = tx.clone();
-//!         tokio::spawn(async move {
-//!             for i in 0i32..10 {
-//!                 let _ = _tx.send(i).await;
-//!                 sleep(Duration::from_millis(100)).await;
-//!                 println!("sent {}", i);
-//!             }
-//!         });
-//!     }
-//!     drop(tx);
-//!     let mut inv = tokio::time::interval(Duration::from_millis(500));
-//!     loop {
-//!         tokio::select! {
-//!             _ = inv.tick() =>{
-//!                 println!("tick");
-//!             }
-//!             r = rx.recv() => {
-//!                 if let Ok(_i) = r {
-//!                     println!("recv {}", _i);
-//!                 } else {
-//!                     println!("rx closed");
-//!                     break;
+//!     let (tx, rx) = mpmc::bounded_async::<usize>(100);
+//!     let mut recv_counter = 0;
+//!     let mut co_tx = Vec::new();
+//!     let mut co_rx = Vec::new();
+//!     const ROUND: usize = 1000;
+//!
+//!     let _tx: MTx<mpmc::Array<usize>> = tx.clone().into_blocking();
+//!     co_tx.push(tokio::task::spawn_blocking(move || {
+//!         for i in 0..ROUND {
+//!             _tx.send(i).expect("send ok");
+//!         }
+//!     }));
+//!     co_tx.push(tokio::spawn(async move {
+//!         for i in 0..ROUND {
+//!             tx.send(i).await.expect("send ok");
+//!         }
+//!     }));
+//!     let _rx: MRx<mpmc::Array<usize>> = rx.clone().into_blocking();
+//!     co_rx.push(tokio::task::spawn_blocking(move || {
+//!         let mut count: usize = 0;
+//!         'A: loop {
+//!             match _rx.recv() {
+//!                 Ok(_i) => {
+//!                     count += 1;
 //!                 }
+//!                 Err(_) => break 'A,
 //!             }
 //!         }
+//!         count
+//!     }));
+//!     co_rx.push(tokio::spawn(async move {
+//!         let mut count: usize = 0;
+//!         'A: loop {
+//!             match rx.recv().await {
+//!                 Ok(_i) => {
+//!                     count += 1;
+//!                 }
+//!                 Err(_) => break 'A,
+//!             }
+//!         }
+//!         count
+//!     }));
+//!     for th in co_tx {
+//!         let _ = th.await.unwrap();
 //!     }
+//!     for th in co_rx {
+//!         recv_counter += th.await.unwrap();
+//!     }
+//!     assert_eq!(recv_counter, ROUND * 2);
 //! }
 //! ```
-//!
-//! ### For Future customization
-//!
-//! The future object created by [AsyncTx::send()], [AsyncTx::send_timeout()], [AsyncRx::recv()],
-//! [AsyncRx::recv_timeout()] is `Sized`. You don't need to put them in `Box`.
-//!
-//! If you like to use poll function directly for complex behavior, you can call
-//! [AsyncSink::poll_send()](crate::sink::AsyncSink::poll_send()) or [AsyncStream::poll_item()](crate::stream::AsyncStream::poll_item()) with Context.
 
 #[allow(private_bounds)]
 pub mod flavor;
