@@ -24,6 +24,12 @@ jobs:
     - name: Build with async_std
       run: cargo build -F async_std --verbose
 
+    - name: doc test & internal test
+      run: cargo test
+
+    - name: doc build
+      run: cargo doc --all-features
+
     - name: Run basic tests with tokio
       run: make test basic
 
