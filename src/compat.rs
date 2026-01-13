@@ -1,8 +1,14 @@
 //! compatible layer for V2.0 API
 //!
-//! # migration from v2.* to v3
+//! # Migration from v2.* to v3
 //!
-//! You only need to change original import from  `use crossfire::*` to `use crossfire::compat::*`
+//! If you want to migrate to v3 API, you may add the flavor type in [MTx], [MRx], [Tx], [Rx] type,
+//! and change the channel initialization function accordingly.
+//!
+//! If you have a large project that use v2 API, and want to migrate gradually,
+//! only need to change original import from  `use crossfire::*` to `use crossfire::compat::*`.
+//! This module provides the [CompatFlavor] which erase the difference between `List` and `Array`,
+//! but registry only use RegistryMulti for spsc and mpsc for compatibility.
 //!
 //! # Compatible consideration
 //!
@@ -53,11 +59,14 @@
 //! - The crossbeam implementation of select is decouple from channel types and message type, which
 //! means the API is possible for crossfire too.
 
-use crate::flavor::{flavor_dispatch, flavor_select_dispatch, Flavor, FlavorImpl};
+use crate::flavor::{
+    flavor_dispatch, flavor_select_dispatch, Flavor, FlavorImpl, FlavorMC, FlavorMP,
+};
 use crate::shared::*;
 pub use crate::{AsyncRxTrait, AsyncTxTrait, BlockingRxTrait, BlockingTxTrait};
 use std::mem::MaybeUninit;
 
+/// Compatible flavor that wraps the Array and list type
 pub enum CompatFlavor<T> {
     Array(crate::flavor::Array<T, true, true>),
     List(crate::flavor::List<T>),
@@ -80,6 +89,9 @@ impl<T: Send + Unpin + 'static> FlavorImpl for CompatFlavor<T> {
 impl<T: Send + Unpin + 'static> FlavorSelect for CompatFlavor<T> {
     flavor_select_dispatch!(wrap_compat);
 }
+
+impl<T: Send + Unpin + 'static> FlavorMP for CompatFlavor<T> {}
+impl<T: Send + Unpin + 'static> FlavorMC for CompatFlavor<T> {}
 
 // There's not much performance difference between old RegistrySingle and RegistryMulti,
 // we just use RegistryMulti here since this is just for compatible reason.
@@ -139,7 +151,7 @@ pub mod spsc {
 
     macro_rules! init_share {
         ($flavor: expr) => {{
-            ChannelShared::new($flavor)
+            ChannelShared::new($flavor, RegistryMultiSend::new(), RegistryMultiRecv::new())
         }};
     }
 
@@ -214,7 +226,7 @@ pub mod mpsc {
 
     macro_rules! init_share {
         ($flavor: expr) => {{
-            ChannelShared::new($flavor)
+            ChannelShared::new($flavor, RegistryMultiSend::new(), RegistryMultiRecv::new())
         }};
     }
 
@@ -290,7 +302,7 @@ pub mod mpmc {
 
     macro_rules! init_share {
         ($flavor: expr) => {{
-            ChannelShared::new($flavor)
+            ChannelShared::new($flavor, RegistryMultiSend::new(), RegistryMultiRecv::new())
         }};
     }
 
