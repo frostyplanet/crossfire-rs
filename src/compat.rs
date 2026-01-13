@@ -46,7 +46,7 @@
 //! back to a big match table instead of simple comparison. This is the reason of performance regression.
 //!
 //! From the aspect of CPU:
-//! - I had tried a manual Vtable by puting method ptr inside AsyncTx/AsyncRx, which is ok on X86,
+//! - I had tried a manual Vtable by putting method ptr inside AsyncTx/AsyncRx, which is ok on X86,
 //! but Arm will have -50% penalty. It looks like Arm is poor on loading / caching function ptr.
 //! - Generic Arm CPU has overall poor performance (1/3 ~ 1/2) compared to mainstream x86_64, and
 //! bad at atomic CAS, a big match branch might be not so obvious than the positive effect from
@@ -55,12 +55,13 @@
 //! From the aspect of API usage:
 //! - There're already nice native select mechanisms on async ecology, we don't have to worry about the
 //! difference of receiver types, for flexibility.
-//! - For blocking context, it might be more common scenario to select from the same type of channels for efficience.
+//! - For blocking context, it might be more common scenario to select from the same type of channels for efficiency.
 //! - The crossbeam implementation of select is decouple from channel types and message type, which
 //! means the API is possible for crossfire too.
 
 use crate::flavor::{
-    flavor_dispatch, flavor_select_dispatch, Flavor, FlavorImpl, FlavorMC, FlavorMP,
+    flavor_dispatch, flavor_select_dispatch, queue_dispatch, Flavor, FlavorImpl, FlavorMC,
+    FlavorMP, Queue,
 };
 use crate::shared::*;
 pub use crate::{AsyncRxTrait, AsyncTxTrait, BlockingRxTrait, BlockingTxTrait};
@@ -68,7 +69,7 @@ use std::mem::MaybeUninit;
 
 /// Compatible flavor that wraps the Array and list type
 pub enum CompatFlavor<T> {
-    Array(crate::flavor::Array<T, true, true>),
+    Array(crate::flavor::Array<T>),
     List(crate::flavor::List<T>),
 }
 
@@ -80,9 +81,12 @@ macro_rules! wrap_compat {
         }
     };
 }
+impl<T: Send + Unpin + 'static> Queue for CompatFlavor<T> {
+    type Item = T;
+    queue_dispatch!(wrap_compat);
+}
 
 impl<T: Send + Unpin + 'static> FlavorImpl for CompatFlavor<T> {
-    type Item = T;
     flavor_dispatch!(wrap_compat);
 }
 
@@ -110,7 +114,7 @@ fn new_array<T: Send + Unpin + 'static>(mut size: usize) -> CompatFlavor<T> {
     if size <= 1 {
         size = 1;
     }
-    CompatFlavor::<T>::Array(crate::flavor::Array::<T, true, true>::new(size))
+    CompatFlavor::<T>::Array(crate::flavor::Array::<T>::new(size))
 }
 
 pub type Tx<T> = crate::Tx<CompatFlavor<T>>;

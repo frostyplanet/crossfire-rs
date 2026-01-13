@@ -57,7 +57,7 @@
 //! ```
 
 use crate::flavor::Flavor;
-use crate::flavor::{FlavorImpl, FlavorNew, FlavorSelect, Token};
+use crate::flavor::{FlavorImpl, FlavorNew, FlavorSelect, Queue, Token};
 use crate::shared::ChannelShared;
 use crate::SenderType;
 use core::mem::MaybeUninit;
@@ -66,8 +66,18 @@ use std::sync::Arc;
 /// an flavor type can never receive any message
 pub struct Null();
 
-impl FlavorImpl for Null {
+impl Queue for Null {
     type Item = ();
+
+    #[inline(always)]
+    fn pop(&self) -> Option<()> {
+        None
+    }
+
+    #[inline(always)]
+    fn push(&self, _item: ()) -> Result<(), ()> {
+        unreachable!();
+    }
 
     #[inline(always)]
     fn len(&self) -> usize {
@@ -88,7 +98,9 @@ impl FlavorImpl for Null {
     fn is_empty(&self) -> bool {
         true
     }
+}
 
+impl FlavorImpl for Null {
     #[inline(always)]
     fn try_send(&self, _item: &MaybeUninit<()>) -> bool {
         // work as an /dev/null, although normally init with CloseHandle which don't have send() method

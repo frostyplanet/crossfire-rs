@@ -1,4 +1,4 @@
-use super::{FlavorImpl, FlavorNew, FlavorSelect, Token};
+use super::{FlavorImpl, FlavorNew, FlavorSelect, Queue, Token};
 use core::cell::UnsafeCell;
 use core::mem::{needs_drop, MaybeUninit};
 use crossbeam_utils::CachePadded;
@@ -8,19 +8,19 @@ use std::sync::atomic::{
     Ordering::{self, Acquire, Relaxed, SeqCst},
 };
 
-/// This is a spsc without stamp, allow replace() on the sender side.
+/// This is a spsc version of `One` without stamp.
 ///
 /// The sender side allow to push and drop it's own previous value, if receivers had not consumed it.
 pub type OneSpsc<T> = OneSp<T, false>;
 
-/// This is a spmc without stamp, allow replace() on the sender side.
+/// This is a spmc version of `One` without stamp, allow replace() on the sender side.
 ///
 /// The sender side allow to push and drop it's own previous value, if receivers had not consumed it.
 ///
-/// NOTE: use lockless technique simular to OFLIT, miri will probably report data racing issue,
-/// but it's intendtional.
-/// This module cannot not seperate pop into start_read/read interface,
-/// so it cannot implment Flavor interface.
+/// NOTE: use lockless technique inspired by the OFLIT paper, miri will probably report data racing issue,
+/// but it's intentional.
+/// This module cannot not separate pop into start_read/read interface,
+/// so it cannot implement Flavor interface.
 pub type OneSpmc<T> = OneSp<T, true>;
 
 pub struct OneSp<T, const MC: bool> {
@@ -68,16 +68,6 @@ impl<T, const MC: bool> OneSp<T, MC> {
     }
 
     #[inline]
-    pub fn push(&self, value: T) -> Result<(), T> {
-        let item = MaybeUninit::new(value);
-        if self.try_push(item.as_ptr(), Ordering::SeqCst) {
-            Ok(())
-        } else {
-            Err(unsafe { item.assume_init_read() })
-        }
-    }
-
-    #[inline]
     fn try_push(&self, value: *const T, order: Ordering) -> bool {
         let pos = self.pos.load(order);
         let (head, tail) = Self::unpack(pos);
@@ -109,11 +99,6 @@ impl<T, const MC: bool> Drop for OneSp<T, MC> {
 
 impl<T: Send + 'static> OneSpsc<T> {
     #[inline(always)]
-    pub fn pop(&self) -> Option<T> {
-        self._pop(Ordering::SeqCst)
-    }
-
-    #[inline(always)]
     fn _pop(&self, order: Ordering) -> Option<T> {
         if let Some(tail) = self.start_read(order) {
             let index = (tail & 0x1) as usize;
@@ -138,6 +123,40 @@ impl<T: Send + 'static> OneSpsc<T> {
             debug_assert_eq!(head.wrapping_add(1), tail);
             return Some(tail);
         }
+    }
+}
+
+struct Slot<T> {
+    value: UnsafeCell<MaybeUninit<T>>,
+}
+
+impl<T> Slot<T> {
+    #[inline]
+    fn init() -> Self {
+        Self { value: UnsafeCell::new(MaybeUninit::uninit()) }
+    }
+
+    #[inline(always)]
+    fn write(&self, value: *const T) {
+        unsafe { (*self.value.get()).write(ptr::read(value)) };
+    }
+
+    #[inline(always)]
+    fn read_into(&self, dest: *mut T) {
+        unsafe {
+            let src_ptr = (*self.value.get()).as_ptr();
+            ptr::copy_nonoverlapping(src_ptr, dest, 1);
+        }
+    }
+
+    #[inline(always)]
+    fn read(&self) -> T {
+        unsafe { self.value.get().read().assume_init() }
+    }
+
+    #[inline(always)]
+    fn drop(&self) {
+        unsafe { self.value.get().read().assume_init_drop() };
     }
 }
 
@@ -187,11 +206,6 @@ impl<T> OneSpmc<T> {
     }
 
     #[inline(always)]
-    pub fn pop(&self) -> Option<T> {
-        self._pop(Ordering::SeqCst)
-    }
-
-    #[inline(always)]
     fn _pop(&self, order: Ordering) -> Option<T> {
         let mut pos = self.pos.load(order);
         compiler_fence(Ordering::SeqCst);
@@ -219,41 +233,7 @@ impl<T> OneSpmc<T> {
     }
 }
 
-struct Slot<T> {
-    value: UnsafeCell<MaybeUninit<T>>,
-}
-
-impl<T> Slot<T> {
-    #[inline]
-    fn init() -> Self {
-        Self { value: UnsafeCell::new(MaybeUninit::uninit()) }
-    }
-
-    #[inline(always)]
-    fn write(&self, value: *const T) {
-        unsafe { (*self.value.get()).write(ptr::read(value)) };
-    }
-
-    #[inline(always)]
-    fn read_into(&self, dest: *mut T) {
-        unsafe {
-            let src_ptr = (*self.value.get()).as_ptr();
-            ptr::copy_nonoverlapping(src_ptr, dest, 1);
-        }
-    }
-
-    #[inline(always)]
-    fn read(&self) -> T {
-        unsafe { self.value.get().read().assume_init() }
-    }
-
-    #[inline(always)]
-    fn drop(&self) {
-        unsafe { self.value.get().read().assume_init_drop() };
-    }
-}
-
-impl<T: Send + Unpin + 'static> FlavorImpl for OneSpsc<T> {
+impl<T: Send + Unpin + 'static> Queue for OneSpmc<T> {
     type Item = T;
 
     #[inline(always)]
@@ -280,6 +260,66 @@ impl<T: Send + Unpin + 'static> FlavorImpl for OneSpsc<T> {
         !Self::is_empty(self)
     }
 
+    #[inline(always)]
+    fn pop(&self) -> Option<T> {
+        self._pop(Ordering::SeqCst)
+    }
+
+    #[inline]
+    fn push(&self, value: T) -> Result<(), T> {
+        let item = MaybeUninit::new(value);
+        if self.try_push(item.as_ptr(), Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(unsafe { item.assume_init_read() })
+        }
+    }
+}
+
+impl<T: Send + Unpin + 'static> Queue for OneSpsc<T> {
+    type Item = T;
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        if self.is_empty() {
+            0
+        } else {
+            1
+        }
+    }
+
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        Self::is_empty(self)
+    }
+
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        Some(1)
+    }
+
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        !Self::is_empty(self)
+    }
+
+    #[inline(always)]
+    fn pop(&self) -> Option<T> {
+        self._pop(Ordering::SeqCst)
+    }
+
+    #[inline]
+    fn push(&self, value: T) -> Result<(), T> {
+        let item = MaybeUninit::new(value);
+        if self.try_push(item.as_ptr(), Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(unsafe { item.assume_init_read() })
+        }
+    }
+}
+
+impl<T: Send + Unpin + 'static> FlavorImpl for OneSpsc<T> {
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         self.try_push(item.as_ptr(), Acquire)

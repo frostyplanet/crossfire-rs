@@ -47,8 +47,8 @@ use crate::async_tx::*;
 use crate::blocking_rx::*;
 use crate::blocking_tx::*;
 use crate::flavor::{
-    flavor_dispatch, flavor_select_dispatch, Flavor, FlavorBounded, FlavorImpl, FlavorMC, FlavorMP,
-    FlavorNew, FlavorWrap,
+    flavor_dispatch, flavor_select_dispatch, queue_dispatch, Flavor, FlavorBounded, FlavorImpl,
+    FlavorMC, FlavorMP, FlavorNew, FlavorWrap, Queue,
 };
 use crate::null::CloseHandle;
 use crate::shared::*;
@@ -63,7 +63,7 @@ pub type One<T> = FlavorWrap<crate::flavor::One<T>, RegistryMultiSend<T>, Regist
 
 /// Flavor Type for bounded MPMC channel
 pub enum Array<T> {
-    Array(crate::flavor::Array<T, true, true>),
+    Array(crate::flavor::Array<T>),
     One(crate::flavor::One<T>),
 }
 
@@ -73,7 +73,7 @@ impl<T: Send + Unpin + 'static> Array<T> {
         if size <= 1 {
             Self::One(crate::flavor::One::new())
         } else {
-            Self::Array(crate::flavor::Array::<T, true, true>::new(size))
+            Self::Array(crate::flavor::Array::<T>::new(size))
         }
     }
 }
@@ -90,8 +90,12 @@ macro_rules! wrap_array {
     };
 }
 
-impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
+impl<T: Send + Unpin + 'static> Queue for Array<T> {
     type Item = T;
+    queue_dispatch!(wrap_array);
+}
+
+impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
     flavor_dispatch!(wrap_array);
 }
 
@@ -115,7 +119,7 @@ impl<T: Send + Unpin + 'static> Flavor for Array<T> {
 ///
 /// Initialize sender and receiver types from a flavor type,
 /// you can let the compiler to infer the type according to return type signature.
-/// (the falvor might have diffrent new() method, but the rest is the same.
+/// (the falvor might have different new() method, but the rest is the same.
 /// # Examples
 ///
 /// ```rust
@@ -137,7 +141,7 @@ where
 ///
 /// Initialize sender and receiver types from a flavor type,
 /// you can let the compiler to infer the type according to return type signature.
-/// (the falvor might have diffrent new() method, but the rest is the same.
+/// (the falvor might have different new() method, but the rest is the same.
 ///
 /// # Examples
 ///

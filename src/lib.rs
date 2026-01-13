@@ -68,6 +68,8 @@
 //!
 //! ### Flavors
 //!
+//! The following lockless queues are expose in [flavor] module, and each one have type alias in spsc/mpsc/mpmc:
+//!
 //! - `List` (which use crossbeam `SegQueue`)
 //! - `Array` (which is an enum that wraps crossbeam `ArrayQueue`, and a `One` if init with size<=1)
 //!   - For a bounded channel, a 0 size case is not supported yet. (rewrite as 1 size).
@@ -115,8 +117,8 @@
 //!
 //! The benefit of using the SP / SC API is completely lockless waker registration, in exchange for a performance boost.
 //!
-//! The sender/receiver can use the `From` trait to **convert between blocking and async context
-//! counterparts**.
+//! The sender/receiver can use the **`From`** trait to convert between blocking and async context
+//! counterparts (refer to the [example](#example) below)
 //!
 //! ### Error types
 //!

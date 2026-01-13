@@ -4,13 +4,19 @@ use std::mem::MaybeUninit;
 use std::ops::Deref;
 
 mod array;
-pub(crate) use array::*;
+
+/// Which Equals to crossbeam_queue::ArrayQueue
+pub type Array<T> = array::Array<T, true, true>;
+/// crossbeam_queue::ArrayQueue tweaks for mpsc
+pub type ArrayMpsc<T> = array::Array<T, true, false>;
+/// crossbeam_queue::ArrayQueue tweaks for spsc
+pub type ArraySpsc<T> = array::Array<T, false, false>;
 mod list;
-pub(crate) use list::*;
+pub use list::*;
 mod one;
-pub(crate) use one::*;
+pub use one::*;
 mod one_spmc;
-pub(crate) use one_spmc::{OneSpmc, OneSpsc};
+pub use one_spmc::{OneSpmc, OneSpsc};
 
 /// Essential struct for select and read interface
 pub(crate) struct Token {
@@ -32,11 +38,14 @@ impl Default for Token {
     }
 }
 
-/// Internal flavor interface
-///
-/// It cannot be hidden. You don't need to import or use it
-pub trait FlavorImpl: Send + 'static {
+// The queue trait should be public because AsyncStream, AsyncRx ... all use it's associate type `Item`
+/// Trait for lockless queue, it's safe to use if you don't want the channel mechanisms
+pub trait Queue: Send + 'static {
     type Item: Send + 'static + Unpin;
+
+    fn pop(&self) -> Option<Self::Item>;
+
+    fn push(&self, item: Self::Item) -> Result<(), Self::Item>;
 
     fn len(&self) -> usize;
 
@@ -45,7 +54,10 @@ pub trait FlavorImpl: Send + 'static {
     fn is_full(&self) -> bool;
 
     fn is_empty(&self) -> bool;
+}
 
+/// Internal flavor interface
+pub(crate) trait FlavorImpl: Send + 'static + Queue {
     fn try_send(&self, item: &MaybeUninit<Self::Item>) -> bool;
 
     #[inline]
@@ -65,7 +77,7 @@ pub trait FlavorImpl: Send + 'static {
     }
 }
 
-pub(crate) trait FlavorSelect: FlavorImpl {
+pub(crate) trait FlavorSelect: Queue {
     /// Note: this is internal function, it does not check if the token has other result
     fn try_select(&self, final_check: bool) -> Option<Token>;
 
@@ -74,8 +86,18 @@ pub(crate) trait FlavorSelect: FlavorImpl {
 }
 
 // because enum_dispatch does not support associate type
-macro_rules! flavor_dispatch {
+macro_rules! queue_dispatch {
     ($wrap_method: ident)=>{
+        #[inline(always)]
+        fn pop(&self) -> Option<Self::Item> {
+            $wrap_method!(self, pop)
+        }
+
+        #[inline(always)]
+        fn push(&self, item: Self::Item) -> Result<(), Self::Item> {
+            $wrap_method!(self, push item)
+        }
+
         #[inline(always)]
         fn len(&self) -> usize {
             $wrap_method!(self, len)
@@ -95,7 +117,13 @@ macro_rules! flavor_dispatch {
         fn is_empty(&self) -> bool {
             $wrap_method!(self, is_empty)
         }
+    };
+}
+pub(super) use queue_dispatch;
 
+// because enum_dispatch does not support associate type
+macro_rules! flavor_dispatch {
+    ($wrap_method: ident)=>{
         #[inline(always)]
         fn try_send(&self, item: &MaybeUninit<Self::Item>) -> bool {
             $wrap_method!(self, try_send item)
@@ -162,6 +190,7 @@ pub trait FlavorBounded {
     fn new_with_bound(size: usize) -> Self;
 }
 
+/// A type wrapper for channel flavor
 pub struct FlavorWrap<F: FlavorImpl, S, R> {
     inner: F,
     _phan: PhantomData<fn(&S, &R)>,
@@ -235,10 +264,16 @@ where
     }
 }
 
-impl<F: FlavorImpl, R> FlavorMP for FlavorWrap<F, RegistryDummy, R> where R: RegistryRecv {}
-impl<T: Send + Unpin + 'static, F: FlavorImpl, R> FlavorMP
-    for FlavorWrap<F, RegistryMultiSend<T>, R>
+impl<F, R> FlavorMP for FlavorWrap<F, RegistryDummy, R>
 where
+    F: FlavorImpl,
+    R: RegistryRecv,
+{
+}
+impl<T, F, R> FlavorMP for FlavorWrap<F, RegistryMultiSend<T>, R>
+where
+    T: Send + Unpin + 'static,
+    F: FlavorImpl,
     R: RegistryRecv,
 {
 }
@@ -251,13 +286,22 @@ macro_rules! wrap_new_type {
     };
 }
 
-impl<F, S, R> FlavorImpl for FlavorWrap<F, S, R>
+impl<F, S, R> Queue for FlavorWrap<F, S, R>
 where
     F: FlavorImpl,
     S: RegistrySend<F::Item>,
     R: RegistryRecv,
 {
     type Item = F::Item;
+    queue_dispatch!(wrap_new_type);
+}
+
+impl<F, S, R> FlavorImpl for FlavorWrap<F, S, R>
+where
+    F: FlavorImpl,
+    S: RegistrySend<F::Item>,
+    R: RegistryRecv,
+{
     flavor_dispatch!(wrap_new_type);
 }
 
@@ -279,7 +323,7 @@ mod tests {
     fn print_flavor_size() {
         //        println!("Flavor size {}", size_of::<Flavor<usize>>());
         println!("one size {}", size_of::<One<usize>>());
-        println!("array size {}", size_of::<Array<usize, true, true>>());
+        println!("array size {}", size_of::<Array<usize>>());
         println!("list size {}", size_of::<List<usize>>());
     }
 }

@@ -1,4 +1,4 @@
-use super::{FlavorImpl, FlavorNew, FlavorSelect, Token};
+use super::{FlavorImpl, FlavorNew, FlavorSelect, Queue, Token};
 use crate::backoff::*;
 use core::cell::UnsafeCell;
 use core::mem::{needs_drop, MaybeUninit};
@@ -10,6 +10,12 @@ use core::sync::atomic::{
 use crossbeam_utils::CachePadded;
 
 /// A simplify ArrayQueue specialized for size=1
+///
+/// It contains two slots, allow sender and receiver works truly concurrent,
+/// while the buffer capacity is still 1.
+/// For one-sized queue, contention are higher than larger ArrayQueue, so it's better to use one atomic,
+/// which packs head & tail, to reduce the operation cost, and the stamps in the slot are guards to
+/// access the slot.
 pub struct One<T> {
     pos: CachePadded<AtomicU32>,
 
@@ -19,6 +25,51 @@ pub struct One<T> {
 
 unsafe impl<T: Send> Sync for One<T> {}
 unsafe impl<T: Send> Send for One<T> {}
+
+impl<T: Send + Unpin + 'static> Queue for One<T> {
+    type Item = T;
+
+    #[inline(always)]
+    fn pop(&self) -> Option<T> {
+        self._pop(Ordering::SeqCst)
+    }
+
+    #[inline(always)]
+    fn push(&self, item: T) -> Result<(), T> {
+        let _item = MaybeUninit::new(item);
+        if unsafe { self._try_push(SeqCst, _item.as_ptr(), Acquire).is_ok() } {
+            Ok(())
+        } else {
+            Err(unsafe { _item.assume_init_read() })
+        }
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        if self.is_full() {
+            1
+        } else {
+            0
+        }
+    }
+
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        Some(1)
+    }
+
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        !self.is_empty()
+    }
+
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        let pos = self.pos.load(SeqCst);
+        let (head, tail) = Self::unpack(pos);
+        head == tail
+    }
+}
 
 impl<T> One<T> {
     #[inline]
@@ -86,11 +137,6 @@ impl<T> One<T> {
                 }
             }
         }
-    }
-
-    #[inline(always)]
-    pub fn pop(&self) -> Option<T> {
-        self._pop(Ordering::SeqCst)
     }
 
     #[inline(always)]
@@ -170,34 +216,6 @@ impl<T> Drop for One<T> {
 }
 
 impl<T: Send + 'static + Unpin> FlavorImpl for One<T> {
-    type Item = T;
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        if self.is_full() {
-            1
-        } else {
-            0
-        }
-    }
-
-    #[inline(always)]
-    fn capacity(&self) -> Option<usize> {
-        Some(1)
-    }
-
-    #[inline(always)]
-    fn is_full(&self) -> bool {
-        !self.is_empty()
-    }
-
-    #[inline(always)]
-    fn is_empty(&self) -> bool {
-        let pos = self.pos.load(SeqCst);
-        let (head, tail) = Self::unpack(pos);
-        head == tail
-    }
-
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         // Will always double-check with is_full or try_send_oneshot()
@@ -210,12 +228,12 @@ impl<T: Send + 'static + Unpin> FlavorImpl for One<T> {
     }
 
     #[inline(always)]
-    fn try_recv(&self) -> Option<Self::Item> {
+    fn try_recv(&self) -> Option<T> {
         self._pop(Relaxed)
     }
 
     #[inline(always)]
-    fn try_recv_final(&self) -> Option<Self::Item> {
+    fn try_recv_final(&self) -> Option<T> {
         self._pop(SeqCst)
     }
 

@@ -1,7 +1,8 @@
-use super::{FlavorImpl, FlavorNew, FlavorSelect, Token};
+use super::{FlavorImpl, FlavorNew, FlavorSelect, Queue, Token};
 use crate::crossbeam::seg_queue::SegQueue;
 use std::mem::MaybeUninit;
 
+/// Which equals to crossbeam_queue::SeqQueue
 pub struct List<T>(SegQueue<T>);
 
 impl<T> List<T> {
@@ -11,8 +12,19 @@ impl<T> List<T> {
     }
 }
 
-impl<T: Send + Unpin + 'static> FlavorImpl for List<T> {
+impl<T: Send + Unpin + 'static> Queue for List<T> {
     type Item = T;
+
+    #[inline(always)]
+    fn pop(&self) -> Option<T> {
+        self.0.pop()
+    }
+
+    #[inline(always)]
+    fn push(&self, item: T) -> Result<(), T> {
+        self.0.push(item);
+        Ok(())
+    }
 
     #[inline(always)]
     fn len(&self) -> usize {
@@ -33,9 +45,11 @@ impl<T: Send + Unpin + 'static> FlavorImpl for List<T> {
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+}
 
+impl<T: Send + Unpin + 'static> FlavorImpl for List<T> {
     #[inline(always)]
-    fn try_send(&self, item: &MaybeUninit<Self::Item>) -> bool {
+    fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         self.0.push(unsafe { item.assume_init_read() });
         true
     }

@@ -1,4 +1,4 @@
-use super::{FlavorImpl, FlavorSelect, Token};
+use super::{FlavorImpl, FlavorSelect, Queue, Token};
 use crate::crossbeam::array_queue::ArrayQueue;
 use std::mem::MaybeUninit;
 
@@ -14,17 +14,22 @@ impl<T, const MP: bool, const MC: bool> Array<T, MP, MC> {
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for Array<T, MP, MC> {
+impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Queue for Array<T, MP, MC> {
     type Item = T;
 
     #[inline(always)]
-    fn len(&self) -> usize {
-        self.0.len()
+    fn pop(&self) -> Option<T> {
+        self.0.pop(true)
     }
 
     #[inline(always)]
-    fn capacity(&self) -> Option<usize> {
-        Some(self.0.capacity())
+    fn push(&self, item: T) -> Result<(), T> {
+        let _item = MaybeUninit::new(item);
+        if unsafe { self.0.push_with_ptr(_item.as_ptr()) } {
+            Ok(())
+        } else {
+            Err(unsafe { _item.assume_init_read() })
+        }
     }
 
     #[inline(always)]
@@ -38,12 +43,24 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for A
     }
 
     #[inline(always)]
-    fn try_send(&self, item: &MaybeUninit<Self::Item>) -> bool {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        Some(self.0.capacity())
+    }
+}
+
+impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for Array<T, MP, MC> {
+    #[inline(always)]
+    fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         return unsafe { self.0.push_with_ptr(item.as_ptr()) };
     }
 
     #[inline(always)]
-    fn try_send_oneshot(&self, item: *const Self::Item) -> Option<bool> {
+    fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
         return unsafe { self.0.try_push_oneshot(item) };
     }
 

@@ -40,11 +40,11 @@ use crate::async_tx::*;
 use crate::blocking_rx::*;
 use crate::blocking_tx::*;
 use crate::flavor::{
-    flavor_dispatch, flavor_select_dispatch, Flavor, FlavorBounded, FlavorImpl, FlavorNew,
-    FlavorWrap,
+    flavor_dispatch, flavor_select_dispatch, queue_dispatch, Flavor, FlavorBounded, FlavorImpl,
+    FlavorNew, FlavorWrap, Queue,
 };
 use crate::shared::*;
-use crate::{NotClonable, ReceiverType, SenderType};
+use crate::{NotCloneable, ReceiverType, SenderType};
 use std::mem::MaybeUninit;
 
 /// Flavor Type for unbounded SPSC channel
@@ -55,7 +55,7 @@ pub type One<T> = FlavorWrap<crate::flavor::OneSpsc<T>, RegistrySingle, Registry
 
 /// Flavor Type for bounded SPSC channel
 pub enum Array<T> {
-    Array(crate::flavor::Array<T, false, false>),
+    Array(crate::flavor::ArraySpsc<T>),
     One(crate::flavor::OneSpsc<T>),
 }
 
@@ -65,7 +65,7 @@ impl<T: Send + Unpin + 'static> Array<T> {
         if size <= 1 {
             Self::One(crate::flavor::OneSpsc::new())
         } else {
-            Self::Array(crate::flavor::Array::<T, false, false>::new(size))
+            Self::Array(crate::flavor::ArraySpsc::<T>::new(size))
         }
     }
 }
@@ -79,8 +79,12 @@ macro_rules! wrap_array {
     };
 }
 
-impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
+impl<T: Send + Unpin + 'static> Queue for Array<T> {
     type Item = T;
+    queue_dispatch!(wrap_array);
+}
+
+impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
     flavor_dispatch!(wrap_array);
 }
 
@@ -104,7 +108,7 @@ impl<T: Send + Unpin + 'static> Flavor for Array<T> {
 ///
 /// Initialize sender and receiver types from a flavor type,
 /// you can let the compiler to infer the type according to return type signature.
-/// (the falvor might have diffrent new() method, but the rest is the same.
+/// (the falvor might have different new() method, but the rest is the same.
 /// # Examples
 ///
 /// ```rust
@@ -116,8 +120,8 @@ impl<T: Send + Unpin + 'static> Flavor for Array<T> {
 pub fn new<F, S, R>() -> (S, R)
 where
     F: Flavor + FlavorNew,
-    S: SenderType<Flavor = F> + NotClonable,
-    R: ReceiverType<Flavor = F> + NotClonable,
+    S: SenderType<Flavor = F> + NotCloneable,
+    R: ReceiverType<Flavor = F> + NotCloneable,
 {
     build::<F, S, R>(F::new())
 }
@@ -126,7 +130,7 @@ where
 ///
 /// Initialize sender and receiver types from a flavor type,
 /// you can let the compiler to infer the type according to return type signature.
-/// (the falvor might have diffrent new() method, but the rest is the same.
+/// (the falvor might have different new() method, but the rest is the same.
 /// # Examples
 ///
 /// ```rust
@@ -138,8 +142,8 @@ where
 pub fn build<F, S, R>(flavor: F) -> (S, R)
 where
     F: Flavor,
-    S: SenderType<Flavor = F> + NotClonable,
-    R: ReceiverType<Flavor = F> + NotClonable,
+    S: SenderType<Flavor = F> + NotCloneable,
+    R: ReceiverType<Flavor = F> + NotCloneable,
 {
     let shared = ChannelShared::new(flavor, F::Send::new(), F::Recv::new());
     (S::new(shared.clone()), R::new(shared))
@@ -149,7 +153,7 @@ where
 fn unbounded_new<T, R>() -> (Tx<List<T>>, R)
 where
     T: Send + 'static + Unpin,
-    R: ReceiverType<Flavor = List<T>> + NotClonable,
+    R: ReceiverType<Flavor = List<T>> + NotCloneable,
 {
     build::<List<T>, Tx<List<T>>, R>(List::<T>::from_inner(crate::flavor::List::<T>::new()))
 }
@@ -173,8 +177,8 @@ where
 fn bounded_new<T, S, R>(size: usize) -> (S, R)
 where
     T: Send + 'static + Unpin,
-    S: SenderType<Flavor = Array<T>> + NotClonable,
-    R: ReceiverType<Flavor = Array<T>> + NotClonable,
+    S: SenderType<Flavor = Array<T>> + NotCloneable,
+    R: ReceiverType<Flavor = Array<T>> + NotCloneable,
 {
     build::<Array<T>, S, R>(Array::<T>::new(size))
 }
