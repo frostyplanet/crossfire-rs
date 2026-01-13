@@ -74,6 +74,7 @@ impl<F: Flavor> fmt::Display for AsyncTx<F> {
 unsafe impl<F: Flavor> Send for AsyncTx<F> {}
 
 impl<F: Flavor> Drop for AsyncTx<F> {
+    #[inline(always)]
     fn drop(&mut self) {
         self.shared.close_tx();
     }

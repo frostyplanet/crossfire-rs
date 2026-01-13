@@ -459,8 +459,42 @@ fn test_select_pressure(setup_log: (), #[case] producers: usize) {
     for h in handlers {
         h.join().unwrap();
     }
-
     assert_eq!(count, total_messages);
+}
+
+#[logfn]
+#[rstest]
+fn test_select_null(setup_log: ()) {
+    let (tx, rx) = mpmc::bounded_blocking::<i32>(10);
+    let (stop_tx, stop_rx) = mpmc::Null::new().new_blocking();
+
+    let mut select = Select::new();
+    select.add(&rx);
+    select.add(&stop_rx);
+
+    let h = thread::spawn(move || {
+        for i in 0..10 {
+            tx.send(i).unwrap();
+        }
+        thread::sleep(Duration::from_millis(50));
+        drop(stop_tx);
+    });
+
+    let mut count = 0;
+    loop {
+        let res = select.select().unwrap();
+        if res == rx {
+            if let Ok(_) = rx.read_select(res) {
+                count += 1;
+            }
+        } else if res == stop_rx {
+            if stop_rx.read_select(res).is_err() {
+                break;
+            }
+        }
+    }
+    h.join().unwrap();
+    assert_eq!(count, 10);
 }
 
 #[logfn]

@@ -241,6 +241,7 @@ pub use async_rx::*;
 
 #[cfg(feature = "compat")]
 pub mod compat;
+pub mod null;
 pub mod sink;
 pub mod stream;
 

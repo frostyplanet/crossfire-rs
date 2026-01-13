@@ -64,6 +64,7 @@ impl<F: Flavor> fmt::Display for Rx<F> {
 }
 
 impl<F: Flavor> Drop for Rx<F> {
+    #[inline(always)]
     fn drop(&mut self) {
         self.shared.close_rx();
     }

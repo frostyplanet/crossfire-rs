@@ -9,6 +9,8 @@ mod test_blocking_context;
 #[cfg(test)]
 mod test_oneshot;
 #[cfg(test)]
+mod test_select_async;
+#[cfg(test)]
 mod test_select_blocking;
 
 // we don't want to import smol-timeout

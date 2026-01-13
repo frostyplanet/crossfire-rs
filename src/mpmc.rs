@@ -50,6 +50,7 @@ use crate::flavor::{
     flavor_dispatch, flavor_select_dispatch, Flavor, FlavorBounded, FlavorImpl, FlavorMC, FlavorMP,
     FlavorNew, FlavorWrap,
 };
+use crate::null::CloseHandle;
 use crate::shared::*;
 use crate::{ReceiverType, SenderType};
 use std::mem::MaybeUninit;
@@ -242,4 +243,19 @@ where
     T: Send + 'static + Unpin,
 {
     bounded_new(size)
+}
+
+/// Flavor type for close notification, refer to [crate::null] for usage
+pub type Null = FlavorWrap<crate::null::Null, RegistryDummy, RegistryMultiRecv>;
+
+impl Null {
+    #[inline(always)]
+    pub fn new_blocking(&self) -> (CloseHandle<Null>, MRx<Null>) {
+        new()
+    }
+
+    #[inline(always)]
+    pub fn new_async(self) -> (CloseHandle<Null>, MAsyncRx<Null>) {
+        new()
+    }
 }
