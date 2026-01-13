@@ -2,7 +2,7 @@ use crate::flavor::FlavorMP;
 use crate::sink::AsyncSink;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
-use crate::{shared::*, trace_log, MTx, NotClonable, SenderType, Tx};
+use crate::{shared::*, trace_log, MTx, NotCloneable, SenderType, Tx};
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -765,7 +765,7 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for AsyncTx<F> {
     }
 }
 
-impl<F: Flavor> NotClonable for AsyncTx<F> {}
+impl<F: Flavor> NotCloneable for AsyncTx<F> {}
 
 impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMP> SenderType for MAsyncTx<F> {
     type Flavor = F;

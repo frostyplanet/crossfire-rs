@@ -3,7 +3,7 @@ use crate::select::SelectResult;
 use crate::stream::AsyncStream;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
-use crate::{shared::*, trace_log, MRx, NotClonable, ReceiverType, Rx};
+use crate::{shared::*, trace_log, MRx, NotCloneable, ReceiverType, Rx};
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -762,7 +762,7 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for AsyncRx<F>
     }
 }
 
-impl<F: Flavor> NotClonable for AsyncRx<F> {}
+impl<F: Flavor> NotCloneable for AsyncRx<F> {}
 
 impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMC> ReceiverType for MAsyncRx<F> {
     type Flavor = F;

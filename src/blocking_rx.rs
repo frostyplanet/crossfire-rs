@@ -1,7 +1,7 @@
 use crate::backoff::*;
 use crate::flavor::{FlavorMC, FlavorSelect};
 use crate::select::SelectResult;
-use crate::{shared::*, trace_log, AsyncRx, MAsyncRx, NotClonable, ReceiverType};
+use crate::{shared::*, trace_log, AsyncRx, MAsyncRx, NotCloneable, ReceiverType};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -528,7 +528,7 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for Rx<F> {
     }
 }
 
-impl<F: Flavor> NotClonable for Rx<F> {}
+impl<F: Flavor> NotCloneable for Rx<F> {}
 
 impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMC> ReceiverType for MRx<F> {
     type Flavor = F;

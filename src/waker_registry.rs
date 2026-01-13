@@ -454,7 +454,7 @@ impl<P: Copy> RegistryMulti<P> {
     /// Call when waker is cancelled
     #[inline(always)]
     fn _clear_wakers(&self, old_waker: &ArcWaker<P>, oneshot: bool) {
-        // Don't need acurate, it's optional
+        // Don't need accurate, it's optional
         if self.state.load(Ordering::Acquire) & MULTI_HAS_WAKER == 0 {
             trace_log!("{}: skip", self._tag);
             return;
@@ -522,7 +522,7 @@ impl<P: Copy> RegistryMulti<P> {
 
     #[inline(always)]
     fn _cache_waker(_o_waker: Option<ArcWaker<P>>, _cache: &WakerCache<P>) {
-        // XXX: skip cache for now, untill we find out miri report of race
+        // XXX: skip cache for now, until we find out miri report of race
         //if let Some(waker) = o_waker {
         //    if waker.get_state() >= WakerState::Woken as u8 {
         //        cache.push(waker);
@@ -783,7 +783,7 @@ impl RegistryRecv for SelectWakerWrapper {
 
 pub(crate) struct SelectWaker {
     cell: WeakCell<WakerInner<()>>,
-    // does not need to be corrent, just a hint for the try_select
+    // does not need to be correct, just a hint for the try_select
     hint: AtomicUsize,
     o_waker: UnsafeCell<Option<ArcWaker<()>>>,
     // For multiplex, not for select

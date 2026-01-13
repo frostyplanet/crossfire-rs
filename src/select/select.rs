@@ -56,7 +56,7 @@ use std::time::{Duration, Instant};
 /// - Use [read_select](crate::Rx::read_select) to handle [SelectResult]. (**Safety**: If `SelectResult`
 ///  dropped without processed, will result in message leak/hang.)
 /// - Although the `Select` object has a lifecycle and should live inside a function scope, it can be reused in a loop.
-/// - On drop it will automatically cancel all registeration.
+/// - On drop it will automatically cancel all registration.
 ///
 /// ## Example
 ///
@@ -368,7 +368,7 @@ impl<'a> std::fmt::Debug for Select<'a> {
 
 struct RecvHandle<'a> {
     shared: &'a dyn SelectHandle,
-    // If multi is true, the registeration is persistent until cancel
+    // If multi is true, the registration is persistent until cancel
     registered: bool,
     // for validate against unsafe usage
     channel: *const u8,

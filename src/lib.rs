@@ -254,6 +254,7 @@
 //! ```
 
 #[allow(private_bounds)]
+/// lockless queue implementation and channel flavor traits
 pub mod flavor;
 mod shared;
 pub use shared::ChannelShared;
@@ -337,4 +338,4 @@ pub trait ReceiverType: AsRef<ChannelShared<Self::Flavor>> {
     fn new(shared: Arc<ChannelShared<Self::Flavor>>) -> Self;
 }
 
-pub trait NotClonable {}
+pub trait NotCloneable {}

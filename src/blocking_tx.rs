@@ -1,6 +1,6 @@
 use crate::backoff::*;
 use crate::flavor::FlavorMP;
-use crate::{shared::*, trace_log, AsyncTx, MAsyncTx, NotClonable, SenderType};
+use crate::{shared::*, trace_log, AsyncTx, MAsyncTx, NotCloneable, SenderType};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -579,7 +579,7 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for Tx<F> {
     }
 }
 
-impl<F: Flavor> NotClonable for Tx<F> {}
+impl<F: Flavor> NotCloneable for Tx<F> {}
 
 impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMP> SenderType for MTx<F> {
     type Flavor = F;

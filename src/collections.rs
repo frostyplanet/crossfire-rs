@@ -115,7 +115,7 @@ impl<T> WeakCell<T> {
     //// it is allow to fail, with only one shot and weak Ops
     #[inline(always)]
     pub fn clear(&self) -> bool {
-        // Don't need acurate, it's optional
+        // Don't need accurate, it's optional
         let v = self.ptr.load(Ordering::Acquire);
         if v == ptr::null_mut() {
             return false;
