@@ -206,6 +206,7 @@ impl<T> SegQueue<T> {
     }
 
     /// Pushes back an element to the tail.
+    #[inline(always)]
     pub fn push(&self, value: T) {
         let backoff = Backoff::new();
         let mut tail = self.tail.index.load(Ordering::Acquire);
@@ -288,7 +289,7 @@ impl<T> SegQueue<T> {
 
     #[inline(always)]
     pub fn start_read(&self) -> Option<Token> {
-        if let Some((block, offset)) = self._pop() {
+        if let Some((block, offset)) = self._pop::<false>() {
             Some(Token::new(block as *const u8, offset))
         } else {
             None
@@ -296,8 +297,8 @@ impl<T> SegQueue<T> {
     }
 
     #[inline(always)]
-    pub fn pop(&self) -> Option<T> {
-        if let Some((block, offset)) = self._pop() {
+    pub fn pop<const FINAL: bool>(&self) -> Option<T> {
+        if let Some((block, offset)) = self._pop::<FINAL>() {
             Some(self._read(block, offset))
         } else {
             None
@@ -305,9 +306,18 @@ impl<T> SegQueue<T> {
     }
 
     #[inline(always)]
-    fn _pop(&self) -> Option<(*mut Block<T>, usize)> {
+    fn _pop<const FINAL: bool>(&self) -> Option<(*mut Block<T>, usize)> {
         let backoff = Backoff::new();
-        let mut head = self.head.index.load(Ordering::Acquire);
+        let mut head;
+        if FINAL {
+            head = self.head.index.load(Ordering::SeqCst);
+            let tail = self.tail.index.load(Ordering::SeqCst);
+            if head >> SHIFT == tail >> SHIFT {
+                return None;
+            }
+        } else {
+            head = self.head.index.load(Ordering::Acquire);
+        }
         let mut block = self.head.block.load(Ordering::Acquire);
 
         loop {
@@ -404,6 +414,7 @@ impl<T> SegQueue<T> {
     }
 
     /// Returns `true` if the queue is empty.
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         let head = self.head.index.load(Ordering::SeqCst);
         let tail = self.tail.index.load(Ordering::SeqCst);
@@ -448,6 +459,7 @@ impl<T> SegQueue<T> {
 }
 
 impl<T> Drop for SegQueue<T> {
+    #[inline]
     fn drop(&mut self) {
         let mut head = *self.head.index.get_mut();
         let mut tail = *self.tail.index.get_mut();
