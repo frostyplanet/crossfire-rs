@@ -1,0 +1,44 @@
+name: miri-dev-log
+
+on:
+  workflow_dispatch:
+  schedule: [cron: "20 */6 * * *"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test_tokio:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+      with:
+          ref: dev
+
+    - name: install miri
+      run:  rustup component add --toolchain nightly-x86_64-unknown-linux-gnu miri
+
+    - name: Run miri tests with log (tokio multi thread)
+      run: cd test-suite; scripts/miri.sh --features trace_log,tokio
+
+    - name: collect log
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v4
+      with:
+          name: crossfire_miri_tokio_multithread
+          path: /tmp/crossfire_miri.log
+
+    - name: Run miri tests without log (tokio multi thread)
+      run: cd test-suite; scripts/miri.sh
+
+    - name: Run miri tests with log (tokio current thread)
+      run: cd test-suite; SINGLE_THREAD_RUNTIME=1 scripts/miri.sh --features trace_log,tokio
+
+    - name: collect log
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v4
+      with:
+          name: crossfire_miri
+          path: /tmp/crossfire_miri.log

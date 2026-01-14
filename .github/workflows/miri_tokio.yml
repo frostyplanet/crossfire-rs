@@ -18,16 +18,6 @@ jobs:
     - name: install miri
       run:  rustup component add --toolchain nightly-x86_64-unknown-linux-gnu miri
 
-    - name: Run miri tests with log (tokio multi thread)
-      run: cd test-suite; WORKFLOW=1 scripts/miri.sh --features trace_log,tokio
-
-    - name: collect log
-      if: ${{ failure() }}
-      uses: actions/upload-artifact@v4
-      with:
-          name: crossfire_miri_tokio_multithread
-          path: /tmp/crossfire_miri.log
-
     - name: Run miri tests without log (tokio multi thread)
       run: cd test-suite; WORKFLOW=1 scripts/miri.sh
 
