@@ -1,5 +1,4 @@
-#[allow(dead_code)]
 pub mod array_queue;
+pub mod array_queue_spsc;
 pub mod err;
-#[allow(dead_code)]
 pub mod seg_queue;
