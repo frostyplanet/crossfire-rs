@@ -292,6 +292,26 @@ impl<P> RegistryMultiInner<P> {
     fn new() -> Self {
         Self { queue: VecDeque::with_capacity(32), selectors: Vec::with_capacity(32), seq: 0 }
     }
+
+    // it's better to use non-atomic than fetch_XXX
+    #[inline(always)]
+    fn check_select(&self) -> u8 {
+        if self.selectors.is_empty() {
+            0
+        } else {
+            MULTI_HAS_SELECT
+        }
+    }
+
+    // it's better to use non-atomic than fetch_XXX
+    #[inline(always)]
+    fn check_waker(&self) -> u8 {
+        if self.queue.is_empty() {
+            0
+        } else {
+            MULTI_HAS_WAKER
+        }
+    }
 }
 
 const MULTI_EMPTY: u8 = 0;
@@ -306,11 +326,6 @@ pub struct RegistryMulti<P> {
 
 impl<P: Copy> RegistryMulti<P> {
     #[inline(always)]
-    fn is_empty(&self) -> bool {
-        self.state.load(Ordering::Acquire) == MULTI_EMPTY
-    }
-
-    #[inline(always)]
     fn reg_waker(&self, waker: &ArcWaker<P>) {
         let weak = waker.weak();
         {
@@ -319,7 +334,7 @@ impl<P: Copy> RegistryMulti<P> {
             guard.seq = seq;
             waker.set_seq(seq);
             if guard.queue.is_empty() {
-                self.state.fetch_or(MULTI_HAS_WAKER, Ordering::SeqCst);
+                self.state.store(guard.check_select() | MULTI_HAS_WAKER, Ordering::SeqCst);
             }
             guard.queue.push_back(weak);
         }
@@ -392,33 +407,71 @@ impl<P: Copy> RegistryMulti<P> {
         }
     }
 
+    /// If trigger all selector while not empty.
+    /// return Some((waker, again))
+    /// if there's more waker after pop_first, again=true
     #[inline(always)]
-    fn pop(&self) -> Option<(ArcWaker<P>, u32)> {
-        if self.state.load(Ordering::SeqCst) == MULTI_EMPTY {
+    fn pop_first(&self) -> Option<(ArcWaker<P>, Option<u32>)> {
+        // This is a snapshot, it's safe to ignore the new situation after acquire lock
+        let flag = self.state.load(Ordering::SeqCst);
+        if flag == MULTI_EMPTY {
             return None;
         }
-        let mut res = None;
         {
             let mut guard = self.inner.lock();
-            for select in &guard.selectors {
-                select.wake();
+            if flag & MULTI_HAS_SELECT > 0 {
+                for select in &guard.selectors {
+                    select.wake();
+                }
             }
+            if flag & MULTI_HAS_WAKER > 0 {
+                loop {
+                    if let Some(weak) = guard.queue.pop_front() {
+                        if let Some(inner) = weak.upgrade() {
+                            if guard.queue.is_empty() {
+                                self.state.store(guard.check_select(), Ordering::SeqCst);
+                                return Some((ArcWaker::from_arc(inner), None));
+                            } else {
+                                return Some((ArcWaker::from_arc(inner), Some(guard.seq)));
+                            }
+                        }
+                    } else {
+                        // nothing changed, don't need to touch the state
+                        return None;
+                    }
+                }
+            }
+            // nothing changed, don't need to touch the state
+            return None;
+        }
+    }
+
+    /// ignore the selectors (since triggered in pop_first())
+    /// return the flags
+    #[inline(always)]
+    fn pop_again(&self) -> Option<ArcWaker<P>> {
+        // This is a snapshot, it's safe to ignore the new situation after acquire lock
+        let flag = self.state.load(Ordering::Acquire);
+        if flag == MULTI_EMPTY {
+            return None;
+        }
+        {
+            let mut guard = self.inner.lock();
             loop {
                 if let Some(weak) = guard.queue.pop_front() {
                     if let Some(inner) = weak.upgrade() {
-                        res = Some((ArcWaker::from_arc(inner), guard.seq));
                         if guard.queue.is_empty() {
-                            self.state.fetch_xor(MULTI_HAS_WAKER, Ordering::SeqCst);
+                            self.state.store(guard.check_select(), Ordering::SeqCst);
                         }
-                        break;
+                        return Some(ArcWaker::from_arc(inner));
                     }
                 } else {
-                    self.state.fetch_xor(MULTI_HAS_WAKER, Ordering::SeqCst);
-                    break;
+                    // might upgrade encounter weak previous loop
+                    self.state.store(guard.check_select(), Ordering::SeqCst);
+                    return None;
                 }
             }
         }
-        return res;
     }
 
     #[inline(always)]
@@ -426,25 +479,27 @@ impl<P: Copy> RegistryMulti<P> {
     where
         F: Fn(&ArcWaker<P>) -> WakeResult,
     {
-        if let Some((waker, mut last_seq)) = self.pop() {
+        if let Some((waker, _last_seq)) = self.pop_first() {
             let r = handle(&waker);
             trace_log!("wake {} {:?} {:?}", self._tag, waker, r);
             if r.is_done() {
                 return r;
             }
-            last_seq = last_seq.wrapping_sub(1);
-            while let Some((_waker, _)) = self.pop() {
-                let r = handle(&_waker);
-                trace_log!("wake {} {:?} {:?}", self._tag, _waker, r);
-                if r.is_done() {
-                    return r;
-                }
-                // The latest seq in RegistryMulti is always last_waker.get_seq() +1
-                // Because some waker (issued by sink / stream) might be INIT all the time,
-                // prevent to dead loop situation when they are wake up and re-register again.
-                if _waker.get_seq() >= last_seq {
-                    trace_log!("wake {} stop at {}", self._tag, last_seq);
-                    return WakeResult::Next;
+            if let Some(mut last_seq) = _last_seq {
+                last_seq = last_seq.wrapping_sub(1);
+                while let Some(_waker) = self.pop_again() {
+                    let r = handle(&_waker);
+                    trace_log!("wake {} {:?} {:?}", self._tag, _waker, r);
+                    if r.is_done() {
+                        return r;
+                    }
+                    // The latest seq in RegistryMulti is always last_waker.get_seq() +1
+                    // Because some waker (issued by sink / stream) might be INIT all the time,
+                    // prevent to dead loop situation when they are wake up and re-register again.
+                    if _waker.get_seq() >= last_seq {
+                        trace_log!("wake {} stop at {}", self._tag, last_seq);
+                        return WakeResult::Next;
+                    }
                 }
             }
         }
@@ -500,7 +555,7 @@ impl<P: Copy> RegistryMulti<P> {
         if let Some(weak) = guard.queue.pop_front() {
             if process!(guard, weak) {
                 if guard.queue.is_empty() {
-                    self.state.fetch_xor(MULTI_HAS_WAKER, Ordering::SeqCst);
+                    self.state.store(guard.check_select(), Ordering::SeqCst);
                 }
                 return;
             }
@@ -508,12 +563,13 @@ impl<P: Copy> RegistryMulti<P> {
                 if let Some(_weak) = guard.queue.pop_front() {
                     if process!(guard, _weak) {
                         if guard.queue.is_empty() {
-                            self.state.fetch_xor(MULTI_HAS_WAKER, Ordering::SeqCst);
+                            self.state.store(guard.check_select(), Ordering::SeqCst);
                         }
                         return;
                     }
                 } else {
-                    self.state.fetch_xor(MULTI_HAS_WAKER, Ordering::SeqCst);
+                    // might upgrade encounter weak previous loop
+                    self.state.store(guard.check_select(), Ordering::SeqCst);
                     return;
                 }
             }
@@ -617,7 +673,7 @@ impl<T: Send + Unpin + 'static> RegistrySend<T> for RegistryMultiSend<T> {
 
     #[inline(always)]
     fn use_direct_copy(&self) -> bool {
-        !self.is_empty()
+        self.state.load(Ordering::Relaxed) != MULTI_EMPTY
     }
 
     #[inline(always)]
@@ -711,8 +767,10 @@ impl RegistryRecv for RegistryMultiRecv {
     fn reg_select_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool {
         trace_log!("{}: reg for select", self._tag);
         let mut guard = self.inner.lock();
+        if guard.selectors.is_empty() {
+            self.state.store(guard.check_waker() | MULTI_HAS_SELECT, Ordering::SeqCst);
+        }
         guard.selectors.push(SelectWaker::to_wrapper(waker.clone(), channel_id));
-        self.state.fetch_or(MULTI_HAS_SELECT, Ordering::SeqCst);
         true
     }
 
@@ -724,7 +782,7 @@ impl RegistryRecv for RegistryMultiRecv {
             guard.selectors.remove(i);
         }
         if guard.selectors.is_empty() {
-            self.state.fetch_xor(MULTI_HAS_SELECT, Ordering::SeqCst);
+            self.state.store(guard.check_waker(), Ordering::SeqCst);
         }
     }
 }
@@ -870,34 +928,32 @@ impl SelectWaker {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
 
     use super::*;
-    use crate::locked_waker::Waker;
+
     use crate::waker::ArcWaker;
 
     #[test]
     fn print_waker_registry_size() {
         use std::mem::size_of;
-        println!("RegistrySend size {}", size_of::<RegistrySend<usize>>());
-        println!("RegistryRecv size {}", size_of::<RegistryRecv>());
-        println!("RegistrySingle size {}", size_of::<RegistrySingle<()>>());
-        println!("RegistryMulti size {}", size_of::<RegistryMulti<()>>());
+        println!("RegistryMultiSend<usize> size {}", size_of::<RegistryMultiSend<usize>>());
+        println!("RegistryMultiRecv size {}", size_of::<RegistryMultiRecv>());
+        println!("RegistrySingle size {}", size_of::<RegistrySingle>());
+        println!("RegistryMulti<()> size {}", size_of::<RegistryMultiRecv>());
     }
 
     #[test]
     fn test_registry_multi_pop() {
-        let reg = RegistryMulti::new();
+        let reg = RegistryMultiRecv::new();
 
         // test push
         let waker1 = ArcWaker::new_blocking(());
-        assert_eq!(reg.is_empty(), true);
+        assert_eq!(reg.len(), 0);
         reg.reg_waker(&waker1);
         assert_eq!(waker1.get_state(), WakerState::Init as u8);
         assert_eq!(waker1.get_seq(), 1);
-        assert_eq!(reg.is_empty(), false);
         assert_eq!(reg.len(), 1);
 
         let waker2 = ArcWaker::new_blocking(());
@@ -908,23 +964,22 @@ mod tests {
         assert_eq!(waker2.get_seq(), waker1.get_seq() + 1);
         assert_eq!(waker2.get_state(), WakerState::Waiting as u8);
 
-        if let Some((w, _)) = reg.pop() {
+        if let Some((w, seq)) = reg.pop_first() {
             assert!(w.wake() == WakeResult::Next);
+            assert!(seq.is_some());
         }
         assert_eq!(waker1.get_state(), WakerState::Woken as u8);
         assert_eq!(reg.len(), 1);
-        assert_eq!(reg.is_empty(), false);
-        if let Some((w, _)) = reg.pop() {
+        if let Some(w) = reg.pop_again() {
             assert!(w.wake() == WakeResult::Woken);
         }
         assert_eq!(waker2.get_state(), WakerState::Woken as u8);
         assert_eq!(reg.len(), 0);
-        assert_eq!(reg.is_empty(), true);
     }
 
     #[test]
     fn test_registry_multi_clear_waiting() {
-        let reg = RegistryMulti::new();
+        let reg = RegistryMultiRecv::new();
         // test seq
         let waker3 = ArcWaker::new_blocking(());
         reg.reg_waker(&waker3);
@@ -935,7 +990,7 @@ mod tests {
         assert_eq!(waker4.get_state(), WakerState::Init as u8);
         let num_workers = reg.len();
         // Because waker3 not woken up, waker4 is not clear
-        reg.clear_wakers(&waker4, false, "rx");
+        reg.clear_wakers(&waker4);
         assert_eq!(reg.len(), num_workers);
         for _ in 0..10 {
             let _waker = ArcWaker::new_blocking(());
@@ -947,7 +1002,7 @@ mod tests {
 
     #[test]
     fn test_registry_multi_clear_oneshot() {
-        let reg = RegistryMulti::new();
+        let reg = RegistryMultiRecv::new();
         // test seq
         let waker3 = ArcWaker::new_blocking(());
         reg.reg_waker(&waker3);
@@ -962,15 +1017,14 @@ mod tests {
         }
         let num_workers = reg.len();
         println!("clear waker4 oneshot seq {}", waker4.get_seq());
-        reg.clear_wakers(&waker4, true, "rx"); // oneshot only clear waker3
-        assert_eq!(reg.len(), num_workers - 1);
+        reg.cancel_waker(&mut Some(waker4));
+        assert_eq!(reg.len(), num_workers - 1); // Only waker3 is removed.
         assert!(waker3.get_state() >= WakerState::Woken as u8);
-        assert_eq!(waker4.get_state(), WakerState::Waiting as u8);
     }
 
     #[test]
     fn test_registry_multi_clear() {
-        let reg = RegistryMulti::new();
+        let reg = RegistryMultiRecv::new();
         // test seq
         let waker3 = ArcWaker::new_blocking(());
         reg.reg_waker(&waker3);
@@ -984,23 +1038,22 @@ mod tests {
         }
         let waker5 = ArcWaker::new_blocking(());
         reg.reg_waker(&waker5);
+        let _num_workers = reg.len(); // Keep for debugging context, though not used in assertion
         println!("clear waker5 seq={}", waker5.get_seq());
-        reg.clear_wakers(&waker5, false, "rx"); // clear waker4, waker5
-        assert_eq!(reg.len(), 0);
+        reg.clear_wakers(&waker5); // clear waker4, waker5
+        assert_eq!(reg.len(), 0); // Original assertion, seems to be the actual behavior
     }
 
     #[test]
     fn test_registry_multi_close() {
-        let reg = RegistryMulti::new();
+        let reg = RegistryMultiRecv::new();
         println!("test close");
         for _ in 0..10 {
             let _waker = ArcWaker::new_blocking(());
             reg.reg_waker(&_waker);
         }
-        assert_eq!(reg.is_empty(), false);
-        reg.close("rx");
+        assert!(reg.len() > 0);
+        reg.close();
         assert_eq!(reg.len(), 0);
-        assert_eq!(reg.is_empty(), true);
     }
 }
-*/
