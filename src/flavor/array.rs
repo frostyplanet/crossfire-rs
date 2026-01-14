@@ -1,4 +1,4 @@
-use super::{FlavorImpl, FlavorSelect, Queue, Token};
+use super::{FlavorBounded, FlavorImpl, FlavorSelect, Queue, Token};
 use crate::crossbeam::array_queue::ArrayQueue;
 use std::mem::MaybeUninit;
 
@@ -113,5 +113,12 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorSelect for
     #[inline(always)]
     fn read_with_token(&self, token: Token) -> T {
         self.0.read(token)
+    }
+}
+
+impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorBounded for Array<T, MP, MC> {
+    #[inline(always)]
+    fn new_with_bound(size: usize) -> Self {
+        Self::new(size)
     }
 }
