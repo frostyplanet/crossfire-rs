@@ -344,7 +344,15 @@ fn test_select_mixed_flavors(setup_log: ()) {
 #[rstest]
 #[case(1)]
 #[case(5)]
+#[case(10)]
 fn test_select_pressure(setup_log: (), #[case] producers: usize) {
+    #[cfg(miri)]
+    {
+        if producers > 5 {
+            println!("skip");
+            return;
+        }
+    }
     let (tx_list, rx_list) = mpmc::unbounded_blocking::<usize>();
     let (tx_array, rx_array) = mpmc::bounded_blocking::<usize>(100);
     let (tx_one, rx_one): (MTx<mpmc::One<usize>>, MRx<mpmc::One<usize>>) =
@@ -769,6 +777,13 @@ fn test_multiplex_basic_drop_on_sender_blocked(
 #[case(10, 10)]
 #[case(5, 100)]
 fn test_pressure_multiplex_array(setup_log: (), #[case] producers: usize, #[case] bound: usize) {
+    #[cfg(miri)]
+    {
+        if producers > 5 {
+            println!("skip");
+            return;
+        }
+    }
     let mut mp = Multiplex::<spsc::Array<usize>>::new();
     let round = ROUND;
     let total_messages = round * producers;
@@ -804,6 +819,13 @@ fn test_pressure_multiplex_array(setup_log: (), #[case] producers: usize, #[case
 #[case(10, 10)]
 #[case(5, 20)]
 fn test_pressure_multiplex_array_mp(setup_log: (), #[case] producers: usize, #[case] bound: usize) {
+    #[cfg(miri)]
+    {
+        if producers > 5 {
+            println!("skip");
+            return;
+        }
+    }
     macro_rules! run_test {
         ($mp: expr) => {
             println!("run_test {:?}", $mp);
@@ -846,6 +868,13 @@ fn test_pressure_multiplex_array_mp(setup_log: (), #[case] producers: usize, #[c
 #[case(5)]
 #[case(20)]
 fn test_pressure_multiplex_list(setup_log: (), #[case] producers: usize) {
+    #[cfg(miri)]
+    {
+        if producers > 5 {
+            println!("skip");
+            return;
+        }
+    }
     macro_rules! run_test {
         ($mp: expr, $tx_c: tt) => {
             println!("run_test {:?}", $mp);
