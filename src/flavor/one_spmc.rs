@@ -354,7 +354,7 @@ impl<T: Send + Unpin + 'static> FlavorImpl for OneSpsc<T> {
 
     #[inline]
     fn may_direct_copy(&self) -> bool {
-        false
+        true
     }
 }
 
