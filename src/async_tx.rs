@@ -486,7 +486,7 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
         &'a self, item: T, fut: FR,
     ) -> impl Future<Output = Result<(), SendTimeoutError<T>>> + Send
     where
-        FR: Future<Output = R> + 'static + Send;
+        FR: Future<Output = R> + 'static;
 }
 
 impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F> {
@@ -520,7 +520,7 @@ impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F> {
         &'a self, item: F::Item, fut: FR,
     ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
     where
-        FR: Future<Output = R> + 'static + Send,
+        FR: Future<Output = R> + 'static,
     {
         AsyncTx::send_with_timer(self, item, fut)
     }
@@ -685,7 +685,7 @@ impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F> {
         &'a self, item: F::Item, fut: FR,
     ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
     where
-        FR: Future<Output = R> + 'static + Send,
+        FR: Future<Output = R> + 'static,
     {
         self.0.send_with_timer::<FR, R>(item, fut)
     }
