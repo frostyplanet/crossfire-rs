@@ -224,7 +224,7 @@ impl<T: Send + 'static + Unpin> FlavorImpl for One<T> {
 
     #[inline(always)]
     fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
-        Some(unsafe { self._try_push(SeqCst, item, SeqCst).is_ok() })
+        Some(unsafe { self._try_push(SeqCst, item, Acquire).is_ok() })
     }
 
     #[inline(always)]
@@ -239,7 +239,19 @@ impl<T: Send + 'static + Unpin> FlavorImpl for One<T> {
 
     #[inline]
     fn backoff_limit(&self) -> u16 {
-        crate::backoff::DEFAULT_LIMIT
+        #[cfg(target_arch = "x86_64")]
+        {
+            crate::backoff::DEFAULT_LIMIT
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            crate::backoff::MAX_LIMIT
+        }
+    }
+
+    #[inline]
+    fn may_direct_copy(&self) -> bool {
+        true
     }
 }
 
