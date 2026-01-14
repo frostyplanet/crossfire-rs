@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add One flavor for bounded size 1 case
 
+- Add Null flavor for cancellation purpose channel
+
 - Add Select API
 
 - Add Multiplex API
