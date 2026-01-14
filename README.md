@@ -40,15 +40,15 @@ Being a lockless channel, crossfire outperforms other async-capable channels.
 And thanks to a lighter notification mechanism, in a blocking context, some cases are even
 better than the original crossbeam-channel,
 
-<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-2.1.0-2025-09-21/mpsc_size_100_sync.png" alt="mpsc bounded size 100 blocking context">
+<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-14/mpsc_size_100_sync.png" alt="mpsc bounded size 100 blocking context">
 
-<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-2.1.0-2025-09-21/mpmc_size_100_sync.png" alt="mpmc bounded size 100 blocking context">
+<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-14/mpmc_size_100_sync.png" alt="mpmc bounded size 100 blocking context">
 
-<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-2.1.0-2025-09-21/mpsc_size_100_tokio.png" alt="mpsc bounded size 100 async context">
+<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-14/mpsc_size_100_tokio.png" alt="mpsc bounded size 100 async context">
 
-<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-2.1.0-2025-09-21/mpmc_size_100_tokio.png" alt="mpmc bounded size 100 async context">
+<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-14/mpmc_size_100_tokio.png" alt="mpmc bounded size 100 async context">
 
-More benchmark data is posted on [wiki](https://github.com/frostyplanet/crossfire-rs/wiki/benchmark-v2.1.0-vs-v2.0.26-2025%E2%80%9009%E2%80%9021).
+More benchmark data is posted on [wiki](https://github.com/frostyplanet/crossfire-rs/wiki/benchmark-v3.0.0-beta-2026‐01‐14).
 
 Also, being a lockless channel, the algorithm relies on spinning and yielding. Spinning is good on
 multi-core systems, but not friendly to single-core systems (like virtual machines).

@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.0.0.beta1] - 2026-01-14
+
+### Changed
+
+- Change interface to V3 generic flavor API
+
+- Optimize for SPSC
+
+### Added
+
+- Add One flavor for bounded size 1 case
+
+- Add Select API
+
+- Add Multiplex API
+
 ## [2.1.10] - 2026-01-10
 
 ### Added
