@@ -17,7 +17,7 @@ impl<T: Send + Unpin + 'static> Queue for List<T> {
 
     #[inline(always)]
     fn pop(&self) -> Option<T> {
-        self.0.pop()
+        self.0.pop::<false>()
     }
 
     #[inline(always)]
@@ -56,17 +56,12 @@ impl<T: Send + Unpin + 'static> FlavorImpl for List<T> {
 
     #[inline]
     fn try_recv(&self) -> Option<T> {
-        self.0.pop()
+        self.0.pop::<false>()
     }
 
     #[inline]
     fn try_recv_final(&self) -> Option<T> {
-        if !self.0.is_empty() {
-            // TODO review atomic ordering in SegQueue
-            self.0.pop()
-        } else {
-            None
-        }
+        self.0.pop::<true>()
     }
 
     #[inline]
