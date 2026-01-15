@@ -164,7 +164,7 @@ impl<T> Slot<T> {
     fn write(&self, tail: u16, value: *const T) {
         let mut stamp = self.stamp.load(Acquire);
         if stamp != tail {
-            let mut backoff = Backoff::new(BackoffConfig::default());
+            let mut backoff = Backoff::new();
             loop {
                 backoff.spin();
                 stamp = self.stamp.load(Acquire);
@@ -181,7 +181,7 @@ impl<T> Slot<T> {
     fn read(&self, head: u16) -> T {
         let mut stamp = self.stamp.load(Acquire);
         if stamp != head {
-            let mut backoff = Backoff::new(BackoffConfig::default());
+            let mut backoff = Backoff::new();
             loop {
                 backoff.spin();
                 stamp = self.stamp.load(Acquire);

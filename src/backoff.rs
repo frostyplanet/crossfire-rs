@@ -11,8 +11,10 @@ pub const DEFAULT_LIMIT: u16 = 6;
 pub const DEFAULT_LIMIT: u16 = 10;
 pub const MAX_LIMIT: u16 = 10;
 
-static DETECT_CONFIG: AtomicU32 =
-    AtomicU32::new(BackoffConfig { spin_limit: SPIN_LIMIT, limit: DEFAULT_LIMIT }.to_u32());
+pub const DEFAULT_CONFIG: u32 =
+    BackoffConfig { spin_limit: SPIN_LIMIT, limit: DEFAULT_LIMIT }.to_u32();
+
+static DETECT_CONFIG: AtomicU32 = AtomicU32::new(DEFAULT_CONFIG);
 
 static _INIT: AtomicBool = AtomicBool::new(false);
 
@@ -58,6 +60,11 @@ impl Default for BackoffConfig {
 
 impl BackoffConfig {
     #[inline(always)]
+    pub fn detect() -> Self {
+        Self::from_u32(DETECT_CONFIG.load(Ordering::Relaxed))
+    }
+
+    #[inline(always)]
     pub const fn to_u32(self) -> u32 {
         let i: u32 = unsafe { transmute(self) };
         return i;
@@ -102,7 +109,12 @@ pub struct Backoff {
 
 impl Backoff {
     #[inline(always)]
-    pub fn new(config: BackoffConfig) -> Self {
+    pub fn new() -> Self {
+        Self { step: 0, config: BackoffConfig::default() }
+    }
+
+    #[inline(always)]
+    pub fn from(config: BackoffConfig) -> Self {
         Self { step: 0, config }
     }
 
@@ -176,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_backoff() {
-        let backoff = Backoff::new(BackoffConfig { spin_limit: 1, limit: 0 });
+        let backoff = Backoff::from(BackoffConfig { spin_limit: 1, limit: 0 });
         assert!(backoff.is_completed());
         println!("Option<backoff> size {}", size_of::<Option<Backoff>>());
         println!("backoff size {}", size_of::<Backoff>());
@@ -188,7 +200,7 @@ mod tests {
         assert_eq!(config.spin_limit, _config.spin_limit);
         assert_eq!(config.limit, _config.limit);
 
-        let mut backoff = Backoff::new(BackoffConfig { spin_limit: 2, limit: 4 });
+        let mut backoff = Backoff::from(BackoffConfig { spin_limit: 2, limit: 4 });
         assert_eq!(backoff.step, 0);
         backoff.spin();
         assert_eq!(backoff.step, 1);

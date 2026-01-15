@@ -303,8 +303,7 @@ impl<'a> Select<'a> {
         if let Some(res) = self._try_select(idx, false) {
             return Ok(res);
         }
-        let cfg = BackoffConfig::default();
-        let mut backoff = Backoff::new(cfg);
+        let mut backoff = Backoff::from(BackoffConfig::detect());
         backoff.snooze();
         // If try_select returned None, we check if all handlers are gone.
         loop {

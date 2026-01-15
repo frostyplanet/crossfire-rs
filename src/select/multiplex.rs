@@ -416,8 +416,7 @@ impl<F: Flavor> Multiplex<F> {
         if let Some(item) = self._try_select::<false>(start_idx) {
             return Ok(item);
         }
-        let cfg = BackoffConfig::default();
-        let mut backoff = Backoff::new(cfg);
+        let mut backoff = Backoff::from(BackoffConfig::detect());
         backoff.snooze();
         loop {
             loop {

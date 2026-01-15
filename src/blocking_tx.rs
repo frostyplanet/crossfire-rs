@@ -85,8 +85,8 @@ impl<F: Flavor> Tx<F> {
     ) -> Result<(), SendTimeoutError<F::Item>> {
         let shared = &self.shared;
         let large = shared.large;
-        let backoff_cfg = BackoffConfig::default().spin(2).limit(shared.backoff_limit);
-        let mut backoff = Backoff::new(backoff_cfg);
+        let backoff_cfg = BackoffConfig::detect().spin(2).limit(shared.backoff_limit);
+        let mut backoff = Backoff::from(backoff_cfg);
         let direct_copy = deadline.is_none() && shared.sender_direct_copy();
         if large {
             backoff.set_step(2);

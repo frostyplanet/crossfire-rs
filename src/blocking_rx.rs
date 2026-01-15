@@ -110,11 +110,11 @@ impl<F: Flavor> Rx<F> {
             };
         }
         try_recv!({ on_recv_no_waker!() });
-        let mut cfg = BackoffConfig::default().limit(shared.backoff_limit);
+        let mut cfg = BackoffConfig::detect().limit(shared.backoff_limit);
         if shared.large {
             cfg = cfg.spin(2);
         }
-        let mut backoff = Backoff::new(cfg);
+        let mut backoff = Backoff::from(cfg);
         loop {
             let r = backoff.snooze();
             try_recv!({ on_recv_no_waker!() });

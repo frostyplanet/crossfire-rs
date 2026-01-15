@@ -280,12 +280,12 @@ impl<F: Flavor> ChannelShared<F> {
         if self.large {
             return None;
         }
-        let cfg = BackoffConfig::default();
+        let cfg = BackoffConfig::detect();
         if cfg.spin_limit == 0 {
             // 1 core don't backoff
             return None;
         }
-        Some(Backoff::new(cfg))
+        Some(Backoff::from(cfg))
     }
 }
 
