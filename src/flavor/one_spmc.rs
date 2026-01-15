@@ -99,13 +99,20 @@ impl<T, const MC: bool> Drop for OneSp<T, MC> {
 
 impl<T: Send + 'static> OneSpsc<T> {
     #[inline(always)]
+    fn _read(&self, slot: &Slot<T>, next_head: u32) -> T {
+        // NOTE: This is only valid for SPSC (not for Spmc)
+        // Because we have two slot, the sender will write to next index,
+        // it's safe to update the pos before we read, so that sender may begin to write
+        let new_pos = Self::pack(next_head, next_head);
+        self.pos.store(new_pos as u64, SeqCst);
+        slot.read()
+    }
+
+    #[inline(always)]
     fn _pop(&self, order: Ordering) -> Option<T> {
         if let Some(tail) = self.start_read(order) {
             let index = (tail & 0x1) as usize;
-            let item = self.slots[index as usize].read();
-            let new_pos = Self::pack(tail, tail);
-            self.pos.store(new_pos, SeqCst);
-            Some(item)
+            Some(self._read(&self.slots[index as usize], tail))
         } else {
             None
         }
@@ -114,7 +121,6 @@ impl<T: Send + 'static> OneSpsc<T> {
     #[inline(always)]
     fn start_read(&self, order: Ordering) -> Option<u32> {
         let pos = self.pos.load(order);
-        compiler_fence(Ordering::SeqCst);
         loop {
             let (head, tail) = Self::unpack(pos);
             if head == tail {
@@ -208,7 +214,6 @@ impl<T> OneSpmc<T> {
     #[inline(always)]
     fn _pop(&self, order: Ordering) -> Option<T> {
         let mut pos = self.pos.load(order);
-        compiler_fence(Ordering::SeqCst);
         let mut value_copy: MaybeUninit<T> = MaybeUninit::uninit();
         loop {
             let (head, tail) = Self::unpack(pos);
@@ -368,11 +373,9 @@ impl<T: Send + 'static + Unpin> FlavorSelect for OneSpsc<T> {
             self.start_read(if final_check { Ordering::SeqCst } else { Ordering::Acquire })
         {
             let index = (tail & 0x1) as usize;
-            let new_pos = Self::pack(tail, tail);
-
             Some(Token::new(
                 &self.slots[index as usize] as *const Slot<T> as *const u8,
-                new_pos as usize,
+                tail as usize,
             ))
         } else {
             None
@@ -382,9 +385,6 @@ impl<T: Send + 'static + Unpin> FlavorSelect for OneSpsc<T> {
     #[inline(always)]
     fn read_with_token(&self, token: Token) -> T {
         let slot: &Slot<T> = unsafe { &*token.pos.cast::<Slot<T>>() };
-        let item = slot.read();
-        // NOTE: This is only valid for SPSC
-        self.pos.store(token.stamp as u64, SeqCst);
-        item
+        self._read(slot, token.stamp as u32)
     }
 }
