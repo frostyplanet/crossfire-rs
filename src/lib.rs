@@ -35,7 +35,7 @@
 //! And thanks to a lighter notification mechanism, most cases in blocking context are even
 //! better than the original crossbeam-channel,
 //!
-//! benchmark data is posted on [wiki](https://github.com/frostyplanet/crossfire-rs/wiki/benchmark-v2.1.0-vs-v2.0.26-2025%E2%80%9009%E2%80%9021).
+//! benchmark data is posted on [wiki](https://github.com/frostyplanet/crossfire-rs/wiki/benchmark-v3.0.0-2026%E2%80%9001%E2%80%9015).
 //!
 //! Also, being a lockless channel, the algorithm relies on spinning and yielding. Spinning is good on
 //! multi-core systems, but not friendly to single-core systems (like virtual machines).
