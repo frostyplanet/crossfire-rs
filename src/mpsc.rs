@@ -57,14 +57,14 @@ pub type One<T> = FlavorWrap<crate::flavor::One<T>, RegistryMultiSend<T>, Regist
 /// Flavor Type alias for bounded MPSC channel wrapped with specified One impl
 pub enum Array<T> {
     Array(crate::flavor::ArrayMpsc<T>),
-    One(crate::flavor::One<T>),
+    One(crate::flavor::OneMpsc<T>),
 }
 
 impl<T: Send + Unpin + 'static> Array<T> {
     #[inline]
     pub fn new(size: usize) -> Self {
         if size <= 1 {
-            Self::One(crate::flavor::One::new())
+            Self::One(crate::flavor::OneMpsc::new())
         } else {
             Self::Array(crate::flavor::ArrayMpsc::<T>::new(size))
         }

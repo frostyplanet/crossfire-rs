@@ -9,6 +9,8 @@ mod list;
 pub use list::*;
 mod one;
 pub use one::*;
+mod one_mpsc;
+pub use one_mpsc::OneMpsc;
 mod one_spmc;
 pub use one_spmc::{OneSpmc, OneSpsc};
 
