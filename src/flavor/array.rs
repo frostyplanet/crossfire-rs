@@ -2,19 +2,26 @@ use super::{FlavorBounded, FlavorImpl, FlavorSelect, Queue, Token};
 use crate::crossbeam::array_queue::ArrayQueue;
 use std::mem::MaybeUninit;
 
-pub struct Array<T, const MP: bool, const MC: bool>(ArrayQueue<T, MP, MC>);
+/// Which Equals to crossbeam_queue::ArrayQueue
+pub type Array<T> = _Array<T, true, true>;
+/// crossbeam_queue::ArrayQueue tweaks for mpsc
+pub type ArrayMpsc<T> = _Array<T, true, false>;
+/// crossbeam_queue::ArrayQueue tweaks for spsc
+pub type ArraySpsc<T> = _Array<T, false, false>;
 
-impl<T, const MP: bool, const MC: bool> Array<T, MP, MC> {
+pub struct _Array<T, const MP: bool, const MC: bool>(ArrayQueue<T, MP, MC>);
+
+impl<T, const MP: bool, const MC: bool> _Array<T, MP, MC> {
     pub fn new(mut bound: usize) -> Self {
         assert!(bound <= u32::MAX as usize);
         if bound == 0 {
             bound = 1;
         }
-        Array(ArrayQueue::<T, MP, MC>::new(bound))
+        Self(ArrayQueue::<T, MP, MC>::new(bound))
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Queue for Array<T, MP, MC> {
+impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Queue for _Array<T, MP, MC> {
     type Item = T;
 
     #[inline(always)]
@@ -53,7 +60,7 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Queue for Array<
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for Array<T, MP, MC> {
+impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for _Array<T, MP, MC> {
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         return unsafe { self.0.push_with_ptr(item.as_ptr()) };
@@ -104,7 +111,7 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for A
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorSelect for Array<T, MP, MC> {
+impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorSelect for _Array<T, MP, MC> {
     #[inline]
     fn try_select(&self, final_check: bool) -> Option<Token> {
         self.0.start_read(final_check)
@@ -116,7 +123,9 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorSelect for
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorBounded for Array<T, MP, MC> {
+impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorBounded
+    for _Array<T, MP, MC>
+{
     #[inline(always)]
     fn new_with_bound(size: usize) -> Self {
         Self::new(size)

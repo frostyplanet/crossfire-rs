@@ -3,14 +3,8 @@ use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 
-mod array;
-
-/// Which Equals to crossbeam_queue::ArrayQueue
-pub type Array<T> = array::Array<T, true, true>;
-/// crossbeam_queue::ArrayQueue tweaks for mpsc
-pub type ArrayMpsc<T> = array::Array<T, true, false>;
-/// crossbeam_queue::ArrayQueue tweaks for spsc
-pub type ArraySpsc<T> = array::Array<T, false, false>;
+pub mod array;
+pub use array::{Array, ArrayMpsc, ArraySpsc};
 mod list;
 pub use list::*;
 mod one;
