@@ -27,7 +27,7 @@ jobs:
     - name: Run test with compio release and trace_log
       run: cd test-suite; WORKFLOW=1 exec cargo nextest run -F="compio,trace_log" --hide-progress-bar -j 1 --no-capture -r
 
-    - name: Run tests with compio
+    - name: Run tests with compio_dispatcher
       run: env WORKFLOW=1 make test_compio_dispatcher
 
     - name: Run test with compio_dispatcher release
