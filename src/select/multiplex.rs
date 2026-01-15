@@ -4,8 +4,12 @@ use crate::flavor::{Flavor, FlavorBounded, FlavorImpl, FlavorNew, FlavorWrap};
 use crate::shared::{check_timeout, ChannelShared};
 use crate::waker::WakerState;
 use crate::waker_registry::{RegistrySend, SelectWaker, SelectWakerWrapper};
+use crate::BlockingRxTrait;
 use crate::SenderType;
 use crate::{RecvError, RecvTimeoutError, TryRecvError};
+use std::cell::UnsafeCell;
+use std::fmt;
+use std::mem::transmute;
 /// A multiplex blocking receiver of channels of the same type, only supports mpsc
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -30,6 +34,11 @@ pub type Mux<F> = FlavorWrap<F, <F as Flavor>::Send, SelectWakerWrapper>;
 /// - Due to it binds on Flavor interface, it cannot be use between different type.
 /// If you want to multiplex between list and array, can use the
 /// [CompatFlavor](crate::compat::CompatFlavor)
+/// - **NOTE** : It has internal mutability because it need to impl [BlockingRxTrait](crate::BlockingRxTrait),
+/// the adding channel process remains `&mut self`. Because `Multiplex` is a single consumer just
+/// like [Rx](crate::Rx), it does not have `Sync`. If you can guarantee no concurrent access you
+/// can manutally add the `Sync` back in parent struct.
+///
 ///
 /// # Examples
 ///
@@ -61,17 +70,27 @@ pub type Mux<F> = FlavorWrap<F, <F as Flavor>::Send, SelectWakerWrapper>;
 /// h1.join().unwrap();
 /// h2.join().unwrap();
 /// ```
-
 pub struct Multiplex<F: Flavor> {
     mode: SelectMode,
-    handlers: Vec<Option<Arc<ChannelShared<Mux<F>>>>>,
     waker: Arc<SelectWaker>,
+    inner: UnsafeCell<MultiplexInner<F>>,
+}
+
+unsafe impl<F: Flavor> Send for Multiplex<F> {}
+
+struct MultiplexInner<F: Flavor> {
+    handlers: Vec<Option<Arc<ChannelShared<Mux<F>>>>>,
     next_index: usize,
     opened_count: usize,
     rng: usize,
 }
 
-unsafe impl<F: Flavor> Send for Multiplex<F> {}
+impl<F: Flavor> MultiplexInner<F> {
+    #[inline(always)]
+    fn new() -> Self {
+        Self { handlers: Vec::with_capacity(10), next_index: 0, rng: 0, opened_count: 0 }
+    }
+}
 
 impl<F: Flavor> Multiplex<F> {
     /// Initialize Select with fair, round-robin strategy
@@ -125,13 +144,15 @@ impl<F: Flavor> Multiplex<F> {
     #[inline(always)]
     pub fn new_with(mode: SelectMode) -> Self {
         Self {
-            handlers: Vec::with_capacity(10),
             waker: Arc::new(SelectWaker::new()),
-            next_index: 0,
-            rng: 0,
-            opened_count: 0,
             mode,
+            inner: UnsafeCell::new(MultiplexInner::<F>::new()),
         }
+    }
+
+    #[inline(always)]
+    fn get_inner(&self) -> &mut MultiplexInner<F> {
+        unsafe { transmute(self.inner.get()) }
     }
 
     /// Add a new channels with a new() method to multiplex, return its sender.
@@ -149,7 +170,7 @@ impl<F: Flavor> Multiplex<F> {
     ///
     /// # Example
     ///
-    /// with mpsc::List
+    /// with mpsc::List (which sender type is [MTx](crate::MTx) and allow to clone)
     ///
     /// ```
     /// use crossfire::{mpsc::List, MTx, select::{Multiplex, Mux}};
@@ -166,14 +187,16 @@ impl<F: Flavor> Multiplex<F> {
     /// assert_eq!(value, 42);
     /// ```
     ///
-    /// with spsc::One
+    /// with spsc::One (which sender type is [Tx](crate::Tx) and not cloneable)
     /// ```
     /// use crossfire::{spsc::One, Tx, select::{Multiplex, Mux}};
     /// use tokio;
     ///
     /// let mut mp = Multiplex::<One<i32>>::new();
-    /// let tx1: Tx<Mux<One<i32>>> = mp.new_tx(); // Creates an unbounded sender for List flavor
-    /// let tx2: Tx<Mux<One<i32>>> = mp.new_tx(); // Creates an unbounded sender for List flavor
+    /// // Creates an size-1 channel
+    /// let tx1: Tx<Mux<One<i32>>> = mp.new_tx();
+    /// // Creates another size-1 channel
+    /// let tx2: Tx<Mux<One<i32>>> = mp.new_tx();
     /// std::thread::spawn(move ||{
     ///     tx2.send(42).expect("send");
     /// });
@@ -185,11 +208,12 @@ impl<F: Flavor> Multiplex<F> {
         F: FlavorNew,
         S: SenderType<Flavor = Mux<F>>,
     {
-        self.opened_count += 1;
         self.waker.add_opened();
-        let recvs = self.waker.clone().to_wrapper(self.handlers.len());
+        let inner = self.get_inner();
+        let recvs = self.waker.clone().to_wrapper(inner.handlers.len());
+        inner.opened_count += 1;
         let shared = ChannelShared::new(Mux::<F>::from_inner(F::new()), F::Send::new(), recvs);
-        self.handlers.push(Some(shared.clone()));
+        inner.handlers.push(Some(shared.clone()));
         return S::new(shared);
     }
 
@@ -209,8 +233,10 @@ impl<F: Flavor> Multiplex<F> {
     /// use crossfire::{mpsc::Array, *, select::{Multiplex, Mux}};
     ///
     /// let mut mp = Multiplex::<Array<i32>>::new();
-    /// let tx1: MTx<Mux<Array<i32>>> = mp.bounded_tx(10); // Creates a bounded sender with capacity 10
-    /// let tx2: MTx<Mux<Array<i32>>> = mp.bounded_tx(10); // Creates a bounded sender with capacity 10
+    /// // Creates a bounded channel with capacity 10
+    /// let tx1: MTx<Mux<Array<i32>>> = mp.bounded_tx(10);
+    /// // Creates another bounded channel with capacity 20
+    /// let tx2: MTx<Mux<Array<i32>>> = mp.bounded_tx(20);
     /// tx1.send(42).expect("send");
     /// std::thread::spawn(move || {
     ///     tx2.send(42).expect("send");
@@ -225,34 +251,36 @@ impl<F: Flavor> Multiplex<F> {
         F: FlavorBounded,
         S: SenderType<Flavor = Mux<F>>,
     {
-        self.opened_count += 1;
+        let inner = self.get_inner();
+        inner.opened_count += 1;
         self.waker.add_opened();
-        let recvs = self.waker.clone().to_wrapper(self.handlers.len());
+        let recvs = self.waker.clone().to_wrapper(inner.handlers.len());
         let shared =
             ChannelShared::new(Mux::from_inner(F::new_with_bound(size)), F::Send::new(), recvs);
-        self.handlers.push(Some(shared.clone()));
+        inner.handlers.push(Some(shared.clone()));
         return S::new(shared);
     }
 
     #[inline(always)]
-    fn _try_select_begin(&mut self) -> usize {
-        let len = self.handlers.len();
+    fn _try_select_begin(&self) -> usize {
+        let inner = self.get_inner();
+        let len = inner.handlers.len();
         debug_assert!(len > 0);
         match self.mode {
             SelectMode::Bias => 0,
             SelectMode::RR => {
-                if self.next_index >= self.handlers.len() {
+                if inner.next_index >= inner.handlers.len() {
                     0
                 } else {
-                    self.next_index
+                    inner.next_index
                 }
             }
             SelectMode::Rand => {
-                let mut x = self.rng;
+                let mut x = inner.rng;
                 x ^= x << 13;
                 x ^= x >> 7;
                 x ^= x << 17;
-                self.rng = x;
+                inner.rng = x;
                 (x as usize) % len
             }
         }
@@ -279,8 +307,8 @@ impl<F: Flavor> Multiplex<F> {
     /// assert_eq!(mp.try_recv(), Ok(42));
     /// ```
     #[inline]
-    pub fn try_recv(&mut self) -> Result<F::Item, TryRecvError> {
-        if self.opened_count == 0 {
+    pub fn try_recv(&self) -> Result<F::Item, TryRecvError> {
+        if self.get_inner().opened_count == 0 {
             return Err(TryRecvError::Disconnected);
         }
         let idx = self._try_select_begin();
@@ -295,7 +323,7 @@ impl<F: Flavor> Multiplex<F> {
     /// This method will block the current thread until a message is available on any of the channels,
     /// or until all senders are dropped.
     #[inline]
-    pub fn recv(&mut self) -> Result<F::Item, RecvError> {
+    pub fn recv(&self) -> Result<F::Item, RecvError> {
         match self._recv_blocking(None) {
             Ok(item) => Ok(item),
             Err(_) => Err(RecvError),
@@ -313,7 +341,7 @@ impl<F: Flavor> Multiplex<F> {
     ///
     /// Returns Err([RecvTimeoutError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline]
-    pub fn recv_timeout(&mut self, timeout: Duration) -> Result<F::Item, RecvTimeoutError> {
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<F::Item, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => match self._recv_blocking(Some(deadline)) {
                 Ok(item) => Ok(item),
@@ -334,30 +362,31 @@ impl<F: Flavor> Multiplex<F> {
     /// * `FINAL` - A const generic parameter that determines whether to use final receive operation
     /// * `idx` - The starting index to check for available messages
     #[inline(always)]
-    fn _try_select<const FINAL: bool>(&mut self, mut idx: usize) -> Option<F::Item> {
+    fn _try_select<const FINAL: bool>(&self, mut idx: usize) -> Option<F::Item> {
+        let inner = self.get_inner();
         let should_check_close = if FINAL {
             let opened_count = self.waker.get_opened_count();
             // if the flag in SelectWaker equals to self.opened_count, can skip loading the tx_count atomic
-            opened_count != self.opened_count
+            opened_count != inner.opened_count
         } else {
             false
         };
-        let len = self.handlers.len();
+        let len = inner.handlers.len();
         for _ in 0..len {
-            if let Some(shared) = self.handlers[idx].as_ref() {
+            if let Some(shared) = inner.handlers[idx].as_ref() {
                 let r = if FINAL { shared.inner.try_recv_final() } else { shared.inner.try_recv() };
                 if let Some(item) = r {
                     shared.on_recv();
                     if SelectMode::RR == self.mode {
-                        self.next_index = idx + 1;
+                        inner.next_index = idx + 1;
                     }
                     return Some(item); // Message available
                 }
                 if should_check_close {
                     // check close only after all message is received from the channel
                     if shared.get_tx_count() == 0 {
-                        self.handlers[idx] = None;
-                        self.opened_count -= 1;
+                        inner.handlers[idx] = None;
+                        inner.opened_count -= 1;
                     }
                 }
             }
@@ -379,8 +408,8 @@ impl<F: Flavor> Multiplex<F> {
     ///
     /// Returns `Ok(item)` on successful receive, `Err(true)` if disconnected, `Err(false)` if timed out
     #[inline]
-    fn _recv_blocking(&mut self, deadline: Option<Instant>) -> Result<F::Item, bool> {
-        if self.opened_count == 0 {
+    fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<F::Item, bool> {
+        if self.get_inner().opened_count == 0 {
             return Err(true);
         }
         let mut start_idx = self._try_select_begin();
@@ -404,7 +433,9 @@ impl<F: Flavor> Multiplex<F> {
                 return Ok(item);
             }
             // FINAL=true will check close and decrease opened_count
-            if self.opened_count == 0 {
+            // XXX: get_inner use temporary borrow mut, otherwise Miri will report stack borrow rule
+            // viloation. probably there's mut in try_select
+            if self.get_inner().opened_count == 0 {
                 return Err(true);
             }
             let mut state = WakerState::Init as u8;
@@ -430,8 +461,9 @@ impl<F: Flavor> Multiplex<F> {
 }
 
 impl<F: Flavor> Drop for Multiplex<F> {
+    #[inline]
     fn drop(&mut self) {
-        for _handler in &self.handlers {
+        for _handler in &self.get_inner().handlers {
             if let Some(handler) = _handler.as_ref() {
                 handler.close_rx();
             }
@@ -439,8 +471,91 @@ impl<F: Flavor> Drop for Multiplex<F> {
     }
 }
 
-impl<F: Flavor> std::fmt::Debug for Multiplex<F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<F: Flavor> fmt::Debug for Multiplex<F> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Multiplex<{}>", std::any::type_name::<F>())
+    }
+}
+
+impl<F: Flavor> fmt::Display for Multiplex<F> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl<F: Flavor> BlockingRxTrait<F::Item> for Multiplex<F> {
+    #[inline(always)]
+    fn recv(&self) -> Result<F::Item, RecvError> {
+        Self::recv(self)
+    }
+
+    #[inline(always)]
+    fn try_recv(&self) -> Result<F::Item, TryRecvError> {
+        Self::try_recv(self)
+    }
+
+    #[inline(always)]
+    fn recv_timeout(&self, timeout: Duration) -> Result<F::Item, RecvTimeoutError> {
+        Self::recv_timeout(self, timeout)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        0
+    }
+
+    /// always return None
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        None
+    }
+
+    /// Returns true when all the channel's empty
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        let inner = self.get_inner();
+        for handler in &inner.handlers {
+            if let Some(shared) = handler.as_ref() {
+                if !shared.is_empty() {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Not practical to impl
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        false
+    }
+
+    /// Return true if all sender has been close
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.get_tx_count() == 0
+    }
+
+    /// NOTE: it does not count all the clones to the senders
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.get_inner().opened_count
+    }
+
+    /// This is single consumer
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        1
+    }
+
+    fn get_wakers_count(&self) -> (usize, usize) {
+        (0, 0)
+    }
+
+    fn clone_to_vec(self, _count: usize) -> Vec<Self> {
+        unimplemented!();
     }
 }
