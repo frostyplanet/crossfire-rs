@@ -99,15 +99,7 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for _
 
     #[inline]
     fn may_direct_copy(&self) -> bool {
-        if self.0.capacity() > 10 {
-            if MP {
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        }
+        true
     }
 }
 
