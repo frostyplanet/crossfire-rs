@@ -310,7 +310,7 @@ pub trait BlockingRxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt:
     /// Returns `Ok(T)` on success.
     ///
     /// Returns Err([RecvError]) if the sender has been dropped.
-    fn recv<'a>(&'a self) -> Result<T, RecvError>;
+    fn recv(&self) -> Result<T, RecvError>;
 
     /// Attempts to receive a message from the channel without blocking.
     ///
@@ -367,7 +367,7 @@ impl<F: Flavor> BlockingRxTrait<F::Item> for Rx<F> {
     }
 
     #[inline(always)]
-    fn recv<'a>(&'a self) -> Result<F::Item, RecvError> {
+    fn recv(&self) -> Result<F::Item, RecvError> {
         Rx::recv(self)
     }
 
@@ -438,7 +438,7 @@ impl<F: Flavor + FlavorMC> BlockingRxTrait<F::Item> for MRx<F> {
     }
 
     #[inline(always)]
-    fn recv<'a>(&'a self) -> Result<F::Item, RecvError> {
+    fn recv(&self) -> Result<F::Item, RecvError> {
         self.0.recv()
     }
 
