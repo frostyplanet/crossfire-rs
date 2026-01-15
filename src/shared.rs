@@ -285,7 +285,8 @@ impl<F: Flavor> ChannelShared<F> {
             // 1 core don't backoff
             return None;
         }
-        Some(Backoff::from(cfg))
+        // It's effective to yield for size=1
+        Some(Backoff::from(cfg.limit(self.backoff_limit)))
     }
 }
 
