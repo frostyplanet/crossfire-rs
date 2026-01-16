@@ -4,7 +4,11 @@ use std::mem::MaybeUninit;
 use std::ops::Deref;
 
 pub mod array;
-pub use array::{Array, ArrayMpsc, ArraySpsc};
+pub use array::Array;
+pub mod array_mpsc;
+pub use array_mpsc::ArrayMpsc;
+pub mod array_spsc;
+pub use array_spsc::ArraySpsc;
 mod list;
 pub use list::*;
 mod one;

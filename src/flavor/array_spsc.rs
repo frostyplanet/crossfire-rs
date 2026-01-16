@@ -1,23 +1,21 @@
 use super::{FlavorBounded, FlavorImpl, FlavorSelect, Queue, Token};
-use crate::crossbeam::array_queue::ArrayQueue;
+use crate::crossbeam::array_queue_spsc::ArrayQueueSpsc;
 use std::mem::MaybeUninit;
 
-/// Which Equals to crossbeam_queue::ArrayQueue
-pub type Array<T> = _Array<T, true, true>;
+/// Simplified ArrayQueue tweaks for spsc, without stamp
+pub struct ArraySpsc<T>(ArrayQueueSpsc<T>);
 
-pub struct _Array<T, const MP: bool, const MC: bool>(ArrayQueue<T, MP, MC>);
-
-impl<T, const MP: bool, const MC: bool> _Array<T, MP, MC> {
+impl<T> ArraySpsc<T> {
     pub fn new(mut bound: usize) -> Self {
         assert!(bound <= u32::MAX as usize);
         if bound == 0 {
             bound = 1;
         }
-        Self(ArrayQueue::<T, MP, MC>::new(bound))
+        Self(ArrayQueueSpsc::<T>::new(bound))
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Queue for _Array<T, MP, MC> {
+impl<T: Send + 'static + Unpin> Queue for ArraySpsc<T> {
     type Item = T;
 
     #[inline(always)]
@@ -28,7 +26,7 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Queue for _Array
     #[inline(always)]
     fn push(&self, item: T) -> Result<(), T> {
         let _item = MaybeUninit::new(item);
-        if unsafe { self.0.push_with_ptr(_item.as_ptr()) } {
+        if unsafe { self.0.push_with_ptr_final(_item.as_ptr()) } {
             Ok(())
         } else {
             Err(unsafe { _item.assume_init_read() })
@@ -56,7 +54,7 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Queue for _Array
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for _Array<T, MP, MC> {
+impl<T: Send + 'static + Unpin> FlavorImpl for ArraySpsc<T> {
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         return unsafe { self.0.push_with_ptr(item.as_ptr()) };
@@ -64,7 +62,7 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for _
 
     #[inline(always)]
     fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
-        return unsafe { self.0.try_push_oneshot(item) };
+        return Some(unsafe { self.0.push_with_ptr_final(item) });
     }
 
     #[inline]
@@ -79,32 +77,19 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for _
 
     #[inline]
     fn backoff_limit(&self) -> u16 {
-        if self.0.capacity() > 10 {
-            crate::backoff::DEFAULT_LIMIT
-        } else {
-            #[cfg(target_arch = "x86_64")]
-            {
-                crate::backoff::DEFAULT_LIMIT
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            {
-                crate::backoff::MAX_LIMIT
-            }
-        }
+        crate::backoff::MAX_LIMIT
     }
 
     #[inline]
     fn may_direct_copy(&self) -> bool {
-        if MP {
-            true
-        } else {
-            // sender has no CAS, not safe to direct copy
-            false
-        }
+        // NOTE:
+        // The spsc is not safe for direct copy,
+        // because it has no cas, consumer cannot touch the producers pointer
+        false
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorSelect for _Array<T, MP, MC> {
+impl<T: Send + 'static + Unpin> FlavorSelect for ArraySpsc<T> {
     #[inline]
     fn try_select(&self, final_check: bool) -> Option<Token> {
         self.0.start_read(final_check)
@@ -116,9 +101,7 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorSelect for
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorBounded
-    for _Array<T, MP, MC>
-{
+impl<T: Send + 'static + Unpin> FlavorBounded for ArraySpsc<T> {
     #[inline(always)]
     fn new_with_bound(size: usize) -> Self {
         Self::new(size)
