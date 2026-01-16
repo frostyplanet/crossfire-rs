@@ -127,7 +127,6 @@ fn test_basic_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxTrai
 #[case(mpmc::bounded_async_blocking(10), 5)]
 #[case(mpmc::bounded_async_blocking(10), 8)]
 #[case(mpmc::bounded_async_blocking(10), 100)]
-#[case(mpmc::bounded_async_blocking(10), 1000)]
 fn test_basic_multi_tx_async_1_rx_blocking<
     F: Flavor<Item = usize> + 'static,
     R: BlockingRxTrait<usize>,
@@ -259,6 +258,7 @@ fn test_pressure_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxT
 #[case(mpmc::bounded_async_blocking(10), 5)]
 #[case(mpmc::bounded_async_blocking(10), 100)]
 #[case(mpmc::bounded_async_blocking(10), 10)]
+#[case(mpmc::bounded_async_blocking(10), 1000)]
 #[case(mpmc::bounded_async_blocking(100), 100)]
 fn test_pressure_multi_tx_async_1_rx_blocking<
     F: Flavor<Item = usize> + 'static,

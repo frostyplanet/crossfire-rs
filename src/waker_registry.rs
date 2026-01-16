@@ -378,6 +378,8 @@ impl<P: Copy> RegistryMulti<P> {
                         }
                     } else if state == WakerState::Closed as u8 {
                         return Some(Poll::Ready(()));
+                    } else {
+                        panic!("state: impossible for async {:?}", state);
                     }
                 }
             }

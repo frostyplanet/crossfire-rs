@@ -177,9 +177,9 @@ impl<F: Flavor> ChannelShared<F> {
                 return self.senders.cancel_reuse_waker(o_waker, WakerState::Done);
             } else {
                 let state = if SINK {
-                    self.senders.commit_waiting(&o_waker)
+                    WakerState::Init as u8
                 } else {
-                    WakerState::Waiting as u8
+                    self.senders.commit_waiting(&o_waker)
                 };
                 if self.is_rx_closed() {
                     return WakerState::Closed as u8;
