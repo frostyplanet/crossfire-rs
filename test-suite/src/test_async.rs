@@ -681,8 +681,9 @@ fn test_pressure_bounded_async_1_1<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize
         'A: loop {
             match rx.recv().await {
                 Ok(_i) => {
-                    counter += 1;
+                    assert_eq!(_i, counter);
                     trace!("recv {}", _i);
+                    counter += 1;
                 }
                 Err(_) => break 'A,
             }

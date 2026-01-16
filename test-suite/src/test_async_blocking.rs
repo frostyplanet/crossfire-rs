@@ -91,10 +91,17 @@ fn test_basic_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxTrai
     let batch_1: usize = 100;
     let batch_2: usize = 200;
     let th = thread::spawn(move || {
-        for _ in 0..(batch_1 + batch_2) {
+        for count in 0..(batch_1 + batch_2) {
             match rx.recv() {
                 Ok(i) => {
                     trace!("recv {}", i);
+                    if count < batch_1 {
+                        // First batch: values 0..batch_1
+                        assert_eq!(i, count);
+                    } else {
+                        // Second batch: values 10+batch_1..10+batch_1+batch_2
+                        assert_eq!(i, 10 + count);
+                    }
                 }
                 Err(e) => {
                     panic!("error {}", e);
@@ -227,6 +234,7 @@ fn test_pressure_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxT
         'A: loop {
             match rx.recv() {
                 Ok(i) => {
+                    assert_eq!(i, count);
                     count += 1;
                     trace!("recv {}", i);
                 }

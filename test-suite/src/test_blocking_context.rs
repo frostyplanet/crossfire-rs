@@ -320,6 +320,7 @@ fn test_pressure_bounded_blocking_1_1<T: BlockingTxTrait<usize>, R: BlockingRxTr
         'A: loop {
             match rx.recv() {
                 Ok(_i) => {
+                    assert_eq!(_i, count);
                     count += 1;
                     trace!("recv {}", _i);
                 }
