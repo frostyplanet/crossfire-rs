@@ -2,7 +2,7 @@ name: miri-dev-log
 
 on:
   workflow_dispatch:
-  schedule: [cron: "20 */6 * * *"]
+  schedule: [cron: "30 */8 * * *"]
 
 env:
   CARGO_TERM_COLOR: always

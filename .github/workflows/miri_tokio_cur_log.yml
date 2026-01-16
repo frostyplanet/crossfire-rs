@@ -2,7 +2,7 @@ name: miri-tokio-cur-log
 
 on:
   workflow_dispatch:
-  schedule: [cron: "20 */6 * * *"]
+  schedule: [cron: "20 */9 * * *"]
 
 env:
   CARGO_TERM_COLOR: always
