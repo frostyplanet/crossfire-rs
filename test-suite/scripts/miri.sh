@@ -13,4 +13,4 @@ MIRIFLAGS="$MIRIFLAGS -Zmiri-seed=$MIRI_SEED -Zmiri-disable-isolation -Zmiri-no-
 export MIRIFLAGS
 echo $MIRIFLAGS
 # --lib: to skip doctest
-RUSTFLAGS="--cfg tokio_unstable" RUST_BACKTRACE=1 cargo +nightly miri test --lib $@ -- --no-capture --test-threads=1
+RUSTFLAGS="--cfg tokio_unstable" RUST_BACKTRACE=1 cargo +${NIGHTLY_VERSION:-nightly} miri test --lib $@ -- --no-capture --test-threads=1

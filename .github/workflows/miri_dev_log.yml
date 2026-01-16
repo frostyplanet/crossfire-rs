@@ -17,11 +17,14 @@ jobs:
       with:
           ref: dev
 
+    - name: install specified nightly toolchain
+      run: rustup toolchain install nightly-2025-12-01
+
     - name: install miri
-      run:  rustup component add --toolchain nightly-x86_64-unknown-linux-gnu miri
+      run: rustup component add miri --toolchain nightly-2025-12-01
 
     - name: Run miri tests with log (tokio multi thread)
-      run: cd test-suite; scripts/miri.sh --features trace_log,tokio
+      run: cd test-suite; NIGHTLY_VERSION=nightly-2025-12-01 scripts/miri.sh --features trace_log,tokio
 
     - name: collect log
       if: ${{ failure() }}
@@ -30,11 +33,8 @@ jobs:
           name: crossfire_miri_tokio_multithread
           path: /tmp/crossfire_miri.log
 
-    - name: Run miri tests without log (tokio multi thread)
-      run: cd test-suite; scripts/miri.sh
-
     - name: Run miri tests with log (tokio current thread)
-      run: cd test-suite; SINGLE_THREAD_RUNTIME=1 scripts/miri.sh --features trace_log,tokio
+      run: cd test-suite; NIGHTLY_VERSION=nightly-2025-12-01 SINGLE_THREAD_RUNTIME=1 scripts/miri.sh --features trace_log,tokio
 
     - name: collect log
       if: ${{ failure() }}

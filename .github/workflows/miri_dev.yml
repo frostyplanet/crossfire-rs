@@ -17,8 +17,14 @@ jobs:
       with:
           ref: dev
 
-    - name: install miri
-      run:  rustup component add --toolchain nightly-x86_64-unknown-linux-gnu miri
+    - name: install specified nightly toolchain
+      run: rustup toolchain install nightly-2025-12-01
+
+    - name: install miri component to specified nightly
+      run: rustup component add miri --toolchain nightly-2025-12-01
+
+    - name: Run miri tests without log (tokio multi thread)
+      run: cd test-suite; NIGHTLY_VERSION=nightly-2025-12-01 scripts/miri.sh
 
     - name: Run miri tests without log (tokio current thread)
-      run: cd test-suite; SINGLE_THREAD_RUNTIME=1 scripts/miri.sh
+      run: cd test-suite; SINGLE_THREAD_RUNTIME=1 NIGHTLY_VERSION=nightly-2025-12-01 scripts/miri.sh
