@@ -2,7 +2,6 @@
 use crate::collections::WeakCell;
 #[allow(unused_imports)]
 use crate::flavor::{Flavor, FlavorImpl, OneSpmc};
-use crate::shared::ChannelShared;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
 use crate::trace_log;
@@ -90,7 +89,7 @@ pub(crate) trait RegistrySend<T: Send + 'static>: Registry {
     }
 
     #[inline(always)]
-    fn fire<F: Flavor>(&self, _shared: &ChannelShared<F>) -> WakeResult
+    fn fire<F>(&self, _flavor: &F) -> WakeResult
     where
         F: FlavorImpl<Item = T>,
     {
@@ -224,7 +223,7 @@ impl<T: Send + 'static> RegistrySend<T> for RegistrySingle {
     }
 
     #[inline(always)]
-    fn fire<F: Flavor>(&self, _shared: &ChannelShared<F>) -> WakeResult
+    fn fire<F>(&self, _flavor: &F) -> WakeResult
     where
         F: FlavorImpl<Item = T>,
     {
@@ -474,47 +473,13 @@ impl<P: Copy> RegistryMulti<P> {
         }
     }
 
-    #[inline(always)]
-    fn _fire<F>(&self, handle: F) -> WakeResult
-    where
-        F: Fn(&ArcWaker<P>) -> WakeResult,
-    {
-        if let Some((waker, _last_seq)) = self.pop_first() {
-            let r = handle(&waker);
-            trace_log!("wake {} {:?} {:?}", self._tag, waker, r);
-            if r.is_done() {
-                return r;
-            }
-            if let Some(mut last_seq) = _last_seq {
-                last_seq = last_seq.wrapping_sub(1);
-                while let Some(_waker) = self.pop_again() {
-                    let r = handle(&_waker);
-                    trace_log!("wake {} {:?} {:?}", self._tag, _waker, r);
-                    if r.is_done() {
-                        return r;
-                    }
-                    // The latest seq in RegistryMulti is always last_waker.get_seq() +1
-                    // Because some waker (issued by sink / stream) might be INIT all the time,
-                    // prevent to dead loop situation when they are wake up and re-register again.
-                    if _waker.get_seq() >= last_seq {
-                        trace_log!("wake {} stop at {}", self._tag, last_seq);
-                        return WakeResult::Next;
-                    }
-                }
-            }
-        }
-        WakeResult::Next
-    }
-
     /// Call when waker is cancelled
     #[inline(always)]
     fn _clear_wakers(&self, old_waker: &ArcWaker<P>, oneshot: bool) {
         // Don't need accurate, it's optional
         if self.state.load(Ordering::Acquire) & MULTI_HAS_WAKER == 0 {
-            trace_log!("{}: skip", self._tag);
             return;
         }
-        trace_log!("{}: enter clear_wakers", self._tag);
         let old_seq = old_waker.get_seq();
         macro_rules! process {
             ($guard: expr, $weak: expr) => {{
@@ -526,7 +491,7 @@ impl<P: Copy> RegistryMulti<P> {
                     } else {
                         // There might be later waker cancel due to success sending before commit_waiting.
                         // While earlier waker is still waiting.
-                        let state = waker.get_state();
+                        let state = waker.get_state_relaxed();
                         if state == WakerState::Init as u8 {
                             let _ = waker.wake();
                             if oneshot {
@@ -722,11 +687,35 @@ impl<T: Send + Unpin + 'static> RegistrySend<T> for RegistryMultiSend<T> {
     }
 
     #[inline(always)]
-    fn fire<F: Flavor>(&self, shared: &ChannelShared<F>) -> WakeResult
+    fn fire<F>(&self, flavor: &F) -> WakeResult
     where
         F: FlavorImpl<Item = T>,
     {
-        return self._fire(|waker| shared.on_recv_try_send(waker));
+        if let Some((waker, _last_seq)) = self.pop_first() {
+            let r = waker.wake_or_copy::<F>(flavor);
+            trace_log!("wake {} {:?} {:?}", self._tag, waker, r);
+            if r.is_done() {
+                return r;
+            }
+            if let Some(mut last_seq) = _last_seq {
+                last_seq = last_seq.wrapping_sub(1);
+                while let Some(_waker) = self.pop_again() {
+                    let r = _waker.wake_or_copy::<F>(flavor);
+                    trace_log!("wake {} {:?} {:?}", self._tag, _waker, r);
+                    if r.is_done() {
+                        return r;
+                    }
+                    // The latest seq in RegistryMulti is always last_waker.get_seq() +1
+                    // Because some waker (issued by sink / stream) might be INIT all the time,
+                    // prevent to dead loop situation when they are wake up and re-register again.
+                    if _waker.get_seq() >= last_seq {
+                        trace_log!("wake {} stop at {}", self._tag, last_seq);
+                        return WakeResult::Next;
+                    }
+                }
+            }
+        }
+        WakeResult::Next
     }
 
     #[inline(always)]
@@ -755,7 +744,30 @@ impl RegistryRecv for RegistryMultiRecv {
 
     #[inline(always)]
     fn fire(&self) {
-        self._fire(|waker| waker.wake());
+        if let Some((waker, _last_seq)) = self.pop_first() {
+            let r = waker.wake();
+            trace_log!("wake {} {:?} {:?}", self._tag, waker, r);
+            if r.is_done() {
+                return;
+            }
+            if let Some(mut last_seq) = _last_seq {
+                last_seq = last_seq.wrapping_sub(1);
+                while let Some(_waker) = self.pop_again() {
+                    let r = _waker.wake();
+                    trace_log!("wake {} {:?} {:?}", self._tag, _waker, r);
+                    if r.is_done() {
+                        return;
+                    }
+                    // The latest seq in RegistryMulti is always last_waker.get_seq() +1
+                    // Because some waker (issued by sink / stream) might be INIT all the time,
+                    // prevent to dead loop situation when they are wake up and re-register again.
+                    if _waker.get_seq() >= last_seq {
+                        trace_log!("wake {} stop at {}", self._tag, last_seq);
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     #[inline(always)]

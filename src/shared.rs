@@ -220,20 +220,9 @@ impl<F: Flavor> ChannelShared<F> {
     /// Wake up one tx
     #[inline(always)]
     pub(crate) fn on_recv(&self) {
-        if WakeResult::Sent == self.senders.fire(self) {
+        if WakeResult::Sent == self.senders.fire(&self.inner) {
             self.on_send();
         }
-    }
-
-    #[inline(always)]
-    pub(crate) fn on_recv_try_send(&self, waker: &WakerInner<*const F::Item>) -> WakeResult {
-        waker.wake_or_copy(|p: *const F::Item| -> u8 {
-            if let Some(true) = self.inner.try_send_oneshot(p) {
-                WakerState::Done as u8
-            } else {
-                WakerState::Woken as u8
-            }
-        })
     }
 
     /// Call on cancellation, return true to indicate drop temporary message

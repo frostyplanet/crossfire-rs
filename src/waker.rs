@@ -1,4 +1,5 @@
 use crate::collections::ArcCell;
+use crate::flavor::FlavorImpl;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::transmute;
@@ -330,10 +331,7 @@ impl<T> WakerInner<*const T> {
     }
 
     #[inline(always)]
-    pub fn wake_or_copy<F>(&self, copy_f: F) -> WakeResult
-    where
-        F: FnOnce(*const T) -> u8,
-    {
+    pub fn wake_or_copy<F: FlavorImpl<Item = T>>(&self, flavor: &F) -> WakeResult {
         // This is after we get waker from waker_registry, which already happen before relationship.
         // both >= WakerState::Waiting is certain
         let mut state = self.get_state_relaxed();
@@ -347,8 +345,12 @@ impl<T> WakerInner<*const T> {
                     self.get_waker().wake_by_ref();
                     return WakeResult::Woken;
                 }
-                state = copy_f(p as *const T);
-                self.state.store(state as u8, Ordering::SeqCst);
+                state = if let Some(true) = flavor.try_send_oneshot(p as *const T) {
+                    WakerState::Done as u8
+                } else {
+                    WakerState::Woken as u8
+                };
+                self.state.store(state, Ordering::SeqCst);
                 self.get_waker().wake_by_ref();
                 if state == WakerState::Done as u8 {
                     return WakeResult::Sent;
