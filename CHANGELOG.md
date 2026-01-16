@@ -15,6 +15,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.0.0.beta3] - 2026-01-16
+
+### Change
+
+- New implementation of ArraySpsc & ArrayMpsc, throughput +50%
+
+- New implementation of OneMpsc, minor speed up.
+
+- Change multiplex recv(), try_recv(), recv_timeout() to &self, and impl BlockingRxTrait.
+
+- Remove unused lifetime param in BlockingRxTrait.
+
+### Fixed
+
+Problems from v3 beta
+
+- Add more backoff yielding for One flavor, to ensure 8x1, 16x1 cases stable, and minor optimize.
+
+- Fix commit_waiting state wrong condition, which lead to regression in cases like 1000 async tx.
+
+- Spsc should disable direct_copy (which only safe for MP)
+
 ## [3.0.0.beta2] - 2026-01-15
 
 - Fix Array visibility in flavor module
