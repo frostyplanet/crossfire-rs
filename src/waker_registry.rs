@@ -426,8 +426,10 @@ impl<P: Copy> RegistryMulti<P> {
                 }
             }
             if flag & MULTI_HAS_WAKER > 0 {
+                let mut has_pop = false;
                 loop {
                     if let Some(weak) = guard.queue.pop_front() {
+                        has_pop = true;
                         if let Some(inner) = weak.upgrade() {
                             if guard.queue.is_empty() {
                                 self.state.store(guard.check_select(), Ordering::SeqCst);
@@ -437,7 +439,10 @@ impl<P: Copy> RegistryMulti<P> {
                             }
                         }
                     } else {
-                        // nothing changed, don't need to touch the state
+                        if has_pop {
+                            // might upgrade encounter weak previous loop
+                            self.state.store(guard.check_select(), Ordering::SeqCst);
+                        }
                         return None;
                     }
                 }
@@ -458,8 +463,10 @@ impl<P: Copy> RegistryMulti<P> {
         }
         {
             let mut guard = self.inner.lock();
+            let mut has_pop = false;
             loop {
                 if let Some(weak) = guard.queue.pop_front() {
+                    has_pop = true;
                     if let Some(inner) = weak.upgrade() {
                         if guard.queue.is_empty() {
                             self.state.store(guard.check_select(), Ordering::SeqCst);
@@ -467,8 +474,10 @@ impl<P: Copy> RegistryMulti<P> {
                         return Some(ArcWaker::from_arc(inner));
                     }
                 } else {
-                    // might upgrade encounter weak previous loop
-                    self.state.store(guard.check_select(), Ordering::SeqCst);
+                    if has_pop {
+                        // might upgrade encounter weak previous loop
+                        self.state.store(guard.check_select(), Ordering::SeqCst);
+                    }
                     return None;
                 }
             }
@@ -483,12 +492,14 @@ impl<P: Copy> RegistryMulti<P> {
             return;
         }
         let old_seq = old_waker.get_seq();
+        // the macro yield true to stop, false to continue
         macro_rules! process {
             ($guard: expr, $weak: expr) => {{
                 if let Some(waker) = $weak.upgrade() {
                     let _seq = waker.get_seq();
                     if _seq == old_seq {
                         trace_log!("{}: clear {:?} hit", self._tag, waker);
+                        // XXX, it's possible to reuse the waker, leave it for future review
                         true
                     } else if _seq > old_seq {
                         $guard.queue.push_front($weak);
@@ -606,7 +617,7 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
         // which change Waiting/Init to Closed
         match waker.abandon() {
             Ok(()) => {
-                trace_log!("tx: abandon cancel {:?}", waker);
+                trace_log!("{}: abandon cancel {:?}", self._tag, waker);
                 self.clear_wakers(&waker);
                 Ok(())
             }
@@ -624,7 +635,7 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
             if waker.get_state_relaxed() >= WakerState::Woken as u8 {
                 return;
             }
-            self._clear_wakers(&waker, true)
+            self._clear_wakers(&waker, true);
         }
     }
 }
@@ -669,7 +680,7 @@ impl<T: Send + Unpin + 'static> RegistrySend<T> for RegistryMultiSend<T> {
             let cur_state = waker.get_state();
             // If we se Woken here, only possible otherside has woken it
             if cur_state >= WakerState::Woken as u8 {
-                trace_log!("tx: cancel_reuse {:?} {}", waker, cur_state);
+                trace_log!("{}: cancel_reuse {:?} {}", self._tag, waker, cur_state);
                 if cur_state < state as u8 {
                     return state as u8;
                 } else {
@@ -696,6 +707,7 @@ impl<T: Send + Unpin + 'static> RegistrySend<T> for RegistryMultiSend<T> {
             if r.is_done() {
                 return r;
             }
+            drop(waker);
             if let Some(mut last_seq) = _last_seq {
                 last_seq = last_seq.wrapping_sub(1);
                 while let Some(_waker) = self.pop_again() {
@@ -749,6 +761,7 @@ impl RegistryRecv for RegistryMultiRecv {
             if r.is_done() {
                 return;
             }
+            drop(waker);
             if let Some(mut last_seq) = _last_seq {
                 last_seq = last_seq.wrapping_sub(1);
                 while let Some(_waker) = self.pop_again() {
