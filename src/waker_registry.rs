@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use crate::collections::WeakCell;
 #[allow(unused_imports)]
-use crate::flavor::{Flavor, FlavorImpl, OneSpmc};
+use crate::flavor::{Flavor, FlavorImpl};
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
 use crate::trace_log;

@@ -16,7 +16,7 @@ pub use one::*;
 mod one_mpsc;
 pub use one_mpsc::OneMpsc;
 mod one_spmc;
-pub use one_spmc::{OneSpmc, OneSpsc};
+pub use one_spmc::OneSpsc;
 
 /// Essential struct for select and read interface
 pub(crate) struct Token {

@@ -125,15 +125,14 @@ impl<T> One<T> {
             if head == tail {
                 return None;
             }
-            let next_head = head.wrapping_add(1);
-            let new_pos = Self::pack(next_head, tail);
+            let new_pos = Self::pack(tail, tail);
             match self.pos.compare_exchange_weak(pos, new_pos, SeqCst, Acquire) {
                 Err(_pos) => {
                     pos = _pos;
                 }
                 Ok(_) => {
                     let index = head & 0x1;
-                    return Some((index, next_head));
+                    return Some((index, tail));
                 }
             }
         }

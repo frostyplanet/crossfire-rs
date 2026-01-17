@@ -4,8 +4,8 @@ use core::mem::{needs_drop, MaybeUninit};
 use crossbeam_utils::CachePadded;
 use std::ptr;
 use std::sync::atomic::{
-    compiler_fence, AtomicU64,
-    Ordering::{self, Acquire, Relaxed, SeqCst},
+    AtomicU64,
+    Ordering::{self, Acquire, SeqCst},
 };
 
 /// This is a spsc version of `One` without stamp.
@@ -13,15 +13,15 @@ use std::sync::atomic::{
 /// The sender side allow to push and drop it's own previous value, if receivers had not consumed it.
 pub type OneSpsc<T> = OneSp<T, false>;
 
-/// This is a spmc version of `One` without stamp, allow replace() on the sender side.
-///
-/// The sender side allow to push and drop it's own previous value, if receivers had not consumed it.
-///
-/// NOTE: use lockless technique inspired by the OFLIT paper, miri will probably report data racing issue,
-/// but it's intentional.
-/// This module cannot not separate pop into start_read/read interface,
-/// so it cannot implement Flavor interface.
-pub type OneSpmc<T> = OneSp<T, true>;
+///// This is a spmc version of `One` without stamp, allow replace() on the sender side.
+/////
+///// The sender side allow to push and drop it's own previous value, if receivers had not consumed it.
+/////
+///// NOTE: use lockless technique inspired by the OFLIT paper, miri will probably report data racing issue,
+///// but it's intentional.
+///// This module cannot not separate pop into start_read/read interface,
+///// so it cannot implement Flavor interface.
+//type OneSpmc<T> = OneSp<T, true>;
 
 pub struct OneSp<T, const MC: bool> {
     pos: CachePadded<AtomicU64>,
@@ -147,13 +147,13 @@ impl<T> Slot<T> {
         unsafe { (*self.value.get()).write(ptr::read(value)) };
     }
 
-    #[inline(always)]
-    fn read_into(&self, dest: *mut T) {
-        unsafe {
-            let src_ptr = (*self.value.get()).as_ptr();
-            ptr::copy_nonoverlapping(src_ptr, dest, 1);
-        }
-    }
+    //    #[inline(always)]
+    //    fn read_into(&self, dest: *mut T) {
+    //        unsafe {
+    //            let src_ptr = (*self.value.get()).as_ptr();
+    //            ptr::copy_nonoverlapping(src_ptr, dest, 1);
+    //        }
+    //    }
 
     #[inline(always)]
     fn read(&self) -> T {
@@ -166,6 +166,7 @@ impl<T> Slot<T> {
     }
 }
 
+/*
 impl<T> OneSpmc<T> {
     #[inline]
     pub fn replace(&self, value: T) {
@@ -177,8 +178,7 @@ impl<T> OneSpmc<T> {
     #[inline(always)]
     fn _replace(&self, value: *const T) {
         // No one will advance tail except me
-        let mut pos = self.pos.load(Relaxed);
-        compiler_fence(Ordering::SeqCst);
+        let mut pos = self.pos.load(Acquire);
         let (mut head, tail) = Self::unpack(pos);
         let new_tail = tail.wrapping_add(1);
         let index = new_tail & 0x1;
@@ -190,7 +190,7 @@ impl<T> OneSpmc<T> {
                 return;
             } else {
                 debug_assert_eq!(head.wrapping_add(1), tail);
-                let new_pos = Self::pack(head.wrapping_add(1), new_tail);
+                let new_pos = Self::pack(tail, new_tail);
                 match self.pos.compare_exchange_weak(pos, new_pos, SeqCst, Acquire) {
                     Ok(_) => {
                         let index = tail & 0x1;
@@ -280,6 +280,7 @@ impl<T: Send + Unpin + 'static> Queue for OneSpmc<T> {
         }
     }
 }
+*/
 
 impl<T: Send + Unpin + 'static> Queue for OneSpsc<T> {
     type Item = T;

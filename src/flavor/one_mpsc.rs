@@ -116,9 +116,8 @@ impl<T> OneMpsc<T> {
         if head == tail {
             return None;
         }
-        let next_head = head.wrapping_add(1);
         let index = head & 0x1;
-        return Some((index, next_head));
+        return Some((index, tail));
     }
 
     #[inline(always)]
