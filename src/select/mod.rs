@@ -5,6 +5,7 @@
 //!   which is a type-erased interface similar to the select in crossbeam-channel, supporting both `mpmc`, `mpsc`, and `spsc` channels.
 //! - [Multiplex]: Owns and reads from multiple channels as a non-concurrent consumer, mainly for `spsc`, `mpsc`.
 //!
+//! Performance:  dedicated channel > multiplex > select
 
 pub(crate) mod select;
 pub use select::{Select, SelectResult};

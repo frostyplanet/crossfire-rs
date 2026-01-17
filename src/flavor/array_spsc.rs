@@ -2,7 +2,11 @@ use super::{FlavorBounded, FlavorImpl, FlavorSelect, Queue, Token};
 use crate::crossbeam::array_queue_spsc::ArrayQueueSpsc;
 use std::mem::MaybeUninit;
 
-/// Simplified ArrayQueue tweaks for spsc, without stamp
+/// Ultra light-weight bounded SPSC
+///
+/// which derives from ArrayQueue, but without stamp.
+/// With only two atomics for cache affinity, the fastpath only require two ops to one atomic.
+///
 pub struct ArraySpsc<T>(ArrayQueueSpsc<T>);
 
 impl<T> ArraySpsc<T> {

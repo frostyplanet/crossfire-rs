@@ -2,7 +2,11 @@ use super::{FlavorBounded, FlavorImpl, FlavorSelect, Queue, Token};
 use crate::crossbeam::array_queue_mpsc::ArrayQueueMpsc;
 use std::mem::MaybeUninit;
 
-/// Simplified ArrayQueue tweaks for mpsc
+/// Simplified ArrayQueue tweaks for MPSC
+///
+/// Push and pop fast path reduced one atomic ops compared to its MPMC version (only 3 ops instead
+/// of 4),
+/// and it's faster to detect the empty / full condition (2 ops instead of 3).
 pub struct ArrayMpsc<T>(ArrayQueueMpsc<T>);
 
 impl<T> ArrayMpsc<T> {

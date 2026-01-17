@@ -5,9 +5,9 @@ use std::ops::Deref;
 
 pub mod array;
 pub use array::Array;
-pub mod array_mpsc;
+mod array_mpsc;
 pub use array_mpsc::ArrayMpsc;
-pub mod array_spsc;
+mod array_spsc;
 pub use array_spsc::ArraySpsc;
 mod list;
 pub use list::*;

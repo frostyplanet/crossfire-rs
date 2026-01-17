@@ -11,11 +11,10 @@ https://docs.rs/crossfire)
 [![Rust 1.36+](https://img.shields.io/badge/rust-1.36+-lightgray.svg)](
 https://www.rust-lang.org)
 
-High-performance lockless spsc/mpsc/mpmc channels.
+High-performance lockless spsc/mpsc/mpmc channels, algorithm derives crossbeam with improvements.
 
 It supports async contexts and bridges the gap between async and blocking contexts.
 
-The low level is based on crossbeam-queue.
 For the concept, please refer to the [wiki](https://github.com/frostyplanet/crossfire-rs/wiki).
 
 ## Version history
@@ -27,28 +26,29 @@ by removing generic types from the ChannelShared type, which made it easier to c
 
 * v2.1: [2025.9] Removed the dependency on crossbeam-channel
 and implemented with [a modified version of crossbeam-queue](https://github.com/frostyplanet/crossfire-rs/wiki/crossbeam-related),
-which brings massive performance improvements for both async and blocking contexts.
+brings 2x performance improvements for both async and blocking contexts.
 
-* v3.0: [2026.1] Refactored API back to generic, with new features like select, because enum dispatch became bottle neck when adding more channel flavor.
-async performance has improved, especially +33% for bounded spsc on x86, +20% for one-sized.
+* v3.0: [2026.1] Refactored API back to generic flavor interface, added [select](https://docs.rs/crossfire/latest/crossfire/select/index.html).
+Dedicated optimization: Bounded SPSC +70%, MPSC +30%, one-size +20%.
+Eliminate enum dispatch cost, async performance improved for another 33%.
 Checkout [compat](https://docs.rs/crossfire/latest/crossfire/compat/index.html) for migration from v2.x.
 
 
 ## Performance
 
 Being a lockless channel, crossfire outperforms other async-capable channels.
-And thanks to a lighter notification mechanism, in a blocking context, some cases are even
+And thanks to a lighter notification mechanism, in a blocking context, most cases are even
 better than the original crossbeam-channel,
 
-<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-14/mpsc_size_100_sync.png" alt="mpsc bounded size 100 blocking context">
+<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-18/mpsc_size_100_sync.png" alt="mpsc bounded size 100 blocking context">
 
-<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-14/mpmc_size_100_sync.png" alt="mpmc bounded size 100 blocking context">
+<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-18/mpmc_size_100_sync.png" alt="mpmc bounded size 100 blocking context">
 
-<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-14/mpsc_size_100_tokio.png" alt="mpsc bounded size 100 async context">
+<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-18/mpsc_size_100_tokio.png" alt="mpsc bounded size 100 async context">
 
-<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-14/mpmc_size_100_tokio.png" alt="mpmc bounded size 100 async context">
+<img src="https://github.com/frostyplanet/crossfire-rs/wiki/images/benchmark-3.0.0-2026-01-18/mpmc_size_100_tokio.png" alt="mpmc bounded size 100 async context">
 
-More benchmark data is posted on [wiki](https://github.com/frostyplanet/crossfire-rs/wiki/benchmark-v3.0.0-2026%E2%80%9001%E2%80%9015).
+More benchmark data is posted on [wiki](https://github.com/frostyplanet/crossfire-rs/wiki/benchmark-v3.0.0-2026%E2%80%9001%E2%80%9018).
 
 Also, being a lockless channel, the algorithm relies on spinning and yielding. Spinning is good on
 multi-core systems, but not friendly to single-core systems (like virtual machines).
@@ -86,6 +86,7 @@ The following lockless queues are expose in [flavor](https://docs.rs/crossfire/l
 - `List` (which use crossbeam `SegQueue`)
 - `Array` (which is an enum that wraps crossbeam `ArrayQueue`, and a `One` if init with size<=1)
   - For a bounded channel, a 0 size case is not supported yet. (rewrite as 1 size).
+  - The implementation for spsc & mpsc is simplified from mpmc version.
 - `One` (which derives from `ArrayQueue` algorithm, but have better performance in size=1
 scenario, because it have two slots to allow reader and writer works concurrently)
 - `Null` (See the doc [null](https://docs.rs/crossfire/latest/crossfire/null/index.html)), for cancellation purpose channel, that only wakeup on
@@ -126,7 +127,7 @@ each module has [build()](https://docs.rs/crossfire/latest/crossfire/mpmc/fn.bui
 
 </table>
 
-*Safety*: For the SP / SC version, [AsyncTx], [AsyncRx], [Tx], and [Rx] are not `Clone` and without `Sync`.
+*Safety*: For the SP / SC version, `AsyncTx`, `AsyncRx`, `Tx`, and `Rx` are not `Clone` and without `Sync`.
 Although can be moved to other threads, but not allowed to use send/recv while in an Arc. (Refer to the compile_fail
 examples in the type document).
 
