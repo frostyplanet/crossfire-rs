@@ -715,6 +715,7 @@ impl<T: 'static> RegistrySend<T> for RegistryMultiSend<T> {
             if let Some(mut last_seq) = _last_seq {
                 last_seq = last_seq.wrapping_sub(1);
                 while let Some(_waker) = self.pop_again() {
+                    trace_log!("{} process {:?}", self._tag, _waker);
                     let r = _waker.wake_or_copy::<F>(flavor);
                     trace_log!("wake_or_copy {} {:?} {:?}", self._tag, _waker, r);
                     if r.is_done() {
