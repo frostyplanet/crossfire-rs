@@ -697,12 +697,12 @@ impl<T: Send + Unpin + 'static> RegistrySend<T> for RegistryMultiSend<T> {
     }
 
     #[inline(always)]
-    fn fire<F>(&self, flavor: &F) -> WakeResult
+    fn fire<F>(&self, _flavor: &F) -> WakeResult
     where
         F: FlavorImpl<Item = T>,
     {
         if let Some((waker, _last_seq)) = self.pop_first() {
-            let r = waker.wake_or_copy::<F>(flavor);
+            let r = waker.wake();
             trace_log!("wake {} {:?} {:?}", self._tag, waker, r);
             if r.is_done() {
                 return r;
@@ -711,7 +711,7 @@ impl<T: Send + Unpin + 'static> RegistrySend<T> for RegistryMultiSend<T> {
             if let Some(mut last_seq) = _last_seq {
                 last_seq = last_seq.wrapping_sub(1);
                 while let Some(_waker) = self.pop_again() {
-                    let r = _waker.wake_or_copy::<F>(flavor);
+                    let r = _waker.wake();
                     trace_log!("wake {} {:?} {:?}", self._tag, _waker, r);
                     if r.is_done() {
                         return r;

@@ -87,7 +87,10 @@ impl<F: Flavor> Tx<F> {
         let large = shared.large;
         let backoff_cfg = BackoffConfig::detect().spin(2).limit(shared.backoff_limit);
         let mut backoff = Backoff::from(backoff_cfg);
-        let direct_copy = deadline.is_none() && shared.sender_direct_copy();
+        let congest = shared.sender_direct_copy();
+        // disable because of issue #54
+        let direct_copy = false;
+        //        let direct_copy = deadline.is_none() && shared.sender_direct_copy();
         if large {
             backoff.set_step(2);
         }
@@ -121,8 +124,8 @@ impl<F: Flavor> Tx<F> {
                 return Ok(());
             }
         }
-        let direct_copy_ptr: *const F::Item =
-            if direct_copy { item.as_ptr() } else { std::ptr::null() };
+        let direct_copy_ptr: *const F::Item = std::ptr::null();
+        //            if direct_copy { item.as_ptr() } else { std::ptr::null() };
 
         let mut state: u8;
         let mut o_waker: Option<<F::Send as Registry>::Waker> = None;
@@ -145,7 +148,7 @@ impl<F: Flavor> Tx<F> {
             state = shared.sender_double_check::<false>(&item, &mut o_waker);
             trace_log!("tx: sender_reg_and_try {:?} state={}", o_waker, state);
             while state < WakerState::Woken as u8 {
-                if direct_copy_ptr != std::ptr::null_mut() {
+                if congest {
                     state = shared.sender_snooze(&o_waker, &mut backoff);
                 }
                 if state <= WakerState::Waiting as u8 {
