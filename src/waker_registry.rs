@@ -490,27 +490,24 @@ impl<P: Copy> RegistryMulti<P> {
                     if _seq == old_seq {
                         trace_log!("{}: clear {:?} hit", self._tag, waker);
                         true
+                    } else if _seq > old_seq {
+                        $guard.queue.push_front($weak);
+                        true
                     } else {
                         // There might be later waker cancel due to success sending before commit_waiting.
                         // While earlier waker is still waiting.
-                        let state = waker.get_state_relaxed();
-                        if state == WakerState::Init as u8 {
-                            let _ = waker.wake();
+                        let state = waker.get_state();
+                        if state < WakerState::Woken as u8 {
+                            $guard.queue.push_front($weak);
+                            true
+                        } else {
                             if oneshot {
                                 trace_log!("{}: cancel {:?} one {}", self._tag, waker, old_seq);
-                                true
-                            } else if _seq > old_seq {
-                                trace_log!("{}: cancel {:?}>{} ", self._tag, waker, old_seq);
                                 true
                             } else {
                                 trace_log!("{}: cancel {:?}<{}", self._tag, waker, old_seq);
                                 false
                             }
-                        } else if state == WakerState::Waiting as u8 {
-                            $guard.queue.push_front($weak);
-                            return;
-                        } else {
-                            false
                         }
                     }
                 } else {
@@ -1018,44 +1015,49 @@ mod tests {
     fn test_registry_multi_clear_oneshot() {
         let reg = RegistryMultiRecv::new();
         // test seq
-        let waker3 = ArcWaker::new_blocking(());
-        reg.reg_waker(&waker3);
-        assert_eq!(waker3.get_state(), WakerState::Init as u8);
-        let waker4 = ArcWaker::new_blocking(());
-        reg.reg_waker(&waker4); // Init
-        waker4.commit_waiting();
-        assert_eq!(waker4.get_state(), WakerState::Waiting as u8);
+        let waker1 = ArcWaker::new_blocking(());
+        reg.reg_waker(&waker1);
+        assert_eq!(waker1.get_state(), WakerState::Init as u8);
+        let waker2 = ArcWaker::new_blocking(());
+        reg.reg_waker(&waker2); // Init
+        waker2.commit_waiting();
+        assert_eq!(waker2.get_state(), WakerState::Waiting as u8);
         for _ in 0..10 {
             let _waker = ArcWaker::new_blocking(());
             reg.reg_waker(&_waker);
         }
         let num_workers = reg.len();
-        println!("clear waker4 oneshot seq {}", waker4.get_seq());
-        reg.cancel_waker(&mut Some(waker4));
-        assert_eq!(reg.len(), num_workers - 1); // Only waker3 is removed.
-        assert!(waker3.get_state() >= WakerState::Woken as u8);
+        println!("clear waker2 oneshot seq {}", waker2.get_seq());
+        reg.cancel_waker(&mut Some(waker2));
+        assert_eq!(reg.len(), num_workers); // Only nothing happen.
+        reg.cancel_waker(&mut Some(waker1));
+        assert_eq!(reg.len(), num_workers - 1); // Only waker1 is removed.
     }
 
     #[test]
     fn test_registry_multi_clear() {
         let reg = RegistryMultiRecv::new();
         // test seq
-        let waker3 = ArcWaker::new_blocking(());
-        reg.reg_waker(&waker3);
-        assert_eq!(waker3.get_state(), WakerState::Init as u8);
-        let waker4 = ArcWaker::new_blocking(());
-        reg.reg_waker(&waker4); // Init
-        drop(waker4); // waker4 is dropped, weak is left
+        let waker1 = ArcWaker::new_blocking(());
+        reg.reg_waker(&waker1);
+        assert_eq!(waker1.get_state(), WakerState::Init as u8);
+        let waker2 = ArcWaker::new_blocking(());
+        reg.reg_waker(&waker2); // Init
+        drop(waker2); // waker4 is dropped, weak is left
         for _ in 0..10 {
             let _waker = ArcWaker::new_blocking(());
             reg.reg_waker(&_waker);
         }
-        let waker5 = ArcWaker::new_blocking(());
-        reg.reg_waker(&waker5);
+        let waker3 = ArcWaker::new_blocking(());
+        reg.reg_waker(&waker3);
         let _num_workers = reg.len(); // Keep for debugging context, though not used in assertion
-        println!("clear waker5 seq={}", waker5.get_seq());
-        reg.clear_wakers(&waker5); // clear waker4, waker5
-        assert_eq!(reg.len(), 0); // Original assertion, seems to be the actual behavior
+        println!("clear waker3 seq={}", waker3.get_seq());
+        reg.clear_wakers(&waker3); // nothing happen, because waker3 is there
+        assert_eq!(reg.len(), 13);
+        reg.clear_wakers(&waker1);
+        assert_eq!(reg.len(), 12);
+        reg.clear_wakers(&waker3);
+        assert_eq!(reg.len(), 0);
     }
 
     #[test]
