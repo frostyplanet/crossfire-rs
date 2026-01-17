@@ -25,7 +25,7 @@ fn init_logger() {
             let mut config = Builder::default()
                 .signal(signal_consts::SIGINT)
                 .signal(signal_consts::SIGTERM)
-                .tracing_global()
+                //                .tracing_global()
                 .add_sink(ring)
                 .add_sink(LogConsole::new(
                     ConsoleTarget::Stdout,
@@ -33,6 +33,7 @@ fn init_logger() {
                     recipe::LOG_FORMAT_DEBUG,
                 ));
             config.dynamic = true;
+            config.panic = true;
             config.build().expect("log_setup");
         });
     }
@@ -151,31 +152,42 @@ fn _crossfire_blocking<T: BlockingTxTrait<usize>, R: BlockingRxTrait<usize>>(
     let mut th_rx = Vec::new();
     let mut send_counter: usize = 0;
     let _send_counter = msg_count / txs.len();
-    for _tx in txs {
+    for (i, _tx) in txs.into_iter().enumerate() {
         send_counter += _send_counter;
-        th_tx.push(thread::spawn(move || {
-            for i in 0.._send_counter {
-                _tx.send(i).expect("send");
-            }
-        }));
+        let th_builder = thread::Builder::new().name(format!("sender{}", i));
+        th_tx.push(
+            th_builder
+                .spawn(move || {
+                    for i in 0.._send_counter {
+                        _tx.send(i).expect("send");
+                    }
+                    crossfire::trace_log!("sender exit {:?}", _tx);
+                })
+                .expect("spawn"),
+        );
     }
     let rx_count = rxs.len();
-    for _ in 0..(rx_count - 1) {
+    for i in 0..(rx_count - 1) {
         let _rx = rxs.pop().unwrap();
-        th_rx.push(thread::spawn(move || -> usize {
-            let mut i = 0;
-            loop {
-                match _rx.recv() {
-                    Ok(_) => {
-                        i += 1;
+        let th_builder = thread::Builder::new().name(format!("receiver{}", i));
+        th_rx.push(
+            th_builder
+                .spawn(move || -> usize {
+                    let mut i = 0;
+                    loop {
+                        match _rx.recv() {
+                            Ok(_) => {
+                                i += 1;
+                            }
+                            Err(_) => {
+                                break;
+                            }
+                        }
                     }
-                    Err(_) => {
-                        break;
-                    }
-                }
-            }
-            i
-        }));
+                    i
+                })
+                .expect("spawn"),
+        );
     }
     let rx = rxs.pop().unwrap();
     let mut recv_counter = 0;
@@ -190,12 +202,13 @@ fn _crossfire_blocking<T: BlockingTxTrait<usize>, R: BlockingRxTrait<usize>>(
         }
     }
     for th in th_tx {
-        let _ = th.join();
+        let _ = th.join().unwrap();
     }
     for th in th_rx {
         recv_counter += th.join().unwrap();
     }
     assert_eq!(send_counter, recv_counter);
+    crossfire::trace_log!("---");
 }
 
 async fn _crossfire_blocking_async<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
@@ -247,7 +260,7 @@ async fn _crossfire_blocking_async<T: BlockingTxTrait<usize>, R: AsyncRxTrait<us
     }
     assert_eq!(rxs.len(), 0);
     for th in th_tx {
-        let _ = th.join();
+        let _ = th.join().unwrap();
     }
     for th in th_rx {
         recv_counter += async_join_result!(th);
