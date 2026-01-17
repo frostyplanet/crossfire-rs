@@ -110,8 +110,8 @@ where
         let mut backoff = Backoff::from(backoff_cfg);
         let congest = shared.sender_direct_copy();
         // disable because of issue #54
-        let direct_copy = false;
-        //        let direct_copy = deadline.is_none() && shared.sender_direct_copy();
+        //let direct_copy = false;
+        let direct_copy = deadline.is_none() && congest;
         if large {
             backoff.set_step(2);
         }
@@ -145,8 +145,7 @@ where
                 return Ok(());
             }
         }
-        let direct_copy_ptr: *const F::Item = std::ptr::null();
-        //            if direct_copy { item.as_ptr() } else { std::ptr::null() };
+        let direct_copy_ptr = if direct_copy { item.as_ptr() } else { std::ptr::null() };
 
         let mut state: u8;
         let mut o_waker: Option<<F::Send as Registry>::Waker> = None;
