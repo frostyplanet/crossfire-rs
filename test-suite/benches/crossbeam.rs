@@ -116,7 +116,7 @@ fn _crossbeam_unbounded_sync(tx_count: usize, rx_count: usize, msg_count: usize)
     assert_eq!(send_counter, recv_counter);
 }
 
-fn _crossbeam_select_mpsc(num_channels: usize, bound: usize, total_msgs: usize) {
+fn _crossbeam_select_mpsc(num_channels: usize, bound: usize, total_msgs: usize, is_bias: bool) {
     let msg_count_per_channel = total_msgs / num_channels;
     let mut rxs = Vec::new();
     let mut th_tx = Vec::new();
@@ -133,7 +133,11 @@ fn _crossbeam_select_mpsc(num_channels: usize, bound: usize, total_msgs: usize) 
     // Receive all messages using select - reuse Select instance
     let mut recv_counter = 0;
 
-    let mut select = crossbeam_channel::Select::new();
+    let mut select = if is_bias {
+        crossbeam_channel::Select::new_biased()
+    } else {
+        crossbeam_channel::Select::new()
+    };
     let mut handles = Vec::with_capacity(num_channels);
     for rx in &rxs {
         let op = select.recv(rx);
@@ -218,10 +222,17 @@ fn bench_crossbeam_select_mpsc(c: &mut Criterion) {
     let param = (4, 100, ONE_MILLION); // 3 channels, bound=100, 1M/3 messages per channel
     group.throughput(Throughput::Elements(ONE_MILLION as u64));
     group.bench_with_input(
-        BenchmarkId::new("select_mpsc_4_channels", "4"),
+        BenchmarkId::new("select_mpsc_4_channels_bias", "4"),
         &param,
         |b, &(num_channels, bound, msg_count_per_channel)| {
-            b.iter(|| _crossbeam_select_mpsc(num_channels, bound, ONE_MILLION))
+            b.iter(|| _crossbeam_select_mpsc(num_channels, bound, msg_count_per_channel, true))
+        },
+    );
+    group.bench_with_input(
+        BenchmarkId::new("select_mpsc_4_channels_fair", "4"),
+        &param,
+        |b, &(num_channels, bound, msg_count_per_channel)| {
+            b.iter(|| _crossbeam_select_mpsc(num_channels, bound, msg_count_per_channel, false))
         },
     );
 
