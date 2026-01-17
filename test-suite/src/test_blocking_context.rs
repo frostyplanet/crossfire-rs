@@ -4,7 +4,6 @@ use crossfire::flavor::Flavor;
 use crossfire::*;
 use rstest::*;
 use std::sync::Arc;
-use std::thread;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -176,7 +175,7 @@ fn test_basic_bounded_1_thread<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32>>
         assert!(tx_res.is_err());
         assert!(tx_res.unwrap_err().is_full());
 
-        let th = thread::spawn(move || {
+        let th = spawn_named_thread("receiver_1", move || {
             for i in 0i32..12 {
                 match rx.recv() {
                     Ok(j) => {
@@ -219,7 +218,7 @@ fn test_basic_unbounded_1_thread<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32
             assert!(tx_res.is_ok());
         }
 
-        let th = thread::spawn(move || {
+        let th = spawn_named_thread("receiver_1", move || {
             for i in 0i32..12 {
                 match rx.recv() {
                     Ok(j) => {
@@ -308,7 +307,7 @@ fn test_pressure_bounded_blocking_1_1<T: BlockingTxTrait<usize>, R: BlockingRxTr
         {
             round = ROUND * 100;
         }
-        let th = thread::spawn(move || {
+        let th = spawn_named_thread("sender_1", move || {
             for i in 0..round {
                 if let Err(e) = tx.send(i) {
                     panic!("{:?}", e);
@@ -375,7 +374,7 @@ fn test_pressure_bounded_blocking_multi_1<
         let mut th_s = Vec::new();
         for _tx_i in 0..tx_count {
             let _tx = tx.clone();
-            th_s.push(thread::spawn(move || {
+            th_s.push(spawn_named_thread(&format!("sender_{}", _tx_i), move || {
                 for i in 0..round {
                     match _tx.send(i) {
                         Err(e) => panic!("{:?}", e),
@@ -398,7 +397,7 @@ fn test_pressure_bounded_blocking_multi_1<
         }
         drop(rx);
         for th in th_s {
-            let _ = th.join().unwrap();
+            let _: () = th.join().unwrap();
         }
         assert_eq!(count, round * tx_count);
     }
@@ -440,7 +439,7 @@ fn test_pressure_bounded_blocking_multi<F: Flavor<Item = usize> + 'static>(
         let mut th_rx = Vec::new();
         for _tx_i in 0..tx_count {
             let _tx = tx.clone();
-            th_tx.push(thread::spawn(move || {
+            th_tx.push(spawn_named_thread(&format!("sender_{}", _tx_i), move || {
                 for i in 0..round {
                     match _tx.send(i) {
                         Err(e) => panic!("{:?}", e),
@@ -452,7 +451,7 @@ fn test_pressure_bounded_blocking_multi<F: Flavor<Item = usize> + 'static>(
         }
         for _rx_i in 0..rx_count {
             let _rx = rx.clone();
-            th_rx.push(thread::spawn(move || {
+            th_rx.push(spawn_named_thread(&format!("receiver_{}", _rx_i), move || {
                 let mut count = 0;
                 'A: loop {
                     match _rx.recv() {
@@ -510,7 +509,7 @@ fn test_pressure_bounded_timeout_blocking<F: Flavor<Item = usize> + 'static>(
         for thread_id in 0..tx_count {
             let _recv_map = recv_map.clone();
             let _tx = tx.clone();
-            th_tx.push(thread::spawn(move || {
+            th_tx.push(spawn_named_thread(&format!("sender_{}", thread_id), move || {
                 // randomize start up
                 sleep(Duration::from_millis((thread_id & 3) as u64));
                 let mut local_timeout_counter = 0;
@@ -543,7 +542,7 @@ fn test_pressure_bounded_timeout_blocking<F: Flavor<Item = usize> + 'static>(
         for _thread_id in 0..2 {
             let _rx = rx.clone();
             let _recv_map = recv_map.clone();
-            th_rx.push(thread::spawn(move || {
+            th_rx.push(spawn_named_thread(&format!("receiver_{}", _thread_id), move || {
                 let mut step: usize = 0;
                 let mut local_recv_counter = 0;
                 let mut local_timeout_counter = 0;
@@ -653,7 +652,7 @@ fn _test_drop_msg<M: TestDropMsg, T: BlockingTxTrait<M>, R: BlockingRxTrait<M>>(
     } else {
         unreachable!();
     }
-    let th = thread::spawn(move || {
+    let th = spawn_named_thread("receiver_3", move || {
         let _msg = rx.recv().expect("recv");
         assert_eq!(_msg.get_value(), 0);
         drop(_msg);

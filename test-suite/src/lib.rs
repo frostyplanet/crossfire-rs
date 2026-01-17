@@ -275,3 +275,14 @@ where
             .map_err(|_| format!("Test timed out after {:?}", duration));
     }
 }
+
+pub fn spawn_named_thread<F, T>(name: &str, f: F) -> std::thread::JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(f)
+        .unwrap_or_else(|e| panic!("Failed to spawn thread '{}': {:?}", name, e))
+}

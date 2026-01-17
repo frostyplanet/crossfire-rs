@@ -4,7 +4,6 @@ use crossfire::flavor::Flavor;
 use crossfire::tokio_task_id;
 use crossfire::*;
 use rstest::*;
-use std::thread;
 use std::time::*;
 
 #[fixture]
@@ -117,7 +116,7 @@ fn test_basic_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxTrai
     assert!(tx_res.is_err());
     assert!(tx_res.unwrap_err().is_full());
 
-    let th = thread::spawn(move || {
+    let th = spawn_named_thread("sender_1", move || {
         assert!(tx.send(10).is_ok());
         std::thread::sleep(Duration::from_secs(1));
         assert!(tx.send(11).is_ok());
@@ -165,7 +164,7 @@ fn test_pressure_1_tx_blocking_1_rx_async<T: BlockingTxTrait<usize>, R: AsyncRxT
     {
         round = ROUND * 100;
     }
-    let th = thread::spawn(move || {
+    let th = spawn_named_thread("sender_2", move || {
         for i in 0..round {
             tx.send(i).expect("send ok");
         }
@@ -225,7 +224,7 @@ fn test_pressure_tx_multi_blocking_1_rx_async<
     let mut tx_th_s = Vec::new();
     for _tx_i in 0..tx_count {
         let _tx = tx.clone();
-        tx_th_s.push(thread::spawn(move || {
+        tx_th_s.push(spawn_named_thread(&format!("sender_{}", _tx_i), move || {
             debug!("tx {} spawn", _tx_i);
             for i in 0..ROUND {
                 match _tx.send(i) {
@@ -293,7 +292,7 @@ fn test_pressure_tx_multi_blocking_multi_rx_async<F: Flavor<Item = usize> + 'sta
     let mut tx_th_s = Vec::new();
     for _tx_i in 0..tx_count {
         let _tx = tx.clone();
-        tx_th_s.push(thread::spawn(move || {
+        tx_th_s.push(spawn_named_thread(&format!("sender_{}", _tx_i), move || {
             for i in 0..ROUND {
                 match _tx.send(i) {
                     Err(e) => panic!("{}", e),
