@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.0.0] - 2026-01-18
+
+### Changed
+
+- Disable direct_copy to make miri happy
+
+- Simplify waker cleaning logic
+
 ## [3.0.0.beta3] - 2026-01-16
 
 ### Change
