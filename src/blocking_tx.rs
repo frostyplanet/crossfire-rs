@@ -146,7 +146,7 @@ impl<F: Flavor> Tx<F> {
             // to allow more yield to receivers.
             // For nxn (the backoff is already complete), wait a little bit.
             state = shared.sender_double_check::<false>(&item, &mut o_waker);
-            trace_log!("tx: sender_reg_and_try {:?} state={}", o_waker, state);
+            trace_log!("tx: sender_double_check {:?} state={}", o_waker, state);
             while state < WakerState::Woken as u8 {
                 if congest {
                     state = shared.sender_snooze(&o_waker, &mut backoff);
