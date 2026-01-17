@@ -104,6 +104,8 @@ pub(crate) trait RegistrySend<T>: Registry {
 }
 
 pub(crate) trait RegistryRecv: Registry {
+    const IS_MULTI: bool;
+
     fn new() -> Self;
 
     #[inline(always)]
@@ -169,8 +171,8 @@ impl RegistrySingle {
     #[inline(always)]
     fn _fire(&self) {
         if let Some(waker) = self.cell.pop() {
-            waker.wake();
-            trace_log!("{} wake", self._tag);
+            let _r = waker.wake();
+            trace_log!("wake {} {:?} {:?}", self._tag, waker, _r);
         }
     }
 
@@ -248,6 +250,8 @@ impl<T> RegistrySend<T> for RegistrySingle {
 }
 
 impl RegistryRecv for RegistrySingle {
+    const IS_MULTI: bool = false;
+
     #[inline(always)]
     fn new() -> Self {
         //Self { cell: OneSpmc::new(), _tag: "rx" }
@@ -697,13 +701,13 @@ impl<T: 'static> RegistrySend<T> for RegistryMultiSend<T> {
     }
 
     #[inline(always)]
-    fn fire<F>(&self, _flavor: &F) -> WakeResult
+    fn fire<F>(&self, flavor: &F) -> WakeResult
     where
         F: FlavorImpl<Item = T>,
     {
         if let Some((waker, _last_seq)) = self.pop_first() {
-            let r = waker.wake();
-            trace_log!("wake {} {:?} {:?}", self._tag, waker, r);
+            let r = waker.wake_or_copy::<F>(flavor);
+            trace_log!("wake_or_copy {} {:?} {:?}", self._tag, waker, r);
             if r.is_done() {
                 return r;
             }
@@ -711,8 +715,8 @@ impl<T: 'static> RegistrySend<T> for RegistryMultiSend<T> {
             if let Some(mut last_seq) = _last_seq {
                 last_seq = last_seq.wrapping_sub(1);
                 while let Some(_waker) = self.pop_again() {
-                    let r = _waker.wake();
-                    trace_log!("wake {} {:?} {:?}", self._tag, _waker, r);
+                    let r = _waker.wake_or_copy::<F>(flavor);
+                    trace_log!("wake_or_copy {} {:?} {:?}", self._tag, _waker, r);
                     if r.is_done() {
                         return r;
                     }
@@ -736,6 +740,7 @@ impl<T: 'static> RegistrySend<T> for RegistryMultiSend<T> {
 }
 
 impl RegistryRecv for RegistryMultiRecv {
+    const IS_MULTI: bool = true;
     #[inline(always)]
     fn new() -> Self {
         Self { inner: Mutex::new(RegistryMultiInner::new()), state: AtomicU8::new(0), _tag: "rx" }
@@ -849,6 +854,8 @@ impl Registry for SelectWakerWrapper {
 
 // For multiplex
 impl RegistryRecv for SelectWakerWrapper {
+    const IS_MULTI: bool = false;
+
     fn new() -> Self {
         unreachable!();
     }

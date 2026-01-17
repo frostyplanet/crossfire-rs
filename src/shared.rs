@@ -221,7 +221,9 @@ impl<F: Flavor> ChannelShared<F> {
     #[inline(always)]
     pub(crate) fn on_recv(&self) {
         if WakeResult::Sent == self.senders.fire(&self.inner) {
-            self.on_send();
+            if F::Recv::IS_MULTI {
+                self.on_send();
+            }
         }
     }
 
