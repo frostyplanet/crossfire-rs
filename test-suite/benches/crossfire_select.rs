@@ -101,8 +101,8 @@ fn run_select(mode: SelectMode, total_msgs: usize) {
     }
 }
 
-fn run_multiplex(mode: SelectMode, total_msgs: usize) {
-    let mut mp = Multiplex::<Array<usize>>::new_with(mode);
+fn run_multiplex(total_msgs: usize) {
+    let mut mp = Multiplex::<Array<usize>>::new();
     let mut senders: Vec<MTx<Mux<Array<usize>>>> = Vec::with_capacity(NUM_CHANNELS);
     for _ in 0..NUM_CHANNELS {
         let tx = mp.bounded_tx(BOUND);
@@ -145,14 +145,7 @@ fn bench_multiplex(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(20));
     group.throughput(Throughput::Elements(ONE_MILLION as u64));
 
-    group.bench_function("multiplex_rr", |b| b.iter(|| run_multiplex(SelectMode::RR, ONE_MILLION)));
-    group.bench_function("multiplex_rand", |b| {
-        b.iter(|| run_multiplex(SelectMode::Rand, ONE_MILLION))
-    });
-    group.bench_function("multiplex_bias", |b| {
-        b.iter(|| run_multiplex(SelectMode::Bias, ONE_MILLION))
-    });
-
+    group.bench_function("multiplex", |b| b.iter(|| run_multiplex(ONE_MILLION)));
     group.finish();
 }
 

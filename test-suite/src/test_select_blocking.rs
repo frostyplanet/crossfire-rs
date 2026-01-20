@@ -1,6 +1,6 @@
 use crate::*;
 use captains_log::logfn;
-use crossfire::select::{Multiplex, Mux, Select, SelectMode};
+use crossfire::select::{Multiplex, Mux, Select};
 use crossfire::*;
 use rstest::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -600,25 +600,6 @@ fn test_multiplex_basic(setup_log: ()) {
     assert!(received.contains(&1));
     assert!(received.contains(&2));
     assert_eq!(received.len(), 2);
-}
-
-#[logfn]
-#[rstest]
-fn test_multiplex_modes(setup_log: ()) {
-    let mut mp_rr = Multiplex::<mpsc::Array<i32>>::new_with(SelectMode::RR);
-    let tx: MTx<_> = mp_rr.bounded_tx(10);
-    tx.send(42).unwrap();
-    assert_eq!(mp_rr.recv().unwrap(), 42);
-
-    let mut mp_rand = Multiplex::<mpmc::Array<i32>>::new_random();
-    let tx: MTx<_> = mp_rand.bounded_tx(10);
-    tx.send(100).unwrap();
-    assert_eq!(mp_rand.recv().unwrap(), 100);
-
-    let mut mp_bias = Multiplex::<spsc::Array<i32>>::new_bias();
-    let tx: Tx<_> = mp_bias.bounded_tx(10);
-    tx.send(200).unwrap();
-    assert_eq!(mp_bias.recv().unwrap(), 200);
 }
 
 #[logfn]

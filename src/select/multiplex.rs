@@ -1,4 +1,3 @@
-use super::SelectMode;
 use crate::backoff::*;
 use crate::flavor::{Flavor, FlavorBounded, FlavorImpl, FlavorNew, FlavorWrap};
 use crate::shared::{check_timeout, ChannelShared};
@@ -21,10 +20,7 @@ pub type Mux<F> = FlavorWrap<F, <F as Flavor>::Send, SelectWakerWrapper>;
 
 /// A multiplexer that owns multi channel receivers of the same Flavor type.
 ///
-/// ## selection modes
-/// - Round-robin (RR): Fair distribution by cycling through channels
-/// - Random (Rand): Random selection from available channels
-/// - Bias: Priority based on the order channels were added
+/// Unlike select, it focus on round-robin mode
 ///
 /// ## Capability and limitation:
 /// - New channel may be added on the fly
@@ -71,7 +67,6 @@ pub type Mux<F> = FlavorWrap<F, <F as Flavor>::Send, SelectWakerWrapper>;
 /// h2.join().unwrap();
 /// ```
 pub struct Multiplex<F: Flavor> {
-    mode: SelectMode,
     waker: Arc<SelectWaker>,
     inner: UnsafeCell<MultiplexInner<F>>,
 }
@@ -82,70 +77,20 @@ struct MultiplexInner<F: Flavor> {
     handlers: Vec<Option<Arc<ChannelShared<Mux<F>>>>>,
     next_index: usize,
     opened_count: usize,
-    rng: usize,
 }
 
 impl<F: Flavor> MultiplexInner<F> {
     #[inline(always)]
     fn new() -> Self {
-        Self { handlers: Vec::with_capacity(10), next_index: 0, rng: 0, opened_count: 0 }
+        Self { handlers: Vec::with_capacity(10), next_index: 0, opened_count: 0 }
     }
 }
 
 impl<F: Flavor> Multiplex<F> {
     /// Initialize Select with fair, round-robin strategy
     pub fn new() -> Self {
-        Self::new_with(SelectMode::RR)
-    }
-
-    /// Initialize Select with fair strategy (check start from random channel)
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use crossfire::{mpsc::Array, select::{Multiplex, SelectMode}};
-    ///
-    /// let mut mp = Multiplex::<Array<i32>>::new_random();
-    /// // The selection will start from a random channel each time
-    /// ```
-    #[inline]
-    pub fn new_random() -> Self {
-        Self::new_with(SelectMode::Rand)
-    }
-
-    /// Initialize Select with bias strategy (check according to the order of `add()`)
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use crossfire::{mpsc::Array, select::{Multiplex, SelectMode}};
-    ///
-    /// let mut mp = Multiplex::<Array<i32>>::new_bias();
-    /// // The selection will prioritize channels in the order they were added
-    /// ```
-    #[inline]
-    pub fn new_bias() -> Self {
-        Self::new_with(SelectMode::Bias)
-    }
-
-    /// Initialize Select with a custom selection mode
-    ///
-    /// # Arguments
-    ///
-    /// * `mode` - The selection mode to use (Round-robin, Random, or Bias)
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use crossfire::{mpsc::Array, select::{Multiplex, SelectMode}};
-    ///
-    /// let mut mp = Multiplex::<Array<i32>>::new_with(SelectMode::RR);
-    /// ```
-    #[inline(always)]
-    pub fn new_with(mode: SelectMode) -> Self {
         Self {
             waker: Arc::new(SelectWaker::new()),
-            mode,
             inner: UnsafeCell::new(MultiplexInner::<F>::new()),
         }
     }
@@ -266,23 +211,10 @@ impl<F: Flavor> Multiplex<F> {
         let inner = self.get_inner();
         let len = inner.handlers.len();
         debug_assert!(len > 0);
-        match self.mode {
-            SelectMode::Bias => 0,
-            SelectMode::RR => {
-                if inner.next_index >= inner.handlers.len() {
-                    0
-                } else {
-                    inner.next_index
-                }
-            }
-            SelectMode::Rand => {
-                let mut x = inner.rng;
-                x ^= x << 13;
-                x ^= x >> 7;
-                x ^= x << 17;
-                inner.rng = x;
-                (x as usize) % len
-            }
+        if inner.next_index >= inner.handlers.len() {
+            0
+        } else {
+            inner.next_index
         }
     }
 
@@ -377,9 +309,7 @@ impl<F: Flavor> Multiplex<F> {
                 let r = if FINAL { shared.inner.try_recv_final() } else { shared.inner.try_recv() };
                 if let Some(item) = r {
                     shared.on_recv();
-                    if SelectMode::RR == self.mode {
-                        inner.next_index = idx + 1;
-                    }
+                    inner.next_index = idx + 1;
                     return Some(item); // Message available
                 }
                 if should_check_close {
