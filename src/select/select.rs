@@ -41,6 +41,7 @@ use crate::waker::WakerState;
 use crate::waker_registry::SelectWaker;
 use crate::ReceiverType;
 use crate::{RecvError, RecvTimeoutError, TryRecvError};
+use smallvec::SmallVec;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -113,7 +114,7 @@ use std::time::{Duration, Instant};
 /// }
 /// ```
 pub struct Select<'a> {
-    handlers: Vec<RecvHandle<'a>>,
+    handlers: SmallVec<[RecvHandle<'a>; 32]>,
     waker: Arc<SelectWaker>,
     mode: SelectMode,
     next_index: usize,
@@ -151,7 +152,7 @@ impl<'a> Select<'a> {
 
         Self {
             mode,
-            handlers: Vec::with_capacity(32),
+            handlers: SmallVec::new(),
             waker: Arc::new(SelectWaker::new()),
             next_index: 0,
             rng,
