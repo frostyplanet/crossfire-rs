@@ -892,3 +892,57 @@ fn test_pressure_multiplex_list(setup_log: (), #[case] producers: usize) {
     let mut mp = Multiplex::<mpmc::List<usize>>::new();
     run_test!(mp, MTx);
 }
+
+#[logfn]
+#[rstest]
+fn test_multiplex_weighted_round_robin(setup_log: ()) {
+    let mut mp = Multiplex::<mpsc::Array<i32>>::new();
+    // Channel 1 with weight 2
+    let tx1: MTx<_> = mp.bounded_tx_with_weight(10, 2);
+    // Channel 2 with weight 2
+    let tx2: MTx<_> = mp.bounded_tx_with_weight(10, 2);
+
+    // Send data
+    for i in 0..6 {
+        tx1.send(10 + i).unwrap(); // 10, 11, 12, 13, 14, 15
+        tx2.send(20 + i).unwrap(); // 20, 21, 22, 23, 24, 25
+    }
+
+    let mut received = Vec::new();
+    for _ in 0..12 {
+        received.push(mp.recv().unwrap());
+    }
+
+    // Expected sequence:
+    // tx1 (10), tx1 (11), tx1 (12) -> weight exhausted (actually weight+1 logic), switch to tx2
+    // tx2 (20), tx2 (21), tx2 (22) -> weight exhausted, switch to tx1
+    // tx1 (13), tx1 (14), tx1 (15)
+    // tx2 (23), tx2 (24), tx2 (25)
+
+    let expected = vec![10, 11, 12, 20, 21, 22, 13, 14, 15, 23, 24, 25];
+
+    assert_eq!(received, expected);
+}
+
+#[logfn]
+#[rstest]
+fn test_multiplex_weighted_skip_empty(setup_log: ()) {
+    // Test that if weight is not exhausted but channel is empty, we skips to next
+    let mut mp = Multiplex::<mpsc::Array<i32>>::new();
+    let tx1: MTx<_> = mp.bounded_tx_with_weight(10, 5); // High weight
+    let tx2: MTx<_> = mp.bounded_tx_with_weight(10, 2);
+
+    tx1.send(1).unwrap();
+    tx2.send(2).unwrap();
+    tx2.send(3).unwrap();
+
+    // 1. Recv from tx1 (left=4). Empty now.
+    assert_eq!(mp.recv().unwrap(), 1);
+
+    // 2. Recv. tx1 is empty (but left=4). Logic should skip tx1 and go to tx2.
+    // tx2 has item (2). Return 2.
+    assert_eq!(mp.recv().unwrap(), 2);
+
+    // 3. Recv. tx2 is current (left=1).
+    assert_eq!(mp.recv().unwrap(), 3);
+}

@@ -9,18 +9,26 @@ use crate::{RecvError, RecvTimeoutError, TryRecvError};
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::transmute;
-/// A multiplex blocking receiver of channels of the same type, only supports mpsc
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+pub const DEFAULT_WEIGHT: u32 = 128;
 
 /// Type alias for multiplexed channel flavor
 pub type Mux<F> = FlavorWrap<F, <F as Flavor>::Send, SelectWakerWrapper>;
 
 /// A multiplexer that owns multi channel receivers of the same Flavor type.
 ///
-/// Unlike select, it focus on round-robin mode
+/// Unlike select, it focus on round-robin mode, allow to specified weight on each channel.
+/// It maintains a count of message received for each channel.
+/// That means if the last message recv on the `idx` channel, it will keep trying the same channel
+/// until the number equals to weight has been received. If the channel is empty, it will try the
+/// next one without touching the count. This strategy improves the hit rate of cpu cache and ensures no starvation.
+///
+/// NOTE: The default weight is 128. (When the weight of all channel set to 1, the performance is
+/// the worst because of cpu cache thrashing)
 ///
 /// ## Capability and limitation:
 /// - New channel may be added on the fly
@@ -74,8 +82,43 @@ pub struct Multiplex<F: Flavor> {
 unsafe impl<F: Flavor> Send for Multiplex<F> {}
 
 struct MultiplexInner<F: Flavor> {
-    handlers: Vec<Arc<ChannelShared<Mux<F>>>>,
+    handlers: Vec<MultiplexItem<F>>,
     next_index: usize,
+}
+
+struct MultiplexItem<F: Flavor> {
+    shared: Arc<ChannelShared<Mux<F>>>,
+    weight: u32,
+    left: u32,
+}
+
+impl<F: Flavor> MultiplexItem<F> {
+    #[inline(always)]
+    fn try_recv_inner<const FINAL: bool>(
+        &mut self, idx: usize, len: usize,
+    ) -> Option<(F::Item, usize)> {
+        let msg =
+            if FINAL { self.shared.inner.try_recv_final() } else { self.shared.inner.try_recv() };
+
+        if let Some(msg) = msg {
+            self.shared.on_recv();
+            let next_idx = if self.left > 0 {
+                self.left -= 1;
+                idx
+            } else {
+                self.left = self.weight;
+                let i = idx + 1;
+                if i >= len {
+                    0
+                } else {
+                    i
+                }
+            };
+            Some((msg, next_idx))
+        } else {
+            None
+        }
+    }
 }
 
 impl<F: Flavor> MultiplexInner<F> {
@@ -97,6 +140,16 @@ impl<F: Flavor> Multiplex<F> {
     #[inline(always)]
     fn get_inner(&self) -> &mut MultiplexInner<F> {
         unsafe { transmute(self.inner.get()) }
+    }
+
+    #[inline]
+    fn _add_item(&mut self, flavor: F, weight: u32) -> Arc<ChannelShared<Mux<F>>> {
+        self.waker.add_opened();
+        let inner = self.get_inner();
+        let recvs = self.waker.clone().to_wrapper(inner.handlers.len());
+        let shared = ChannelShared::new(Mux::<F>::from_inner(flavor), F::Send::new(), recvs);
+        inner.handlers.push(MultiplexItem { shared: shared.clone(), weight, left: weight });
+        shared
     }
 
     /// Add a new channels with a new() method to multiplex, return its sender.
@@ -152,11 +205,18 @@ impl<F: Flavor> Multiplex<F> {
         F: FlavorNew,
         S: SenderType<Flavor = Mux<F>>,
     {
-        self.waker.add_opened();
-        let inner = self.get_inner();
-        let recvs = self.waker.clone().to_wrapper(inner.handlers.len());
-        let shared = ChannelShared::new(Mux::<F>::from_inner(F::new()), F::Send::new(), recvs);
-        inner.handlers.push(shared.clone());
+        let shared = self._add_item(F::new(), DEFAULT_WEIGHT);
+        return S::new(shared);
+    }
+
+    /// Add a channel of flavor (impl FlavorNew), with custom weight instead of default
+    /// (the default weight is 128)
+    pub fn new_tx_with_weight<S>(&mut self, weight: u32) -> S
+    where
+        F: FlavorNew,
+        S: SenderType<Flavor = Mux<F>>,
+    {
+        let shared = self._add_item(F::new(), weight);
         return S::new(shared);
     }
 
@@ -194,25 +254,18 @@ impl<F: Flavor> Multiplex<F> {
         F: FlavorBounded,
         S: SenderType<Flavor = Mux<F>>,
     {
-        let inner = self.get_inner();
-        self.waker.add_opened();
-        let recvs = self.waker.clone().to_wrapper(inner.handlers.len());
-        let shared =
-            ChannelShared::new(Mux::from_inner(F::new_with_bound(size)), F::Send::new(), recvs);
-        inner.handlers.push(shared.clone());
+        let shared = self._add_item(F::new_with_bound(size), DEFAULT_WEIGHT);
         return S::new(shared);
     }
 
-    #[inline(always)]
-    fn _try_select_begin(&self) -> usize {
-        let inner = self.get_inner();
-        let len = inner.handlers.len();
-        debug_assert!(len > 0);
-        if inner.next_index >= inner.handlers.len() {
-            0
-        } else {
-            inner.next_index
-        }
+    /// Add a bounded channel to the multiplex, with custom weight (the default is 128)
+    pub fn bounded_tx_with_weight<S>(&mut self, size: usize, weight: u32) -> S
+    where
+        F: FlavorBounded,
+        S: SenderType<Flavor = Mux<F>>,
+    {
+        let shared = self._add_item(F::new_with_bound(size), weight);
+        return S::new(shared);
     }
 
     /// Attempts to receive a message from any of the multiplexed channels without blocking.
@@ -237,7 +290,7 @@ impl<F: Flavor> Multiplex<F> {
     /// ```
     #[inline]
     pub fn try_recv(&self) -> Result<F::Item, TryRecvError> {
-        let idx = self._try_select_begin();
+        let idx = self.get_inner().next_index;
         match self._try_select_final(idx) {
             Ok(item) => return Ok(item),
             Err(true) => Err(TryRecvError::Disconnected),
@@ -287,11 +340,10 @@ impl<F: Flavor> Multiplex<F> {
         let inner = self.get_inner();
         let len = inner.handlers.len();
         for _ in 0..len {
-            let shared = &unsafe { inner.handlers.get_unchecked(idx) };
-            if let Some(item) = shared.inner.try_recv() {
-                shared.on_recv();
-                inner.next_index = idx + 1;
-                return Ok(item);
+            let item = unsafe { inner.handlers.get_unchecked_mut(idx) };
+            if let Some((msg, next_idx)) = item.try_recv_inner::<false>(idx, len) {
+                inner.next_index = next_idx;
+                return Ok(msg);
             }
             idx += 1;
             if idx >= len {
@@ -304,14 +356,12 @@ impl<F: Flavor> Multiplex<F> {
     #[inline(always)]
     fn _try_select_final(&self, mut idx: usize) -> Result<F::Item, bool> {
         let inner = self.get_inner();
-        // if the flag in SelectWaker equals to self.opened_count, can skip loading the tx_count atomic
         let len = inner.handlers.len();
         for _ in 0..len {
-            let shared = &unsafe { inner.handlers.get_unchecked(idx) };
-            if let Some(item) = shared.inner.try_recv_final() {
-                shared.on_recv();
-                inner.next_index = idx + 1;
-                return Ok(item); // Message available
+            let item = unsafe { inner.handlers.get_unchecked_mut(idx) };
+            if let Some((msg, next_idx)) = item.try_recv_inner::<true>(idx, len) {
+                inner.next_index = next_idx;
+                return Ok(msg);
             }
             idx += 1;
             if idx >= len {
@@ -336,7 +386,7 @@ impl<F: Flavor> Multiplex<F> {
     /// Returns `Ok(item)` on successful receive, `Err(true)` if disconnected, `Err(false)` if timed out
     #[inline]
     fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<F::Item, bool> {
-        let mut start_idx = self._try_select_begin();
+        let mut start_idx = self.get_inner().next_index;
         if let Ok(item) = self._try_select(start_idx) {
             return Ok(item);
         }
@@ -383,8 +433,8 @@ impl<F: Flavor> Multiplex<F> {
 impl<F: Flavor> Drop for Multiplex<F> {
     #[inline]
     fn drop(&mut self) {
-        for shared in &self.get_inner().handlers {
-            shared.close_rx();
+        for item in &self.get_inner().handlers {
+            item.shared.close_rx();
         }
     }
 }
@@ -435,8 +485,8 @@ impl<F: Flavor> BlockingRxTrait<F::Item> for Multiplex<F> {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         let inner = self.get_inner();
-        for shared in &inner.handlers {
-            if !shared.is_empty() {
+        for item in &inner.handlers {
+            if !item.shared.is_empty() {
                 return false;
             }
         }
