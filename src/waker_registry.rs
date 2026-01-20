@@ -11,7 +11,7 @@ use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::sync::{
-    atomic::{AtomicU8, AtomicUsize, Ordering},
+    atomic::{compiler_fence, AtomicU8, AtomicUsize, Ordering},
     Arc, Weak,
 };
 use std::task::{Context, Poll};
@@ -938,7 +938,8 @@ impl SelectWaker {
 
     #[inline(always)]
     pub fn get_hint(&self) -> usize {
-        self.hint.load(Ordering::Acquire)
+        compiler_fence(Ordering::AcqRel);
+        self.hint.load(Ordering::Relaxed)
     }
 
     #[inline(always)]
