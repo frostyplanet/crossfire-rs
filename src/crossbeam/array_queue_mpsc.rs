@@ -249,7 +249,7 @@ impl<T> ArrayQueueMpsc<T> {
 
         if tail_cached == head {
             if SPIN {
-                std::hint::spin_loop();
+                core::hint::spin_loop();
                 let tail = if _final_check {
                     self.sender.load(Ordering::SeqCst) as u32
                 } else {
@@ -273,14 +273,13 @@ impl<T> ArrayQueueMpsc<T> {
         debug_assert!(index < self.buffer.len());
         let slot = unsafe { self.buffer.get_unchecked(index) };
         // Wait for stamp update
-        let backoff = Backoff::new();
         let target_stamp = (head as usize).wrapping_add(1);
         loop {
             let stamp = slot.stamp.load(Ordering::Acquire);
             if stamp == target_stamp {
                 break;
             }
-            backoff.snooze();
+            core::hint::spin_loop();
         }
         // Update head
         let new_head = if index + 1 < self.buffer.len() {
