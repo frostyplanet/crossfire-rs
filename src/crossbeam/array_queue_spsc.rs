@@ -186,7 +186,8 @@ impl<T> ArrayQueueSpsc<T> {
 
     #[inline]
     pub fn start_read(&self, final_check: bool) -> Option<Token> {
-        if let Some((slot, packed_recv)) = self._start_read(final_check) {
+        if let Some((head, tail_cached)) = self._start_read::<true>(final_check) {
+            let (slot, packed_recv) = self._read(head, tail_cached);
             Some(Token::new(slot as *const Slot<T> as *const u8, packed_recv as usize))
         } else {
             None
@@ -195,7 +196,8 @@ impl<T> ArrayQueueSpsc<T> {
 
     #[inline]
     pub fn pop(&self, final_check: bool) -> Option<T> {
-        if let Some((slot, packed_recv)) = self._start_read(final_check) {
+        if let Some((head, tail_cached)) = self._start_read::<true>(final_check) {
+            let (slot, packed_recv) = self._read(head, tail_cached);
             let msg = unsafe { slot.value.get().read().assume_init() };
             self.recv.store(packed_recv, Ordering::SeqCst);
             Some(msg)
@@ -205,30 +207,51 @@ impl<T> ArrayQueueSpsc<T> {
     }
 
     #[inline]
-    fn _start_read<'a>(&'a self, final_check: bool) -> Option<(&'a Slot<T>, u64)> {
+    pub fn pop_cached(&self) -> Option<T> {
+        if let Some((head, tail_cached)) = self._start_read::<false>(false) {
+            let (slot, packed_recv) = self._read(head, tail_cached);
+            let msg = unsafe { slot.value.get().read().assume_init() };
+            self.recv.store(packed_recv, Ordering::SeqCst);
+            Some(msg)
+        } else {
+            None
+        }
+    }
+
+    /// return (head, tail_cached)
+    #[inline]
+    fn _start_read<const SPIN: bool>(&self, _final_check: bool) -> Option<(u32, u32)> {
         let recv_val = self.recv.load(Ordering::Relaxed);
         let head = recv_val as u32;
         let mut tail_cached = (recv_val >> 32) as u32;
 
         if tail_cached == head {
-            // because we don't have stamp, and no spining loop,
-            // this line is critical for performance
-            std::hint::spin_loop();
-            let tail = {
-                if final_check {
-                    // because we need to check is_empty before park,
-                    // use SeqCst to make Miri happy
-                    self.sender.load(Ordering::SeqCst) as u32
-                } else {
-                    self.sender.load(Ordering::Acquire) as u32
+            if SPIN {
+                // because we don't have stamp, and no spining loop,
+                // this line is critical for performance
+                std::hint::spin_loop();
+                let tail = {
+                    if _final_check {
+                        // because we need to check is_empty before park,
+                        // use SeqCst to make Miri happy
+                        self.sender.load(Ordering::SeqCst) as u32
+                    } else {
+                        self.sender.load(Ordering::Acquire) as u32
+                    }
+                };
+                if head == tail {
+                    return None;
                 }
-            };
-            if head == tail {
+                tail_cached = tail;
+            } else {
                 return None;
             }
-            tail_cached = tail;
         }
+        Some((head, tail_cached))
+    }
 
+    #[inline]
+    fn _read(&self, head: u32, tail_cached: u32) -> (&Slot<T>, u64) {
         // Deconstruct the head.
         let index = (head & (self.one_lap - 1)) as usize;
         // Inspect the corresponding slot.
@@ -245,7 +268,7 @@ impl<T> ArrayQueueSpsc<T> {
             // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
             lap.wrapping_add(self.one_lap)
         };
-        return Some((slot, ((tail_cached as u64) << 32) | (new_head as u64)));
+        return (slot, ((tail_cached as u64) << 32) | (new_head as u64));
     }
 
     #[inline(always)]

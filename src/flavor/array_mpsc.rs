@@ -69,6 +69,11 @@ impl<T: Send + 'static + Unpin> FlavorImpl for ArrayMpsc<T> {
         return unsafe { self.0.try_push_oneshot(item) };
     }
 
+    #[inline(always)]
+    fn try_recv_cached(&self) -> Option<T> {
+        self.0.pop_cached()
+    }
+
     #[inline]
     fn try_recv(&self) -> Option<T> {
         self.0.pop(false)

@@ -6,9 +6,8 @@ use crate::waker_registry::{RegistrySend, SelectWaker, SelectWakerWrapper};
 use crate::BlockingRxTrait;
 use crate::SenderType;
 use crate::{RecvError, RecvTimeoutError, TryRecvError};
-use std::cell::UnsafeCell;
+use std::cell::Cell;
 use std::fmt;
-use std::mem::transmute;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
@@ -76,56 +75,16 @@ pub type Mux<F> = FlavorWrap<F, <F as Flavor>::Send, SelectWakerWrapper>;
 /// ```
 pub struct Multiplex<F: Flavor> {
     waker: Arc<SelectWaker>,
-    inner: UnsafeCell<MultiplexInner<F>>,
+    handlers: Vec<MultiplexHandle<F>>,
+    last_idx: Cell<usize>,
+    count: Cell<u32>,
 }
 
 unsafe impl<F: Flavor> Send for Multiplex<F> {}
 
-struct MultiplexInner<F: Flavor> {
-    handlers: Vec<MultiplexItem<F>>,
-    next_index: usize,
-}
-
-struct MultiplexItem<F: Flavor> {
+struct MultiplexHandle<F: Flavor> {
     shared: Arc<ChannelShared<Mux<F>>>,
     weight: u32,
-    left: u32,
-}
-
-impl<F: Flavor> MultiplexItem<F> {
-    #[inline(always)]
-    fn try_recv_inner<const FINAL: bool>(
-        &mut self, idx: usize, len: usize,
-    ) -> Option<(F::Item, usize)> {
-        let msg =
-            if FINAL { self.shared.inner.try_recv_final() } else { self.shared.inner.try_recv() };
-
-        if let Some(msg) = msg {
-            self.shared.on_recv();
-            let next_idx = if self.left > 0 {
-                self.left -= 1;
-                idx
-            } else {
-                self.left = self.weight;
-                let i = idx + 1;
-                if i >= len {
-                    0
-                } else {
-                    i
-                }
-            };
-            Some((msg, next_idx))
-        } else {
-            None
-        }
-    }
-}
-
-impl<F: Flavor> MultiplexInner<F> {
-    #[inline(always)]
-    fn new() -> Self {
-        Self { handlers: Vec::with_capacity(10), next_index: 0 }
-    }
 }
 
 impl<F: Flavor> Multiplex<F> {
@@ -133,22 +92,19 @@ impl<F: Flavor> Multiplex<F> {
     pub fn new() -> Self {
         Self {
             waker: Arc::new(SelectWaker::new()),
-            inner: UnsafeCell::new(MultiplexInner::<F>::new()),
+            handlers: Vec::with_capacity(10),
+            count: Cell::new(0),
+            last_idx: Cell::new(0),
         }
-    }
-
-    #[inline(always)]
-    fn get_inner(&self) -> &mut MultiplexInner<F> {
-        unsafe { transmute(self.inner.get()) }
     }
 
     #[inline]
     fn _add_item(&mut self, flavor: F, weight: u32) -> Arc<ChannelShared<Mux<F>>> {
         self.waker.add_opened();
-        let inner = self.get_inner();
-        let recvs = self.waker.clone().to_wrapper(inner.handlers.len());
+        let recvs = self.waker.clone().to_wrapper(self.handlers.len());
         let shared = ChannelShared::new(Mux::<F>::from_inner(flavor), F::Send::new(), recvs);
-        inner.handlers.push(MultiplexItem { shared: shared.clone(), weight, left: weight });
+        self.handlers.push(MultiplexHandle { shared: shared.clone(), weight: weight - 1 });
+        self.last_idx.set(self.handlers.len() - 1);
         shared
     }
 
@@ -290,12 +246,13 @@ impl<F: Flavor> Multiplex<F> {
     /// ```
     #[inline]
     pub fn try_recv(&self) -> Result<F::Item, TryRecvError> {
-        let idx = self.get_inner().next_index;
-        match self._try_select_final(idx) {
-            Ok(item) => return Ok(item),
-            Err(true) => Err(TryRecvError::Disconnected),
-            Err(false) => Err(TryRecvError::Empty),
+        if let Ok(item) = self._try_select_cached::<true>() {
+            return Ok(item);
         }
+        if self.waker.get_opened_count() == 0 {
+            return Err(TryRecvError::Disconnected);
+        }
+        Err(TryRecvError::Empty)
     }
 
     /// Receives a message from any of the multiplexed channels, blocking if necessary.
@@ -336,43 +293,47 @@ impl<F: Flavor> Multiplex<F> {
     }
 
     #[inline(always)]
-    fn _try_select(&self, mut idx: usize) -> Result<F::Item, ()> {
-        let inner = self.get_inner();
-        let len = inner.handlers.len();
-        for _ in 0..len {
-            let item = unsafe { inner.handlers.get_unchecked_mut(idx) };
-            if let Some((msg, next_idx)) = item.try_recv_inner::<false>(idx, len) {
-                inner.next_index = next_idx;
+    fn _try_select_cached<const FINAL: bool>(&self) -> Result<F::Item, usize> {
+        let last_idx = self.last_idx.get();
+        let handle = unsafe { self.handlers.get_unchecked(last_idx) };
+        let count = self.count.get();
+        let loop_count;
+        if count > 0 {
+            if let Some(msg) = handle.shared.inner.try_recv_cached() {
+                handle.shared.on_recv();
+                self.count.set(count - 1);
                 return Ok(msg);
             }
-            idx += 1;
-            if idx >= len {
-                idx = 0;
-            }
+            loop_count = self.handlers.len() - 1;
+        } else {
+            loop_count = self.handlers.len();
+        };
+        if let Some(item) = self._try_select_all::<FINAL>(last_idx, loop_count) {
+            return Ok(item);
         }
-        Err(())
+        Err(last_idx)
     }
 
     #[inline(always)]
-    fn _try_select_final(&self, mut idx: usize) -> Result<F::Item, bool> {
-        let inner = self.get_inner();
-        let len = inner.handlers.len();
-        for _ in 0..len {
-            let item = unsafe { inner.handlers.get_unchecked_mut(idx) };
-            if let Some((msg, next_idx)) = item.try_recv_inner::<true>(idx, len) {
-                inner.next_index = next_idx;
-                return Ok(msg);
-            }
-            idx += 1;
-            if idx >= len {
-                idx = 0;
+    fn _try_select_all<const FINAL: bool>(
+        &self, mut idx: usize, loop_count: usize,
+    ) -> Option<F::Item> {
+        let len = self.handlers.len();
+        for _ in 0..loop_count {
+            idx = if idx + 1 >= len { 0 } else { idx + 1 };
+            let handle = unsafe { self.handlers.get_unchecked(idx) };
+            if let Some(msg) = if FINAL {
+                handle.shared.inner.try_recv_final()
+            } else {
+                handle.shared.inner.try_recv()
+            } {
+                handle.shared.on_recv();
+                self.count.set(handle.weight);
+                self.last_idx.set(idx);
+                return Some(msg);
             }
         }
-        if self.waker.get_opened_count() == 0 {
-            Err(true)
-        } else {
-            Err(false)
-        }
+        None
     }
 
     /// Internal method to perform blocking receive with optional timeout
@@ -386,15 +347,19 @@ impl<F: Flavor> Multiplex<F> {
     /// Returns `Ok(item)` on successful receive, `Err(true)` if disconnected, `Err(false)` if timed out
     #[inline]
     fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<F::Item, bool> {
-        let mut start_idx = self.get_inner().next_index;
-        if let Ok(item) = self._try_select(start_idx) {
-            return Ok(item);
+        let mut start_idx;
+        match self._try_select_cached::<false>() {
+            Ok(item) => return Ok(item),
+            Err(idx) => {
+                start_idx = idx;
+            }
         }
         let mut backoff = Backoff::from(BackoffConfig::detect());
         backoff.snooze();
+        let len = self.handlers.len();
         loop {
             loop {
-                if let Ok(item) = self._try_select(start_idx) {
+                if let Some(item) = self._try_select_all::<false>(start_idx, len) {
                     return Ok(item);
                 }
                 if backoff.snooze() {
@@ -403,10 +368,11 @@ impl<F: Flavor> Multiplex<F> {
             }
             // TODO For thread, actually the waker can be reuse and not change
             self.waker.init_blocking();
-            match self._try_select_final(start_idx) {
-                Ok(item) => return Ok(item),
-                Err(true) => return Err(true),
-                _ => {}
+            if let Some(item) = self._try_select_all::<true>(start_idx, len) {
+                return Ok(item);
+            }
+            if self.waker.get_opened_count() == 0 {
+                return Err(true);
             }
             let mut state = WakerState::Init as u8;
             while state < WakerState::Woken as u8 {
@@ -433,8 +399,8 @@ impl<F: Flavor> Multiplex<F> {
 impl<F: Flavor> Drop for Multiplex<F> {
     #[inline]
     fn drop(&mut self) {
-        for item in &self.get_inner().handlers {
-            item.shared.close_rx();
+        for handle in &self.handlers {
+            handle.shared.close_rx();
         }
     }
 }
@@ -484,9 +450,8 @@ impl<F: Flavor> BlockingRxTrait<F::Item> for Multiplex<F> {
     /// Returns true when all the channel's empty
     #[inline(always)]
     fn is_empty(&self) -> bool {
-        let inner = self.get_inner();
-        for item in &inner.handlers {
-            if !item.shared.is_empty() {
+        for handle in &self.handlers {
+            if !handle.shared.is_empty() {
                 return false;
             }
         }

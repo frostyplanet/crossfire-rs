@@ -586,15 +586,15 @@ fn test_multiplex_basic(setup_log: ()) {
         tx2.send(2).unwrap();
     });
 
+    h1.join().unwrap();
+    h2.join().unwrap();
+
     // Collect received values
     let mut received = Vec::new();
     for _ in 0..2 {
         let val = mp.recv().unwrap();
         received.push(val);
     }
-
-    h1.join().unwrap();
-    h2.join().unwrap();
 
     // Verify we received both values (order may vary due to round-robin selection)
     assert!(received.contains(&1));
@@ -919,8 +919,9 @@ fn test_multiplex_weighted_round_robin(setup_log: ()) {
     // tx1 (13), tx1 (14), tx1 (15)
     // tx2 (23), tx2 (24), tx2 (25)
 
-    let expected = vec![10, 11, 12, 20, 21, 22, 13, 14, 15, 23, 24, 25];
+    let expected = vec![10, 11, 20, 21, 12, 13, 22, 23, 14, 15, 24, 25];
 
+    println!("Received: {:?}", received);
     assert_eq!(received, expected);
 }
 

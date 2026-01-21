@@ -206,7 +206,8 @@ impl<T> ArrayQueueMpsc<T> {
 
     #[inline]
     pub fn start_read(&self, final_check: bool) -> Option<Token> {
-        if let Some((slot, packed_recv)) = self._start_read(final_check) {
+        if let Some((head, tail_cached)) = self._start_read::<true>(final_check) {
+            let (slot, packed_recv) = self._read(head, tail_cached);
             Some(Token::new(slot as *const Slot<T> as *const u8, packed_recv as usize))
         } else {
             None
@@ -215,12 +216,9 @@ impl<T> ArrayQueueMpsc<T> {
 
     #[inline]
     pub fn pop(&self, final_check: bool) -> Option<T> {
-        if let Some((slot, packed_recv)) = self._start_read(final_check) {
+        if let Some((head, tail_cached)) = self._start_read::<true>(final_check) {
+            let (slot, packed_recv) = self._read(head, tail_cached);
             let msg = unsafe { slot.value.get().read().assume_init() };
-            // Note: we do NOT update the stamp here.
-            // The stamp is only used by the receiver to know if the data is ready.
-            // The sender uses head/tail counters to know if the slot is free.
-
             // Update recv (which contains head) to free the slot.
             self.recv.store(packed_recv, Ordering::SeqCst);
             Some(msg)
@@ -230,24 +228,46 @@ impl<T> ArrayQueueMpsc<T> {
     }
 
     #[inline]
-    fn _start_read<'a>(&'a self, final_check: bool) -> Option<(&'a Slot<T>, u64)> {
+    pub fn pop_cached(&self) -> Option<T> {
+        if let Some((head, tail_cached)) = self._start_read::<false>(false) {
+            let (slot, packed_recv) = self._read(head, tail_cached);
+            let msg = unsafe { slot.value.get().read().assume_init() };
+            // Update recv (which contains head) to free the slot.
+            self.recv.store(packed_recv, Ordering::SeqCst);
+            Some(msg)
+        } else {
+            None
+        }
+    }
+
+    /// return head, tail_cached
+    #[inline]
+    fn _start_read<const SPIN: bool>(&self, _final_check: bool) -> Option<(u32, u32)> {
         let recv_val = self.recv.load(Ordering::Relaxed);
         let head = recv_val as u32;
         let mut tail_cached = (recv_val >> 32) as u32;
 
         if tail_cached == head {
-            std::hint::spin_loop();
-            let tail = if final_check {
-                self.sender.load(Ordering::SeqCst) as u32
+            if SPIN {
+                std::hint::spin_loop();
+                let tail = if _final_check {
+                    self.sender.load(Ordering::SeqCst) as u32
+                } else {
+                    self.sender.load(Ordering::Acquire) as u32
+                };
+                if head == tail {
+                    return None;
+                }
+                tail_cached = tail;
             } else {
-                self.sender.load(Ordering::Acquire) as u32
-            };
-            if head == tail {
                 return None;
             }
-            tail_cached = tail;
         }
+        Some((head, tail_cached))
+    }
 
+    #[inline]
+    fn _read(&self, head: u32, tail_cached: u32) -> (&Slot<T>, u64) {
         // Deconstruct the head.
         let index = (head & (self.one_lap - 1)) as usize;
         debug_assert!(index < self.buffer.len());
@@ -269,7 +289,7 @@ impl<T> ArrayQueueMpsc<T> {
             let lap = head & !(self.one_lap - 1);
             lap.wrapping_add(self.one_lap)
         };
-        return Some((slot, ((tail_cached as u64) << 32) | (new_head as u64)));
+        return (slot, ((tail_cached as u64) << 32) | (new_head as u64));
     }
 
     #[inline(always)]

@@ -65,6 +65,14 @@ pub(crate) trait FlavorImpl: Send + 'static + Queue {
         unimplemented!()
     }
 
+    /// For multiplex, only using cached value
+    ///
+    /// (without spin and loading sender value)
+    #[inline]
+    fn try_recv_cached(&self) -> Option<Self::Item> {
+        self.try_recv()
+    }
+
     fn try_recv(&self) -> Option<Self::Item>;
 
     fn try_recv_final(&self) -> Option<Self::Item>;
@@ -132,6 +140,11 @@ macro_rules! flavor_dispatch {
         #[inline]
         fn try_send_oneshot(&self, _item: *const Self::Item) -> Option<bool> {
             $wrap_method!(self, try_send_oneshot _item)
+        }
+
+        #[inline(always)]
+        fn try_recv_cached(&self) -> Option<Self::Item> {
+            $wrap_method!(self, try_recv_cached)
         }
 
         #[inline(always)]
