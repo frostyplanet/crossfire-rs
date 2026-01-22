@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.0.1] - 2026-01-22
+
+### Changed
+
+- Remove the mode setting from Multiplex (always use round-robin)
+
+- Add default custom weight for Multiplex select, optimize selection cost (throughput +20%)
+
 ## [3.0.0] - 2026-01-18
 
 ### Changed
