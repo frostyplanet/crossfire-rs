@@ -237,6 +237,11 @@ impl<F: Flavor> Rx<F> {
         );
         self.as_ref().read_with_token(result.token)
     }
+
+    #[inline(always)]
+    pub fn into_async(self) -> AsyncRx<F> {
+        self.into()
+    }
 }
 
 /// A multi-consumer (receiver) that works in a blocking context.
@@ -268,6 +273,11 @@ where
     #[inline(always)]
     pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self(Rx::new(shared))
+    }
+
+    #[inline(always)]
+    pub fn into_async(self) -> MAsyncRx<F> {
+        self.into()
     }
 }
 

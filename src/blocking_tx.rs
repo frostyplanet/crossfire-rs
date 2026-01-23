@@ -79,6 +79,11 @@ impl<F: Flavor> From<AsyncTx<F>> for Tx<F> {
 }
 
 impl<F: Flavor> Tx<F> {
+    #[inline]
+    pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
+        Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
+    }
+
     #[inline(always)]
     pub(crate) fn _send_bounded(
         &self, item: &MaybeUninit<F::Item>, deadline: Option<Instant>,
@@ -278,18 +283,16 @@ impl<F: Flavor> Tx<F> {
             }
         }
     }
-}
-
-impl<F: Flavor> Tx<F> {
-    #[inline]
-    pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
-        Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
-    }
 
     /// Return true if the other side has closed
     #[inline(always)]
     pub fn is_disconnected(&self) -> bool {
         self.shared.is_rx_closed()
+    }
+
+    #[inline]
+    pub fn into_async(self) -> AsyncTx<F> {
+        self.into()
     }
 }
 
@@ -332,6 +335,11 @@ impl<F: Flavor + FlavorMP> MTx<F> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self(Tx::new(shared))
+    }
+
+    #[inline]
+    pub fn into_async(self) -> MAsyncTx<F> {
+        self.into()
     }
 }
 
