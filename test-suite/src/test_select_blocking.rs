@@ -663,22 +663,48 @@ fn test_multiplex_basic_array_blocking(setup_log: ()) {
 #[logfn]
 #[rstest]
 fn test_multiplex_basic_list_blocking(setup_log: ()) {
-    let mut mp = Multiplex::<mpsc::List<i32>>::new();
-    let tx1: MTx<Mux<mpsc::List<i32>>> = mp.new_tx();
-    let tx2: MTx<Mux<mpsc::List<i32>>> = mp.new_tx();
+    let mut mp = Multiplex::<mpsc::List<usize>>::new();
+    let tx1: MTx<Mux<mpsc::List<usize>>> = mp.new_tx();
+    let tx2: MTx<Mux<mpsc::List<usize>>> = mp.new_tx();
+
+    let round = {
+        #[cfg(miri)]
+        {
+            99
+        }
+        #[cfg(not(miri))]
+        {
+            999
+        }
+    };
 
     let h1 = thread::spawn(move || {
-        tx1.send(10).expect("send");
+        for i in 0..round {
+            tx1.send(1000 + i).expect("send");
+        }
     });
     let h2 = thread::spawn(move || {
-        tx2.send(20).expect("send");
+        for i in 0..round {
+            tx2.send(2000 + i).expect("send");
+        }
     });
-    let mut received_values = Vec::new();
-    for _ in 0..2 {
-        received_values.push(mp.recv().unwrap());
+    let mut received_values = Vec::with_capacity(round * 2);
+    for _ in 0..(2 * round) {
+        if let Ok(item) = mp.recv() {
+            received_values.push(item);
+        } else {
+            panic!("Unexpected early close, count={:?}", received_values.len());
+        }
     }
     received_values.sort();
-    assert_eq!(received_values, vec![10, 20]);
+    for i in 0..received_values.len() {
+        let item = received_values[i];
+        if item < 2000 {
+            assert_eq!(item, 1000 + i);
+        } else {
+            assert_eq!(item, 2000 + i - round);
+        }
+    }
 
     h1.join().unwrap();
     h2.join().unwrap();
