@@ -462,20 +462,20 @@ fn test_basic_unbounded_recv_timeout_async<T: BlockingTxTrait<usize>, R: AsyncRx
             sleep(Duration::from_millis(50)).await;
             let _ = tx.send(1);
         });
-        let r = rx.recv_with_timer(sleep(Duration::from_millis(1))).await;
+        let _r = rx.recv_with_timer(sleep(Duration::from_millis(1))).await;
         #[cfg(not(miri))]
         {
-            assert_eq!(r.unwrap_err(), RecvTimeoutError::Timeout);
+            assert_eq!(_r.unwrap_err(), RecvTimeoutError::Timeout);
         }
         let _ = async_join_result!(th);
         let (tx_wakers, rx_wakers) = rx.get_wakers_count();
         println!("wakers: {}, {}", tx_wakers, rx_wakers);
         assert_eq!(tx_wakers, 0);
         assert_eq!(rx_wakers, 0);
-        let r = rx.recv_with_timer(sleep(Duration::from_millis(200))).await;
+        let _r = rx.recv_with_timer(sleep(Duration::from_millis(200))).await;
         #[cfg(not(miri))]
         {
-            assert_eq!(r.unwrap(), 1);
+            assert_eq!(_r.unwrap(), 1);
         }
     });
 }
