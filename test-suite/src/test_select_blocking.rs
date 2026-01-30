@@ -492,12 +492,19 @@ fn test_select_null(setup_log: ()) {
     loop {
         let res = select.select().unwrap();
         if res == rx {
-            if let Ok(_) = rx.read_select(res) {
+            if let Ok(_item) = rx.read_select(res) {
+                assert_eq!(_item, count);
                 count += 1;
             }
         } else if res == stop_rx {
             if stop_rx.read_select(res).is_err() {
+                while let Ok(_item) = rx.try_recv() {
+                    assert_eq!(_item, count);
+                    count += 1;
+                }
                 break;
+            } else {
+                unreachable!();
             }
         }
     }
