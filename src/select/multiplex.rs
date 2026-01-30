@@ -372,6 +372,9 @@ impl<F: Flavor> Multiplex<F> {
                 return Ok(item);
             }
             if self.waker.get_opened_count() == 0 {
+                if let Ok(item) = self.try_recv() {
+                    return Ok(item);
+                }
                 return Err(true);
             }
             let mut state = WakerState::Init as u8;
