@@ -35,3 +35,10 @@ jobs:
 
     - name: Run test with compio_dispatcher release and trace_log
       run: cd test-suite; WORKFLOW=1 exec cargo nextest run -F="compio_dispatcher,trace_log" --hide-progress-bar -j 1 --no-capture -r
+
+    - name: Dump log on cancel
+      if: ${{ cancelled() || failure() }}
+      uses: actions/upload-artifact@v4
+      with:
+          name: crossfire_ring
+          path: /tmp/crossfire_ring.log
