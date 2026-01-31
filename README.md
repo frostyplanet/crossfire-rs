@@ -302,7 +302,7 @@ make test
 <td>STABLE</td>
 <tr><td>compio</td>
 <td><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_compio_x86.yml">cron_master_compio-x86</a></td>
-<td>STABLE</td>
+<td>verifying</td>
 </tr>
 <tr><td align="center" rowspan="5">arm</td>
 <td>threaded</td>
@@ -334,7 +334,7 @@ STABLE
 <tr>
 <td>compio</td>
 <td><a href="https://github.com/frostyplanet/crossfire-rs/actions/workflows/cron_master_compio_arm.yml">cron_master_compio_arm</a> </td>
-<td>STABLE</td>
+<td>verifying</td>
 </tr>
 <tr>
 <td rowspan="4">miri (emulation)</td>
@@ -344,7 +344,7 @@ STABLE
 </td>
 <td>STABLE</td>
 </tr>
-<tr><td>tokio</td><td>still verifying </td>
+<tr><td>tokio</td><td>STABLE</td>
 </tr>
 <tr><td>async-std</td><td>-</td> <td> (timerfd_create) not supported by miri </td>
 </tr>
