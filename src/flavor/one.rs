@@ -26,16 +26,22 @@ pub struct One<T> {
 unsafe impl<T: Send> Sync for One<T> {}
 unsafe impl<T: Send> Send for One<T> {}
 
-impl<T: Send + Unpin + 'static> Queue for One<T> {
+impl<T> Queue for One<T> {
     type Item = T;
 
     #[inline(always)]
-    fn pop(&self) -> Option<T> {
+    fn pop(&self) -> Option<T>
+    where
+        T: Send,
+    {
         self._pop(Ordering::SeqCst)
     }
 
     #[inline(always)]
-    fn push(&self, item: T) -> Result<(), T> {
+    fn push(&self, item: T) -> Result<(), T>
+    where
+        T: Send,
+    {
         let _item = MaybeUninit::new(item);
         if unsafe { self._try_push(SeqCst, _item.as_ptr(), Acquire).is_ok() } {
             Ok(())
@@ -214,7 +220,7 @@ impl<T> Drop for One<T> {
     }
 }
 
-impl<T: Send + 'static + Unpin> FlavorImpl for One<T> {
+impl<T> FlavorImpl for One<T> {
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         // Will always double-check with is_full or try_send_oneshot()
@@ -256,7 +262,7 @@ impl<T> FlavorNew for One<T> {
     }
 }
 
-impl<T: Send + Unpin + 'static> FlavorSelect for One<T> {
+impl<T> FlavorSelect for One<T> {
     #[inline]
     fn try_select(&self, final_check: bool) -> Option<Token> {
         if let Some((index, head)) =

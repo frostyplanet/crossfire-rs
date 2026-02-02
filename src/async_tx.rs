@@ -110,7 +110,10 @@ impl<F: Flavor> AsyncTx<F> {
     }
 }
 
-impl<F: Flavor> AsyncTx<F> {
+impl<F: Flavor> AsyncTx<F>
+where
+    F::Item: Send + 'static + Unpin,
+{
     /// Sends a message. This method will await until the message is sent or the channel is closed.
     ///
     /// This function is cancellation-safe, so it's safe to use with `timeout()` and the `select!` macro.
@@ -324,7 +327,10 @@ impl<F: Flavor> Drop for SendFuture<'_, F> {
     }
 }
 
-impl<F: Flavor> Future for SendFuture<'_, F> {
+impl<F: Flavor> Future for SendFuture<'_, F>
+where
+    F::Item: Send + 'static + Unpin,
+{
     type Output = Result<(), SendError<F::Item>>;
 
     #[inline]
@@ -369,7 +375,10 @@ impl<F: Flavor, R> Drop for SendTimeoutFuture<'_, F, R> {
     }
 }
 
-impl<F: Flavor, R> Future for SendTimeoutFuture<'_, F, R> {
+impl<F: Flavor, R> Future for SendTimeoutFuture<'_, F, R>
+where
+    F::Item: Send + 'static + Unpin,
+{
     type Output = Result<(), SendTimeoutError<F::Item>>;
 
     #[inline]
@@ -404,7 +413,7 @@ impl<F: Flavor, R> Future for SendTimeoutFuture<'_, F, R> {
 }
 
 /// For writing generic code with MAsyncTx & AsyncTx
-pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
+pub trait AsyncTxTrait<T: Send + 'static + Unpin>:
     Send + 'static + fmt::Debug + fmt::Display
 {
     /// Try to send message, non-blocking
@@ -448,7 +457,9 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
     /// Returns `Ok(())` on successful.
     ///
     /// Returns Err([SendError]) when all Rx is dropped.
-    fn send<'a>(&'a self, item: T) -> impl Future<Output = Result<(), SendError<T>>> + Send;
+    fn send<'a>(&'a self, item: T) -> impl Future<Output = Result<(), SendError<T>>> + Send
+    where
+        T: Send + 'static + Unpin;
 
     /// Waits for a message to be sent into the channel, but only for a limited time.
     /// Will await when channel is full.
@@ -464,7 +475,9 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
     fn send_timeout<'a>(
         &'a self, item: T, duration: std::time::Duration,
-    ) -> impl Future<Output = Result<(), SendTimeoutError<T>>> + Send;
+    ) -> impl Future<Output = Result<(), SendTimeoutError<T>>> + Send
+    where
+        T: Send + 'static + Unpin;
 
     /// Sends a message with a custom timer function.
     /// Will await when channel is full.
@@ -486,10 +499,14 @@ pub trait AsyncTxTrait<T: Unpin + Send + 'static>:
         &'a self, item: T, fut: FR,
     ) -> impl Future<Output = Result<(), SendTimeoutError<T>>> + Send
     where
-        FR: Future<Output = R> + 'static;
+        FR: Future<Output = R> + 'static,
+        T: Send + 'static + Unpin;
 }
 
-impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F> {
+impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F>
+where
+    F::Item: Send + 'static + Unpin,
+{
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         assert_eq!(count, 1);
@@ -502,7 +519,10 @@ impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F> {
     }
 
     #[inline(always)]
-    fn send(&self, item: F::Item) -> impl Future<Output = Result<(), SendError<F::Item>>> + Send {
+    fn send(&self, item: F::Item) -> impl Future<Output = Result<(), SendError<F::Item>>> + Send
+    where
+        F::Item: Send + 'static + Unpin,
+    {
         AsyncTx::send(self, item)
     }
 
@@ -511,7 +531,10 @@ impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F> {
     #[inline(always)]
     fn send_timeout<'a>(
         &'a self, item: F::Item, duration: std::time::Duration,
-    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send {
+    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
+    where
+        F::Item: Send + 'static + Unpin,
+    {
         AsyncTx::send_timeout(self, item, duration)
     }
 
@@ -521,6 +544,7 @@ impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F> {
     ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
     where
         FR: Future<Output = R> + 'static,
+        F::Item: Send + 'static + Unpin,
     {
         AsyncTx::send_with_timer(self, item, fut)
     }
@@ -648,7 +672,10 @@ impl<F: Flavor> From<MTx<F>> for MAsyncTx<F> {
     }
 }
 
-impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F> {
+impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F>
+where
+    F::Item: Send + 'static + Unpin,
+{
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         let mut v = Vec::with_capacity(count);
@@ -667,7 +694,10 @@ impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F> {
     #[inline(always)]
     fn send<'a>(
         &'a self, item: F::Item,
-    ) -> impl Future<Output = Result<(), SendError<F::Item>>> + Send {
+    ) -> impl Future<Output = Result<(), SendError<F::Item>>> + Send
+    where
+        F::Item: Send + 'static + Unpin,
+    {
         self.0.send(item)
     }
 
@@ -676,7 +706,10 @@ impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F> {
     #[inline(always)]
     fn send_timeout<'a>(
         &'a self, item: F::Item, duration: std::time::Duration,
-    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send {
+    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
+    where
+        F::Item: Send + 'static + Unpin,
+    {
         self.0.send_timeout(item, duration)
     }
 
@@ -686,6 +719,7 @@ impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F> {
     ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
     where
         FR: Future<Output = R> + 'static,
+        F::Item: Send + 'static + Unpin,
     {
         self.0.send_with_timer::<FR, R>(item, fut)
     }
@@ -757,7 +791,7 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MAsyncTx<F> {
     }
 }
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for AsyncTx<F> {
+impl<T: Send + 'static, F: Flavor<Item = T>> SenderType for AsyncTx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
@@ -767,7 +801,7 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for AsyncTx<F> {
 
 impl<F: Flavor> NotCloneable for AsyncTx<F> {}
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMP> SenderType for MAsyncTx<F> {
+impl<T: Send + 'static, F: Flavor<Item = T> + FlavorMP> SenderType for MAsyncTx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {

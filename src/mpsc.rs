@@ -60,7 +60,7 @@ pub enum Array<T> {
     One(crate::flavor::OneMpsc<T>),
 }
 
-impl<T: Send + Unpin + 'static> Array<T> {
+impl<T> Array<T> {
     #[inline]
     pub fn new(size: usize) -> Self {
         if size <= 1 {
@@ -82,27 +82,27 @@ macro_rules! wrap_array {
     };
 }
 
-impl<T: Send + Unpin + 'static> Queue for Array<T> {
+impl<T> Queue for Array<T> {
     type Item = T;
     queue_dispatch!(wrap_array);
 }
 
-impl<T: Send + Unpin + 'static> FlavorImpl for Array<T> {
+impl<T> FlavorImpl for Array<T> {
     flavor_dispatch!(wrap_array);
 }
 
-impl<T: Send + Unpin + 'static> FlavorSelect for Array<T> {
+impl<T> FlavorSelect for Array<T> {
     flavor_select_dispatch!(wrap_array);
 }
 
-impl<T: Send + Unpin + 'static> FlavorBounded for Array<T> {
+impl<T> FlavorBounded for Array<T> {
     #[inline(always)]
     fn new_with_bound(size: usize) -> Self {
         Self::new(size)
     }
 }
 
-impl<T: Send + Unpin + 'static> Flavor for Array<T> {
+impl<T: Send + 'static> Flavor for Array<T> {
     type Send = RegistryMultiSend<T>;
     type Recv = RegistrySingle;
 }
@@ -156,7 +156,7 @@ where
 #[inline]
 fn unbounded_new<T, R>() -> (MTx<List<T>>, R)
 where
-    T: Send + 'static + Unpin,
+    T: Send + 'static,
     R: ReceiverType<Flavor = List<T>> + NotCloneable,
 {
     build::<List<T>, MTx<List<T>>, R>(List::<T>::from_inner(crate::flavor::List::<T>::new()))
@@ -165,7 +165,7 @@ where
 #[inline]
 pub fn unbounded_blocking<T>() -> (MTx<List<T>>, Rx<List<T>>)
 where
-    T: Send + 'static + Unpin,
+    T: Send + 'static,
 {
     unbounded_new()
 }
@@ -173,14 +173,14 @@ where
 #[inline]
 pub fn unbounded_async<T>() -> (MTx<List<T>>, AsyncRx<List<T>>)
 where
-    T: Send + 'static + Unpin,
+    T: Send + 'static,
 {
     unbounded_new()
 }
 
 fn bounded_new<T, S, R>(size: usize) -> (S, R)
 where
-    T: Send + 'static + Unpin,
+    T: Send + 'static,
     S: SenderType<Flavor = Array<T>> + Clone,
     R: ReceiverType<Flavor = Array<T>> + NotCloneable,
 {
@@ -193,7 +193,7 @@ where
 #[inline]
 pub fn bounded_blocking<T>(size: usize) -> (MTx<Array<T>>, Rx<Array<T>>)
 where
-    T: Send + 'static + Unpin,
+    T: Send + 'static,
 {
     bounded_new(size)
 }
@@ -204,7 +204,7 @@ where
 #[inline]
 pub fn bounded_async<T>(size: usize) -> (MAsyncTx<Array<T>>, AsyncRx<Array<T>>)
 where
-    T: Send + 'static + Unpin,
+    T: Send + 'static,
 {
     bounded_new(size)
 }
@@ -215,7 +215,7 @@ where
 #[inline]
 pub fn bounded_blocking_async<T>(size: usize) -> (MTx<Array<T>>, AsyncRx<Array<T>>)
 where
-    T: Send + 'static + Unpin,
+    T: Send + 'static,
 {
     bounded_new(size)
 }
@@ -226,7 +226,7 @@ where
 #[inline]
 pub fn bounded_async_blocking<T>(size: usize) -> (MAsyncTx<Array<T>>, Rx<Array<T>>)
 where
-    T: Send + 'static + Unpin,
+    T: Send + 'static,
 {
     bounded_new(size)
 }

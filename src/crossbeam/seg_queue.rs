@@ -183,8 +183,8 @@ pub struct SegQueue<T> {
     _marker: PhantomData<T>,
 }
 
-unsafe impl<T: Send> Send for SegQueue<T> {}
-unsafe impl<T: Send> Sync for SegQueue<T> {}
+unsafe impl<T> Send for SegQueue<T> {}
+unsafe impl<T> Sync for SegQueue<T> {}
 
 impl<T> UnwindSafe for SegQueue<T> {}
 impl<T> RefUnwindSafe for SegQueue<T> {}

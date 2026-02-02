@@ -17,16 +17,22 @@ impl<T, const MP: bool, const MC: bool> _Array<T, MP, MC> {
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Queue for _Array<T, MP, MC> {
+impl<T, const MP: bool, const MC: bool> Queue for _Array<T, MP, MC> {
     type Item = T;
 
     #[inline(always)]
-    fn pop(&self) -> Option<T> {
+    fn pop(&self) -> Option<T>
+    where
+        T: Send,
+    {
         self.0.pop(true)
     }
 
     #[inline(always)]
-    fn push(&self, item: T) -> Result<(), T> {
+    fn push(&self, item: T) -> Result<(), T>
+    where
+        T: Send,
+    {
         let _item = MaybeUninit::new(item);
         if unsafe { self.0.push_with_ptr(_item.as_ptr()) } {
             Ok(())
@@ -56,7 +62,7 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> Queue for _Array
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for _Array<T, MP, MC> {
+impl<T, const MP: bool, const MC: bool> FlavorImpl for _Array<T, MP, MC> {
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         return unsafe { self.0.push_with_ptr(item.as_ptr()) };
@@ -104,7 +110,7 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorImpl for _
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorSelect for _Array<T, MP, MC> {
+impl<T, const MP: bool, const MC: bool> FlavorSelect for _Array<T, MP, MC> {
     #[inline]
     fn try_select(&self, final_check: bool) -> Option<Token> {
         self.0.start_read(final_check)
@@ -116,9 +122,7 @@ impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorSelect for
     }
 }
 
-impl<T: Send + 'static + Unpin, const MP: bool, const MC: bool> FlavorBounded
-    for _Array<T, MP, MC>
-{
+impl<T, const MP: bool, const MC: bool> FlavorBounded for _Array<T, MP, MC> {
     #[inline(always)]
     fn new_with_bound(size: usize) -> Self {
         Self::new(size)

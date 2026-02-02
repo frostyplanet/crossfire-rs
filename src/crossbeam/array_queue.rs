@@ -97,8 +97,8 @@ pub struct ArrayQueue<T, const MP: bool, const MC: bool> {
     one_lap: usize,
 }
 
-unsafe impl<T: Send, const MP: bool, const MC: bool> Sync for ArrayQueue<T, MP, MC> {}
-unsafe impl<T: Send, const MP: bool, const MC: bool> Send for ArrayQueue<T, MP, MC> {}
+unsafe impl<T, const MP: bool, const MC: bool> Sync for ArrayQueue<T, MP, MC> {}
+unsafe impl<T, const MP: bool, const MC: bool> Send for ArrayQueue<T, MP, MC> {}
 
 impl<T, const MP: bool, const MC: bool> UnwindSafe for ArrayQueue<T, MP, MC> {}
 impl<T, const MP: bool, const MC: bool> RefUnwindSafe for ArrayQueue<T, MP, MC> {}

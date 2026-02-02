@@ -58,7 +58,10 @@ impl<F: Flavor> AsyncStream<F> {
     ///
     /// Returns Err([TryRecvError::Disconnected]) if all `Tx` have been dropped and the channel is empty.
     #[inline]
-    pub fn poll_item(&mut self, ctx: &mut Context) -> Poll<Option<F::Item>> {
+    pub fn poll_item(&mut self, ctx: &mut Context) -> Poll<Option<F::Item>>
+    where
+        F::Item: Send + 'static,
+    {
         match self.rx.poll_item::<true>(ctx, &mut self.waker) {
             Ok(item) => Poll::Ready(Some(item)),
             Err(e) => {
@@ -81,7 +84,10 @@ impl<F: Flavor> Deref for AsyncStream<F> {
     }
 }
 
-impl<F: Flavor> stream::Stream for AsyncStream<F> {
+impl<F: Flavor> stream::Stream for AsyncStream<F>
+where
+    F::Item: Send + 'static,
+{
     type Item = F::Item;
 
     #[inline(always)]
@@ -103,7 +109,10 @@ impl<F: Flavor> stream::Stream for AsyncStream<F> {
     }
 }
 
-impl<F: Flavor> stream::FusedStream for AsyncStream<F> {
+impl<F: Flavor> stream::FusedStream for AsyncStream<F>
+where
+    F::Item: Send + 'static,
+{
     fn is_terminated(&self) -> bool {
         self.ended
     }

@@ -82,8 +82,8 @@ pub struct ArrayQueueMpsc<T> {
     one_lap: u32,
 }
 
-unsafe impl<T: Send> Sync for ArrayQueueMpsc<T> {}
-unsafe impl<T: Send> Send for ArrayQueueMpsc<T> {}
+unsafe impl<T> Sync for ArrayQueueMpsc<T> {}
+unsafe impl<T> Send for ArrayQueueMpsc<T> {}
 
 impl<T> UnwindSafe for ArrayQueueMpsc<T> {}
 impl<T> RefUnwindSafe for ArrayQueueMpsc<T> {}

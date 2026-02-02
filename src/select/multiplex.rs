@@ -422,7 +422,10 @@ impl<F: Flavor> fmt::Display for Multiplex<F> {
     }
 }
 
-impl<F: Flavor> BlockingRxTrait<F::Item> for Multiplex<F> {
+impl<F: Flavor> BlockingRxTrait<F::Item> for Multiplex<F>
+where
+    F::Item: Send + 'static,
+{
     #[inline(always)]
     fn recv(&self) -> Result<F::Item, RecvError> {
         Self::recv(self)

@@ -40,12 +40,16 @@ impl Default for Token {
 
 // The queue trait should be public because AsyncStream, AsyncRx ... all use it's associate type `Item`
 /// Trait for lockless queue, it's safe to use if you don't want the channel mechanisms
-pub trait Queue: Send + 'static {
-    type Item: Send + 'static + Unpin;
+pub trait Queue {
+    type Item;
 
-    fn pop(&self) -> Option<Self::Item>;
+    fn pop(&self) -> Option<Self::Item>
+    where
+        Self::Item: Send;
 
-    fn push(&self, item: Self::Item) -> Result<(), Self::Item>;
+    fn push(&self, item: Self::Item) -> Result<(), Self::Item>
+    where
+        Self::Item: Send;
 
     fn len(&self) -> usize;
 
@@ -57,7 +61,7 @@ pub trait Queue: Send + 'static {
 }
 
 /// Internal flavor interface
-pub(crate) trait FlavorImpl: Send + 'static + Queue {
+pub(crate) trait FlavorImpl: Queue {
     fn try_send(&self, item: &MaybeUninit<Self::Item>) -> bool;
 
     #[inline]
@@ -97,12 +101,12 @@ pub(crate) trait FlavorSelect: Queue {
 macro_rules! queue_dispatch {
     ($wrap_method: ident)=>{
         #[inline(always)]
-        fn pop(&self) -> Option<Self::Item> {
+        fn pop(&self) -> Option<Self::Item> where Self::Item: Send {
             $wrap_method!(self, pop)
         }
 
         #[inline(always)]
-        fn push(&self, item: Self::Item) -> Result<(), Self::Item> {
+        fn push(&self, item: Self::Item) -> Result<(), Self::Item> where Self::Item: Send {
             $wrap_method!(self, push item)
         }
 
@@ -204,10 +208,13 @@ pub trait FlavorBounded {
 }
 
 /// A type wrapper for channel flavor
-pub struct FlavorWrap<F: FlavorImpl, S, R> {
+pub struct FlavorWrap<F, S, R> {
     inner: F,
     _phan: PhantomData<fn(&S, &R)>,
 }
+
+/// break evaluation overflow of F
+unsafe impl<F, S, R> Send for FlavorWrap<F, S, R> {}
 
 impl<F, S, R> FlavorWrap<F, S, R>
 where
@@ -255,7 +262,7 @@ where
 
 impl<F, S, R> Flavor for FlavorWrap<F, S, R>
 where
-    F: FlavorImpl,
+    F: FlavorImpl + 'static,
     S: RegistrySend<F::Item>,
     R: RegistryRecv,
 {
@@ -285,7 +292,6 @@ where
 }
 impl<T, F, R> FlavorMP for FlavorWrap<F, RegistryMultiSend<T>, R>
 where
-    T: Send + Unpin + 'static,
     F: FlavorImpl,
     R: RegistryRecv,
 {

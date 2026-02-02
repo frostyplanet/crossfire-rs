@@ -12,16 +12,22 @@ impl<T> List<T> {
     }
 }
 
-impl<T: Send + Unpin + 'static> Queue for List<T> {
+impl<T> Queue for List<T> {
     type Item = T;
 
     #[inline(always)]
-    fn pop(&self) -> Option<T> {
+    fn pop(&self) -> Option<T>
+    where
+        T: Send,
+    {
         self.0.pop::<false>()
     }
 
     #[inline(always)]
-    fn push(&self, item: T) -> Result<(), T> {
+    fn push(&self, item: T) -> Result<(), T>
+    where
+        T: Send,
+    {
         self.0.push(item);
         Ok(())
     }
@@ -47,7 +53,7 @@ impl<T: Send + Unpin + 'static> Queue for List<T> {
     }
 }
 
-impl<T: Send + Unpin + 'static> FlavorImpl for List<T> {
+impl<T> FlavorImpl for List<T> {
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         self.0.push(unsafe { item.assume_init_read() });
@@ -82,7 +88,7 @@ impl<T> FlavorNew for List<T> {
     }
 }
 
-impl<T: Send + Unpin + 'static> FlavorSelect for List<T> {
+impl<T> FlavorSelect for List<T> {
     #[inline]
     fn try_select(&self, final_check: bool) -> Option<Token> {
         if final_check {

@@ -84,6 +84,22 @@ impl<F: Flavor> Tx<F> {
         Self { shared, waker_cache: WakerCache::new(), _phan: Default::default() }
     }
 
+    /// Return true if the other side has closed
+    #[inline(always)]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.is_rx_closed()
+    }
+
+    #[inline]
+    pub fn into_async(self) -> AsyncTx<F> {
+        self.into()
+    }
+}
+
+impl<F: Flavor> Tx<F>
+where
+    F::Item: Send + 'static,
+{
     #[inline(always)]
     pub(crate) fn _send_bounded(
         &self, item: &MaybeUninit<F::Item>, deadline: Option<Instant>,
@@ -283,17 +299,6 @@ impl<F: Flavor> Tx<F> {
             }
         }
     }
-
-    /// Return true if the other side has closed
-    #[inline(always)]
-    pub fn is_disconnected(&self) -> bool {
-        self.shared.is_rx_closed()
-    }
-
-    #[inline]
-    pub fn into_async(self) -> AsyncTx<F> {
-        self.into()
-    }
 }
 
 /// A multi-producer (sender) that works in a blocking context.
@@ -418,7 +423,10 @@ pub trait BlockingTxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt:
     fn get_wakers_count(&self) -> (usize, usize);
 }
 
-impl<F: Flavor> BlockingTxTrait<F::Item> for Tx<F> {
+impl<F: Flavor> BlockingTxTrait<F::Item> for Tx<F>
+where
+    F::Item: Send + 'static,
+{
     #[inline(always)]
     fn clone_to_vec(self, _count: usize) -> Vec<Self> {
         assert_eq!(_count, 1);
@@ -487,7 +495,10 @@ impl<F: Flavor> BlockingTxTrait<F::Item> for Tx<F> {
     }
 }
 
-impl<F: Flavor + FlavorMP> BlockingTxTrait<F::Item> for MTx<F> {
+impl<F: Flavor + FlavorMP> BlockingTxTrait<F::Item> for MTx<F>
+where
+    F::Item: Send + 'static,
+{
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         let mut v = Vec::with_capacity(count);
@@ -582,7 +593,7 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MTx<F> {
     }
 }
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for Tx<F> {
+impl<T: Send + 'static, F: Flavor<Item = T>> SenderType for Tx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
@@ -592,7 +603,7 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> SenderType for Tx<F> {
 
 impl<F: Flavor> NotCloneable for Tx<F> {}
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMP> SenderType for MTx<F> {
+impl<T: Send + 'static, F: Flavor<Item = T> + FlavorMP> SenderType for MTx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {

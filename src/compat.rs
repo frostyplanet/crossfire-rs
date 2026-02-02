@@ -81,25 +81,25 @@ macro_rules! wrap_compat {
         }
     };
 }
-impl<T: Send + Unpin + 'static> Queue for CompatFlavor<T> {
+impl<T> Queue for CompatFlavor<T> {
     type Item = T;
     queue_dispatch!(wrap_compat);
 }
 
-impl<T: Send + Unpin + 'static> FlavorImpl for CompatFlavor<T> {
+impl<T> FlavorImpl for CompatFlavor<T> {
     flavor_dispatch!(wrap_compat);
 }
 
-impl<T: Send + Unpin + 'static> FlavorSelect for CompatFlavor<T> {
+impl<T> FlavorSelect for CompatFlavor<T> {
     flavor_select_dispatch!(wrap_compat);
 }
 
-impl<T: Send + Unpin + 'static> FlavorMP for CompatFlavor<T> {}
-impl<T: Send + Unpin + 'static> FlavorMC for CompatFlavor<T> {}
+impl<T> FlavorMP for CompatFlavor<T> {}
+impl<T> FlavorMC for CompatFlavor<T> {}
 
 // There's not much performance difference between old RegistrySingle and RegistryMulti,
 // we just use RegistryMulti here since this is just for compatible reason.
-impl<T: Send + Unpin + 'static> Flavor for CompatFlavor<T> {
+impl<T: Send + 'static> Flavor for CompatFlavor<T> {
     type Send = RegistryMultiSend<T>;
     type Recv = RegistryMultiRecv;
 }

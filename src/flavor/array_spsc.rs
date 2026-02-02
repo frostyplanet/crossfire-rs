@@ -19,16 +19,22 @@ impl<T> ArraySpsc<T> {
     }
 }
 
-impl<T: Send + 'static + Unpin> Queue for ArraySpsc<T> {
+impl<T> Queue for ArraySpsc<T> {
     type Item = T;
 
     #[inline(always)]
-    fn pop(&self) -> Option<T> {
+    fn pop(&self) -> Option<T>
+    where
+        T: Send,
+    {
         self.0.pop(true)
     }
 
     #[inline(always)]
-    fn push(&self, item: T) -> Result<(), T> {
+    fn push(&self, item: T) -> Result<(), T>
+    where
+        T: Send,
+    {
         let _item = MaybeUninit::new(item);
         if unsafe { self.0.push_with_ptr_final(_item.as_ptr()) } {
             Ok(())
@@ -58,7 +64,7 @@ impl<T: Send + 'static + Unpin> Queue for ArraySpsc<T> {
     }
 }
 
-impl<T: Send + 'static + Unpin> FlavorImpl for ArraySpsc<T> {
+impl<T> FlavorImpl for ArraySpsc<T> {
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         return unsafe { self.0.push_with_ptr(item.as_ptr()) };
@@ -98,7 +104,7 @@ impl<T: Send + 'static + Unpin> FlavorImpl for ArraySpsc<T> {
     }
 }
 
-impl<T: Send + 'static + Unpin> FlavorSelect for ArraySpsc<T> {
+impl<T> FlavorSelect for ArraySpsc<T> {
     #[inline]
     fn try_select(&self, final_check: bool) -> Option<Token> {
         self.0.start_read(final_check)
@@ -110,7 +116,7 @@ impl<T: Send + 'static + Unpin> FlavorSelect for ArraySpsc<T> {
     }
 }
 
-impl<T: Send + 'static + Unpin> FlavorBounded for ArraySpsc<T> {
+impl<T> FlavorBounded for ArraySpsc<T> {
     #[inline(always)]
     fn new_with_bound(size: usize) -> Self {
         Self::new(size)

@@ -95,6 +95,27 @@ impl<F: Flavor> AsyncRx<F> {
         Self { shared, _phan: Default::default() }
     }
 
+    /// Return true if the other side has closed
+    #[inline(always)]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.is_tx_closed()
+    }
+
+    #[inline]
+    pub fn into_stream(self) -> AsyncStream<F> {
+        AsyncStream::new(self)
+    }
+
+    #[inline]
+    pub fn into_blocking(self) -> Rx<F> {
+        self.into()
+    }
+}
+
+impl<F: Flavor> AsyncRx<F>
+where
+    F::Item: Send + 'static,
+{
     /// Receives a message from the channel. This method will await until a message is received or the channel is closed.
     ///
     /// This function is cancellation-safe, so it's safe to use with `timeout()` and the `select!` macro.
@@ -289,22 +310,6 @@ impl<F: Flavor> AsyncRx<F> {
             return Err(TryRecvError::Empty);
         }
     }
-
-    /// Return true if the other side has closed
-    #[inline(always)]
-    pub fn is_disconnected(&self) -> bool {
-        self.shared.is_tx_closed()
-    }
-
-    #[inline]
-    pub fn into_stream(self) -> AsyncStream<F> {
-        AsyncStream::new(self)
-    }
-
-    #[inline]
-    pub fn into_blocking(self) -> Rx<F> {
-        self.into()
-    }
 }
 
 /// A fixed-sized future object constructed by [AsyncRx::recv()]
@@ -325,7 +330,10 @@ impl<F: Flavor> Drop for RecvFuture<'_, F> {
     }
 }
 
-impl<F: Flavor> Future for RecvFuture<'_, F> {
+impl<F: Flavor> Future for RecvFuture<'_, F>
+where
+    F::Item: Send + 'static,
+{
     type Output = Result<F::Item, RecvError>;
 
     #[inline]
@@ -367,7 +375,10 @@ impl<F: Flavor, R> Drop for RecvTimeoutFuture<'_, F, R> {
     }
 }
 
-impl<F: Flavor, R> Future for RecvTimeoutFuture<'_, F, R> {
+impl<F: Flavor, R> Future for RecvTimeoutFuture<'_, F, R>
+where
+    F::Item: Send + 'static,
+{
     type Output = Result<F::Item, RecvTimeoutError>;
 
     #[inline]
@@ -391,15 +402,15 @@ impl<F: Flavor, R> Future for RecvTimeoutFuture<'_, F, R> {
 }
 
 /// For writing generic code with MAsyncRx & AsyncRx
-pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
-    Send + 'static + fmt::Debug + fmt::Display
-{
+pub trait AsyncRxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt::Display {
     /// Receive message, will await when channel is empty.
     ///
     /// Returns `Ok(T)` when successful.
     ///
     /// returns Err([RecvError]) when all Tx dropped.
-    fn recv<'a>(&'a self) -> impl Future<Output = Result<T, RecvError>> + Send;
+    fn recv<'a>(&'a self) -> impl Future<Output = Result<T, RecvError>> + Send
+    where
+        T: Send + 'static;
 
     /// Waits for a message to be received from the channel, but only for a limited time.
     /// Will await when channel is empty.
@@ -416,7 +427,9 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
     fn recv_timeout<'a>(
         &'a self, timeout: std::time::Duration,
-    ) -> impl Future<Output = Result<T, RecvTimeoutError>> + Send;
+    ) -> impl Future<Output = Result<T, RecvTimeoutError>> + Send
+    where
+        T: Send + 'static;
 
     /// Receives a message from the channel with a custom timer function (from other async runtime).
     ///
@@ -437,7 +450,8 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
         &'a self, fut: FR,
     ) -> impl Future<Output = Result<T, RecvTimeoutError>> + Send
     where
-        FR: Future<Output = R> + 'static;
+        FR: Future<Output = R> + 'static,
+        T: Send + 'static;
 
     /// Try to receive message, non-blocking.
     ///
@@ -478,7 +492,10 @@ pub trait AsyncRxTrait<T: Unpin + Send + 'static>:
     fn get_wakers_count(&self) -> (usize, usize);
 }
 
-impl<F: Flavor> AsyncRxTrait<F::Item> for AsyncRx<F> {
+impl<F: Flavor> AsyncRxTrait<F::Item> for AsyncRx<F>
+where
+    F::Item: Send + 'static,
+{
     #[inline(always)]
     fn clone_to_vec(self, _count: usize) -> Vec<Self> {
         assert_eq!(_count, 1);
@@ -486,7 +503,10 @@ impl<F: Flavor> AsyncRxTrait<F::Item> for AsyncRx<F> {
     }
 
     #[inline(always)]
-    fn recv(&self) -> impl Future<Output = Result<F::Item, RecvError>> + Send {
+    fn recv(&self) -> impl Future<Output = Result<F::Item, RecvError>> + Send
+    where
+        F::Item: Send + 'static,
+    {
         AsyncRx::recv(self)
     }
 
@@ -495,7 +515,10 @@ impl<F: Flavor> AsyncRxTrait<F::Item> for AsyncRx<F> {
     #[inline(always)]
     fn recv_timeout(
         &self, duration: std::time::Duration,
-    ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send {
+    ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send
+    where
+        F::Item: Send + 'static,
+    {
         AsyncRx::recv_timeout(self, duration)
     }
 
@@ -505,6 +528,7 @@ impl<F: Flavor> AsyncRxTrait<F::Item> for AsyncRx<F> {
     ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send
     where
         FR: Future<Output = R> + 'static,
+        F::Item: Send + 'static,
     {
         AsyncRx::recv_with_timer(self, fut)
     }
@@ -642,7 +666,10 @@ impl<F: Flavor> From<MRx<F>> for MAsyncRx<F> {
     }
 }
 
-impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for MAsyncRx<F> {
+impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for MAsyncRx<F>
+where
+    F::Item: Send + 'static,
+{
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         let mut v = Vec::with_capacity(count);
@@ -659,7 +686,10 @@ impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for MAsyncRx<F> {
     }
 
     #[inline(always)]
-    fn recv<'a>(&'a self) -> impl Future<Output = Result<F::Item, RecvError>> + Send {
+    fn recv<'a>(&'a self) -> impl Future<Output = Result<F::Item, RecvError>> + Send
+    where
+        F::Item: Send + 'static,
+    {
         self.0.recv()
     }
 
@@ -668,7 +698,10 @@ impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for MAsyncRx<F> {
     #[inline(always)]
     fn recv_timeout<'a>(
         &'a self, duration: std::time::Duration,
-    ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send {
+    ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send
+    where
+        F::Item: Send + 'static,
+    {
         self.0.recv_timeout(duration)
     }
 
@@ -678,6 +711,7 @@ impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for MAsyncRx<F> {
     ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send
     where
         FR: Future<Output = R> + 'static,
+        F::Item: Send + 'static,
     {
         self.0.recv_with_timer(fut)
     }
@@ -754,7 +788,7 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MAsyncRx<F> {
     }
 }
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for AsyncRx<F> {
+impl<T: Send + 'static, F: Flavor<Item = T>> ReceiverType for AsyncRx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
@@ -764,7 +798,7 @@ impl<T: Send + Unpin + 'static, F: Flavor<Item = T>> ReceiverType for AsyncRx<F>
 
 impl<F: Flavor> NotCloneable for AsyncRx<F> {}
 
-impl<T: Send + Unpin + 'static, F: Flavor<Item = T> + FlavorMC> ReceiverType for MAsyncRx<F> {
+impl<T: Send + 'static, F: Flavor<Item = T> + FlavorMC> ReceiverType for MAsyncRx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {

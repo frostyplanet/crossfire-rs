@@ -30,8 +30,8 @@ pub struct OneSp<T, const MC: bool> {
     slots: [Slot<T>; 2],
 }
 
-unsafe impl<T: Send, const MC: bool> Sync for OneSp<T, MC> {}
-unsafe impl<T: Send, const MC: bool> Send for OneSp<T, MC> {}
+unsafe impl<T, const MC: bool> Sync for OneSp<T, MC> {}
+unsafe impl<T, const MC: bool> Send for OneSp<T, MC> {}
 
 impl<T, const MC: bool> OneSp<T, MC> {
     #[inline]
@@ -97,7 +97,7 @@ impl<T, const MC: bool> Drop for OneSp<T, MC> {
     }
 }
 
-impl<T: Send + 'static> OneSpsc<T> {
+impl<T> OneSpsc<T> {
     #[inline(always)]
     fn _read(&self, slot: &Slot<T>, next_head: u32) -> T {
         // NOTE: This is only valid for SPSC (not for Spmc)
@@ -238,7 +238,7 @@ impl<T> OneSpmc<T> {
     }
 }
 
-impl<T: Send + Unpin + 'static> Queue for OneSpmc<T> {
+impl<T> Queue for OneSpmc<T> {
     type Item = T;
 
     #[inline(always)]
@@ -266,12 +266,12 @@ impl<T: Send + Unpin + 'static> Queue for OneSpmc<T> {
     }
 
     #[inline(always)]
-    fn pop(&self) -> Option<T> {
+    fn pop(&self) -> Option<T> where T: Send {
         self._pop(Ordering::SeqCst)
     }
 
     #[inline]
-    fn push(&self, value: T) -> Result<(), T> {
+    fn push(&self, value: T) -> Result<(), T> where T: Send {
         let item = MaybeUninit::new(value);
         if self.try_push(item.as_ptr(), Ordering::SeqCst) {
             Ok(())
@@ -282,7 +282,7 @@ impl<T: Send + Unpin + 'static> Queue for OneSpmc<T> {
 }
 */
 
-impl<T: Send + Unpin + 'static> Queue for OneSpsc<T> {
+impl<T> Queue for OneSpsc<T> {
     type Item = T;
 
     #[inline(always)]
@@ -310,12 +310,18 @@ impl<T: Send + Unpin + 'static> Queue for OneSpsc<T> {
     }
 
     #[inline(always)]
-    fn pop(&self) -> Option<T> {
+    fn pop(&self) -> Option<T>
+    where
+        T: Send,
+    {
         self._pop(Ordering::SeqCst)
     }
 
     #[inline]
-    fn push(&self, value: T) -> Result<(), T> {
+    fn push(&self, value: T) -> Result<(), T>
+    where
+        T: Send,
+    {
         let item = MaybeUninit::new(value);
         if self.try_push(item.as_ptr(), Ordering::SeqCst) {
             Ok(())
@@ -325,7 +331,7 @@ impl<T: Send + Unpin + 'static> Queue for OneSpsc<T> {
     }
 }
 
-impl<T: Send + Unpin + 'static> FlavorImpl for OneSpsc<T> {
+impl<T> FlavorImpl for OneSpsc<T> {
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         self.try_push(item.as_ptr(), Acquire)
@@ -343,7 +349,7 @@ impl<T: Send + Unpin + 'static> FlavorImpl for OneSpsc<T> {
 
     #[inline]
     fn try_recv_final(&self) -> Option<T> {
-        self.pop()
+        self._pop(Ordering::SeqCst)
     }
 
     #[inline]
@@ -367,7 +373,7 @@ impl<T> FlavorNew for OneSpsc<T> {
     }
 }
 
-impl<T: Send + 'static + Unpin> FlavorSelect for OneSpsc<T> {
+impl<T> FlavorSelect for OneSpsc<T> {
     #[inline]
     fn try_select(&self, final_check: bool) -> Option<Token> {
         if let Some(tail) =

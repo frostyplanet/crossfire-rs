@@ -51,7 +51,7 @@ pub(crate) trait Registry: Send + 'static {
     }
 }
 
-pub(crate) trait RegistrySend<T: Send + 'static>: Registry {
+pub(crate) trait RegistrySend<T>: Registry {
     fn new() -> Self;
 
     #[inline(always)]
@@ -147,7 +147,7 @@ impl Registry for RegistryDummy {
     fn close(&self) {}
 }
 
-impl<T: Send + 'static> RegistrySend<T> for RegistryDummy {
+impl<T> RegistrySend<T> for RegistryDummy {
     #[inline(always)]
     fn new() -> Self {
         Self()
@@ -215,7 +215,7 @@ impl Registry for RegistrySingle {
     }
 }
 
-impl<T: Send + 'static> RegistrySend<T> for RegistrySingle {
+impl<T> RegistrySend<T> for RegistrySingle {
     #[inline(always)]
     fn new() -> Self {
         //Self { cell: _OneSpmc::new(), _tag: "tx" }
@@ -640,7 +640,7 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
     }
 }
 
-impl<T: Send + Unpin + 'static> RegistrySend<T> for RegistryMultiSend<T> {
+impl<T: 'static> RegistrySend<T> for RegistryMultiSend<T> {
     #[inline(always)]
     fn new() -> Self {
         Self { inner: Mutex::new(RegistryMultiInner::new()), state: AtomicU8::new(0), _tag: "tx" }
