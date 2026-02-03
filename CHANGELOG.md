@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.0.4] - 2026-02-03
+
+### Fix
+
+- Avoid overflow evaluation in generic code
+
+  Remove Send/'static/Unpin limit from Flavor/Queue trait and struct definition,
+  add the limit to method.
+
+- Blocking method and struct don't need Unpin.
+
+- Async recv does not need Unpin.
+
 ## [3.0.3] - 2026-01-30
 
 ### Fixed
