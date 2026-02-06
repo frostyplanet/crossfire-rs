@@ -16,7 +16,6 @@
 //! - The low level queue implement is for MPMC regardless of MPSC/SPSC model (which is exactly the
 //! same with V2.1)
 //! - The module structure in `crossfire::compat::*`, is exactly the same as v2.x `crossfire::*`.
-//! crossfire::compat::*`
 //!
 //! # Incompatible notes
 //!
