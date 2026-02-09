@@ -1,6 +1,7 @@
 use crate::*;
 use captains_log::logfn;
 use crossfire::*;
+use fastrand;
 use rstest::*;
 use std::thread;
 use std::time::Duration;
@@ -35,14 +36,12 @@ fn test_oneshot_blocking_drop_tx(setup_log: ()) {
     drop(tx);
     assert_eq!(rx.recv(), Err(RecvError));
 
-    use rand::Rng;
-    let mut rng = rand::rng();
     let (tx, rx) = oneshot::oneshot::<i32>();
     let th = thread::spawn(move || {
         // Should be wake up on sender drop
         assert_eq!(rx.recv(), Err(RecvError));
     });
-    thread::sleep(Duration::from_millis(rng.random_range(1..=500)));
+    thread::sleep(Duration::from_millis(fastrand::u64(1..=500)));
     drop(tx);
     th.join().expect("join");
 }
@@ -111,15 +110,13 @@ fn test_oneshot_async_drop_tx(setup_log: ()) {
         let (tx, rx) = oneshot::oneshot::<i32>();
         drop(tx);
         assert_eq!(rx.await, Err(RecvError));
-        use rand::Rng;
-        let mut rng = rand::rng();
-        let (tx, rx) = oneshot::oneshot::<i32>();
         log::debug!("next test");
+        let (tx, rx) = oneshot::oneshot::<i32>();
         let th = async_spawn!(async move {
             // Should be wake up on sender drop
             assert_eq!(rx.await, Err(RecvError));
         });
-        sleep(Duration::from_millis(rng.random_range(1..=500))).await;
+        sleep(Duration::from_millis(fastrand::u64(1..=500))).await;
         drop(tx);
         let _ = async_join_result!(th);
     });
