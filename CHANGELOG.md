@@ -15,9 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.0.5] - 2026-02-11
+
+### Fixed
+
+- Fix msrv to 1.79 (NonZero usage)
+
+- Fix clippy warning and document
+
 ## [3.0.4] - 2026-02-03
 
-### Fix
+### Fixed
 
 - Avoid overflow evaluation in generic code
 
