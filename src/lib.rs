@@ -14,15 +14,15 @@
 //! * v1.0: Used in production since 2022.12.
 //!
 //! * v2.0: [2025.6] Refactored the codebase and API
-//! by removing generic types from the ChannelShared type, which made it easier to code with.
+//!   by removing generic types from the ChannelShared type, which made it easier to code with.
 //!
 //! * v2.1: [2025.9] Removed the dependency on crossbeam-channel
-//! and implemented with [a modified version of crossbeam-queue](https://github.com/frostyplanet/crossfire-rs/wiki/crossbeam-related),
-//! brings 2x performance improvements for both async and blocking contexts.
+//!   and implemented with [a modified version of crossbeam-queue](https://github.com/frostyplanet/crossfire-rs/wiki/crossbeam-related),
+//!   brings 2x performance improvements for both async and blocking contexts.
 //!
 //! * v3.0: [2026.1] Refactored API back to generic flavor interface, added [select].
-//! Dedicated optimization: Bounded SPSC +70%, MPSC +30%, one-size +20%.
-//! Eliminate enum dispatch cost, async performance improved for another 33%. Checkout [compat] for migiration from v2.x.
+//!   Dedicated optimization: Bounded SPSC +70%, MPSC +30%, one-size +20%.
+//!   Eliminate enum dispatch cost, async performance improved for another 33%. Checkout [compat] for migiration from v2.x.
 //!
 //! ## Test status
 //!
@@ -54,16 +54,16 @@
 //! ### Concurrency Modules
 //!
 //! - [spsc], [mpsc], [mpmc]. Each has different underlying implementation
-//! optimized to its concurrent model.
-//! The SP or SC interface is only for non-concurrent operation. It's more memory-efficient in waker registration,
-//! and has atomic ops cost reduced in the lockless algorithm.
+//!   optimized to its concurrent model.
+//!   The SP or SC interface is only for non-concurrent operation. It's more memory-efficient in waker registration,
+//!   and has atomic ops cost reduced in the lockless algorithm.
 //!
 //! - [oneshot] has its special sender/receiver type because using `Tx` / `Rx` will be too heavy.
 //!
 //! - [select]:
 //!     - [Select<'a>](crate::select::Select): crossbeam-channel style type erased API, borrows receiver address and select with "token"
 //!     - [Multiplex](crate::select::Multiplex): Multiplex stream that owns multiple receiver, select from the same type of
-//!     channel flavors, for the same type of message.
+//!       channel flavors, for the same type of message.
 //!
 //! ### Flavors
 //!
@@ -74,9 +74,9 @@
 //!   - For a bounded channel, a 0 size case is not supported yet. (rewrite as 1 size).
 //!   - The implementation for spsc & mpsc is simplified from mpmc version.
 //! - `One` (which derives from `ArrayQueue` algorithm, but have better performance in size=1
-//! scenario, because it have two slots to allow reader and writer works concurrently)
+//!   scenario, because it have two slots to allow reader and writer works concurrently)
 //! - `Null` (See the doc [crate::null]), for cancellation purpose channel, that only wakeup on
-//! closing.
+//!   closing.
 //!
 //! **NOTE** :
 //! Although the name [Array](crate::mpmc::Array), [List](crate::mpmc::List) are the same between spsc/mpsc/mpmc module,
@@ -133,20 +133,20 @@
 //! The following scenarios are considered:
 //!
 //! * The [AsyncTx::send()] and [AsyncRx::recv()] operations are **cancellation-safe** in an async context.
-//! You can safely use the select! macro and timeout() function in tokio/futures in combination with recv().
-//!  On cancellation, [SendFuture] and [RecvFuture] will trigger drop(), which will clean up the state of the waker,
-//! making sure there is no memory-leak and deadlock.
-//! But you cannot know the true result from SendFuture, since it's dropped
-//! upon cancellation. Thus, we suggest using [AsyncTx::send_timeout()] instead.
+//!   You can safely use the select! macro and timeout() function in tokio/futures in combination with recv().
+//!   On cancellation, [SendFuture] and [RecvFuture] will trigger drop(), which will clean up the state of the waker,
+//!   making sure there is no memory-leak and deadlock.
+//!   But you cannot know the true result from SendFuture, since it's dropped
+//!   upon cancellation. Thus, we suggest using [AsyncTx::send_timeout()] instead.
 //!
 //! * When the "tokio" or "async_std" feature is enabled, we also provide two additional functions:
 //!
 //! - [send_timeout()](crate::AsyncTx::send_timeout()), which will return the message that failed to be sent in
-//! [SendTimeoutError]. We guarantee the result is atomic. Alternatively, you can use
-//! [send_with_timer()](crate::AsyncTx::send_with_timer()).
+//!   [SendTimeoutError]. We guarantee the result is atomic. Alternatively, you can use
+//!   [send_with_timer()](crate::AsyncTx::send_with_timer()).
 //!
 //! - [recv_timeout()](crate::AsyncRx::recv_timeout()), we guarantee the result is atomic.
-//! Alternatively, you can use [recv_with_timer()](crate::AsyncRx::recv_with_timer())
+//!   Alternatively, you can use [recv_with_timer()](crate::AsyncRx::recv_with_timer())
 //!
 //! * The waker footprint:
 //!
@@ -180,10 +180,10 @@
 //! * `compat`: Enable the [compat] model, which has the same API namespace struct as V2.x
 //!
 //! * `tokio`: Enable [send_timeout](crate::AsyncTx::send_timeout()), [recv_timeout](crate::AsyncRx::recv_timeout()) with tokio sleep function. (conflict
-//! with `async_std` feature)
+//!   with `async_std` feature)
 //!
 //! * `async_std`: Enable send_timeout, recv_timeout with async-std sleep function. (conflict
-//! with `tokio` feature)
+//!   with `tokio` feature)
 //!
 //! * `trace_log`: Development mode, to enable internal log while testing or benchmark, to debug deadlock issues.
 //!

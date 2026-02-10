@@ -20,7 +20,6 @@ use std::task::{Context, Poll};
 /// `AsyncRx` can be converted into `Rx` via the `From` trait,
 /// which means you can have two types of receivers, both within async and
 /// blocking contexts, for the same channel.
-
 ///
 /// **NOTE**: `AsyncRx` is not `Clone` or `Sync`.
 /// If you need concurrent access, use [MAsyncRx] instead.
@@ -594,7 +593,6 @@ where
 /// `MAsyncRx` can be converted into `MRx` via the `From` trait,
 /// which means you can have two types of receivers, both within async and
 /// blocking contexts, for the same channel.
-
 pub struct MAsyncRx<F: Flavor>(pub(crate) AsyncRx<F>);
 
 impl<F: Flavor> fmt::Debug for MAsyncRx<F> {

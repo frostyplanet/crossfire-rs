@@ -192,8 +192,8 @@ where
     /// # Argument:
     ///
     /// * `fut`: The sleep function. It's possible to wrap this function with cancelable handle,
-    /// you can control when to stop polling. the return value of `fut` is ignore.
-    /// We add generic `R` just in order to support smol::Timer.
+    ///   you can control when to stop polling. the return value of `fut` is ignore.
+    ///   We add generic `R` just in order to support smol::Timer.
     ///
     /// # Example:
     ///
@@ -600,7 +600,6 @@ where
 /// `MAsyncTx` can be converted into `MTx` via the `From` trait,
 /// which means you can have two types of senders, both within async and
 /// blocking contexts, for the same channel.
-
 pub struct MAsyncTx<F: Flavor>(pub(crate) AsyncTx<F>);
 
 impl<F: Flavor> fmt::Debug for MAsyncTx<F> {

@@ -79,7 +79,7 @@ pub(crate) trait RegistrySend<T>: Registry {
     /// It's ok to set state with Relaxed here, two scenario:
     /// * set Done while the state is Init, does not matter other thread see it or not.
     /// * other thread might have wake it in the process, but we are dropping it anyway, and then
-    /// reg_waker with a new one.
+    ///   reg_waker with a new one.
     #[inline(always)]
     fn cancel_reuse_waker(
         &self, o_waker: &mut Option<<Self as Registry>::Waker>, state: WakerState,
@@ -669,7 +669,7 @@ impl<T: 'static> RegistrySend<T> for RegistryMultiSend<T> {
     /// It's ok to set state with Relaxed here, two scenario:
     /// * set Done while the state is Init, does not matter other thread see it or not.
     /// * other thread might have wake it in the process, but we are dropping it anyway, and then
-    /// reg_waker with a new one.
+    ///   reg_waker with a new one.
     #[inline(always)]
     fn cancel_reuse_waker(
         &self, o_waker: &mut Option<ArcWaker<*const T>>, state: WakerState,
