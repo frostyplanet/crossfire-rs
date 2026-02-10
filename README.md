@@ -79,6 +79,8 @@ and has atomic ops cost reduced in the lockless algorithm.
     - [Multiplex](https://docs.rs/crossfire/latest/crossfire/select/struct.Multiplex.html): Multiplex stream that owns multiple receiver, select from the same type of
     channel flavors, for the same type of message.
 
+- [waitgroup](https://docs.rs/crossfire/latest/crossfire/waitgroup/index.html) High performance WaitGroup that allows custom threshold.
+
 ### Flavors
 
 The following lockless queues are expose in [flavor](https://docs.rs/crossfire/latest/crossfire/flavor/index.html) module, and each one have type alias in spsc/mpsc/mpmc:

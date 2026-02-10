@@ -65,6 +65,8 @@
 //!     - [Multiplex](crate::select::Multiplex): Multiplex stream that owns multiple receiver, select from the same type of
 //!       channel flavors, for the same type of message.
 //!
+//! - [waitgroup]: High performance WaitGroup which allows custom threshold
+//!
 //! ### Flavors
 //!
 //! The following lockless queues are expose in [flavor] module, and each one have type alias in spsc/mpsc/mpmc:
@@ -273,6 +275,7 @@ pub mod mpmc;
 pub mod mpsc;
 pub mod oneshot;
 pub mod spsc;
+pub mod waitgroup;
 
 mod blocking_tx;
 pub use blocking_tx::*;
