@@ -146,13 +146,13 @@ impl<T> ArrayQueueMpsc<T> {
                 unsafe {
                     let slot = self.buffer.get_unchecked(index);
 
-                    let item: &mut MaybeUninit<T> = mem::transmute(slot.value.get());
+                    let item: &mut MaybeUninit<T> = &mut *slot.value.get();
                     item.write(ptr::read(value));
                     slot.stamp.store((tail as usize).wrapping_add(1), Ordering::Release);
                 }
-                return Ok(true);
+                Ok(true)
             }
-            Err(current) => return Err(current),
+            Err(current) => Err(current),
         }
     }
 
@@ -198,10 +198,7 @@ impl<T> ArrayQueueMpsc<T> {
             }
             head_cached = head;
         }
-        match self._try_push(sender_val, tail, head_cached, value) {
-            Ok(res) => Some(res),
-            Err(_) => None,
-        }
+        self._try_push(sender_val, tail, head_cached, value).ok()
     }
 
     #[inline]
@@ -288,7 +285,7 @@ impl<T> ArrayQueueMpsc<T> {
             let lap = head & !(self.one_lap - 1);
             lap.wrapping_add(self.one_lap)
         };
-        return (slot, ((tail_cached as u64) << 32) | (new_head as u64));
+        (slot, ((tail_cached as u64) << 32) | (new_head as u64))
     }
 
     #[inline(always)]

@@ -167,7 +167,7 @@ impl<F: Flavor> Rx<F> {
         }
         try_recv!({ on_recv_waker!() });
         // make sure all msgs received, since we have soonze
-        return Err(RecvTimeoutError::Disconnected);
+        Err(RecvTimeoutError::Disconnected)
     }
 
     /// Receives a message from the channel. This method will block until a message is received or the channel is closed.
@@ -176,7 +176,7 @@ impl<F: Flavor> Rx<F> {
     ///
     /// Returns Err([RecvError]) if the sender has been dropped.
     #[inline]
-    pub fn recv<'a>(&'a self) -> Result<F::Item, RecvError> {
+    pub fn recv(&self) -> Result<F::Item, RecvError> {
         self._recv_blocking(None).map_err(|err| match err {
             RecvTimeoutError::Disconnected => RecvError,
             RecvTimeoutError::Timeout => unreachable!(),

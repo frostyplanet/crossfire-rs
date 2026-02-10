@@ -54,6 +54,7 @@ pub type List<T> = FlavorWrap<crate::flavor::List<T>, RegistryDummy, RegistrySin
 pub type One<T> = FlavorWrap<crate::flavor::OneSpsc<T>, RegistrySingle, RegistrySingle>;
 
 /// Flavor Type for bounded SPSC channel
+#[allow(clippy::large_enum_variant)]
 pub enum Array<T> {
     Array(crate::flavor::ArraySpsc<T>),
     One(crate::flavor::OneSpsc<T>),

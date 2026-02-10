@@ -69,7 +69,7 @@ impl<F: Flavor> AsyncStream<F> {
                     return Poll::Pending;
                 }
                 self.ended = true;
-                return Poll::Ready(None);
+                Poll::Ready(None)
             }
         }
     }
@@ -103,7 +103,7 @@ where
                     return Poll::Pending;
                 }
                 _self.ended = true;
-                return Poll::Ready(None);
+                Poll::Ready(None)
             }
         }
     }

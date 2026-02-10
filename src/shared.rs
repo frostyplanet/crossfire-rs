@@ -45,12 +45,12 @@ impl<F: Flavor> ChannelShared<F> {
     pub(crate) fn try_recv(&self) -> Result<F::Item, TryRecvError> {
         if let Some(item) = self.inner.try_recv_final() {
             self.on_recv();
-            return Ok(item);
+            Ok(item)
         } else {
             if self.is_tx_closed() {
                 return Err(TryRecvError::Disconnected);
             }
-            return Err(TryRecvError::Empty);
+            Err(TryRecvError::Empty)
         }
     }
 
@@ -60,11 +60,11 @@ impl<F: Flavor> ChannelShared<F> {
         F: FlavorSelect,
     {
         if token.pos.is_null() {
-            return Err(RecvError);
+            Err(RecvError)
         } else {
             let item = self.inner.read_with_token(token);
             self.on_recv();
-            return Ok(item);
+            Ok(item)
         }
     }
 
@@ -94,13 +94,13 @@ impl<F: Flavor> ChannelShared<F> {
     /// Returns the number of senders for the channel.
     #[inline(always)]
     pub fn get_tx_count(&self) -> usize {
-        self.tx_count.load(Ordering::SeqCst) as usize
+        self.tx_count.load(Ordering::SeqCst)
     }
 
     /// Returns the number of receivers for the channel.
     #[inline(always)]
     pub fn get_rx_count(&self) -> usize {
-        self.rx_count.load(Ordering::SeqCst) as usize
+        self.rx_count.load(Ordering::SeqCst)
     }
 
     #[inline(always)]
@@ -174,21 +174,21 @@ impl<F: Flavor> ChannelShared<F> {
         if let Some(res) = self.inner.try_send_oneshot(item.as_ptr()) {
             if res {
                 self.on_send();
-                return self.senders.cancel_reuse_waker(o_waker, WakerState::Done);
+                self.senders.cancel_reuse_waker(o_waker, WakerState::Done)
             } else {
                 let state = if SINK {
                     WakerState::Init as u8
                 } else {
-                    self.senders.commit_waiting(&o_waker)
+                    self.senders.commit_waiting(o_waker)
                 };
                 if self.is_rx_closed() {
                     return WakerState::Closed as u8;
                 }
-                return state;
+                state
             }
         } else {
             // Unlikely to be disconnected,
-            return self.senders.cancel_reuse_waker(o_waker, WakerState::Woken);
+            self.senders.cancel_reuse_waker(o_waker, WakerState::Woken)
         }
     }
 
@@ -242,7 +242,7 @@ impl<F: Flavor> ChannelShared<F> {
                     // Unused code for direct_copy
                     return false;
                 }
-                return true;
+                true
             }
         }
     }

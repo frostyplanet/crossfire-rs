@@ -77,9 +77,9 @@ impl<T, const MC: bool> OneSp<T, MC> {
             self.slots[index as usize].write(value);
             let new_pos = Self::pack(head, new_tail);
             self.pos.store(new_pos, Ordering::SeqCst);
-            return true;
+            true
         } else {
-            return false;
+            false
         }
     }
 }
@@ -104,7 +104,7 @@ impl<T> OneSpsc<T> {
         // Because we have two slot, the sender will write to next index,
         // it's safe to update the pos before we read, so that sender may begin to write
         let new_pos = Self::pack(next_head, next_head);
-        self.pos.store(new_pos as u64, SeqCst);
+        self.pos.store(new_pos, SeqCst);
         slot.read()
     }
 
@@ -112,7 +112,7 @@ impl<T> OneSpsc<T> {
     fn _pop(&self, order: Ordering) -> Option<T> {
         if let Some(tail) = self.start_read(order) {
             let index = (tail & 0x1) as usize;
-            Some(self._read(&self.slots[index as usize], tail))
+            Some(self._read(&self.slots[index], tail))
         } else {
             None
         }
@@ -121,13 +121,12 @@ impl<T> OneSpsc<T> {
     #[inline(always)]
     fn start_read(&self, order: Ordering) -> Option<u32> {
         let pos = self.pos.load(order);
-        loop {
-            let (head, tail) = Self::unpack(pos);
-            if head == tail {
-                return None;
-            }
+        let (head, tail) = Self::unpack(pos);
+        if head == tail {
+            None
+        } else {
             debug_assert_eq!(head.wrapping_add(1), tail);
-            return Some(tail);
+            Some(tail)
         }
     }
 }
@@ -380,10 +379,7 @@ impl<T> FlavorSelect for OneSpsc<T> {
             self.start_read(if final_check { Ordering::SeqCst } else { Ordering::Acquire })
         {
             let index = (tail & 0x1) as usize;
-            Some(Token::new(
-                &self.slots[index as usize] as *const Slot<T> as *const u8,
-                tail as usize,
-            ))
+            Some(Token::new(&self.slots[index] as *const Slot<T> as *const u8, tail as usize))
         } else {
             None
         }

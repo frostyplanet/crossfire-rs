@@ -67,6 +67,7 @@ pub use crate::{AsyncRxTrait, AsyncTxTrait, BlockingRxTrait, BlockingTxTrait};
 use std::mem::MaybeUninit;
 
 /// Compatible flavor that wraps the Array and list type
+#[allow(clippy::large_enum_variant)]
 pub enum CompatFlavor<T> {
     Array(crate::flavor::Array<T>),
     List(crate::flavor::List<T>),

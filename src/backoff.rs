@@ -67,7 +67,7 @@ impl BackoffConfig {
     #[inline(always)]
     pub const fn to_u32(self) -> u32 {
         let i: u32 = unsafe { transmute(self) };
-        return i;
+        i
     }
 
     #[inline(always)]
@@ -126,7 +126,7 @@ impl Backoff {
         }
         if self.step < MAX_LIMIT {
             self.step += 1;
-            return self.step > self.config.limit;
+            self.step > self.config.limit
         } else {
             true
         }

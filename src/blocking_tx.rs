@@ -134,7 +134,7 @@ where
                     }
                 }
             } else {
-                if false == shared.inner.try_send(&item) {
+                if !shared.inner.try_send(item) {
                     if r {
                         break;
                     }
@@ -166,7 +166,7 @@ where
             // For nx1 (more likely congest), need to reset backoff
             // to allow more yield to receivers.
             // For nxn (the backoff is already complete), wait a little bit.
-            state = shared.sender_double_check::<false>(&item, &mut o_waker);
+            state = shared.sender_double_check::<false>(item, &mut o_waker);
             trace_log!("tx: sender_double_check {:?} state={}", o_waker, state);
             while state < WakerState::Woken as u8 {
                 if congest {
@@ -199,7 +199,7 @@ where
             if state == WakerState::Woken as u8 {
                 backoff.reset();
                 loop {
-                    if shared.inner.try_send(&item) {
+                    if shared.inner.try_send(item) {
                         shared.on_send();
                         return_ok!();
                     }
@@ -235,7 +235,7 @@ where
             return Ok(());
         }
         match self._send_bounded(&_item, None) {
-            Ok(_) => return Ok(()),
+            Ok(_) => Ok(()),
             Err(SendTimeoutError::Disconnected(e)) => Err(SendError(e)),
             Err(SendTimeoutError::Timeout(_)) => unreachable!(),
         }
@@ -257,9 +257,9 @@ where
         let _item = MaybeUninit::new(item);
         if shared.inner.try_send(&_item) {
             shared.on_send();
-            return Ok(());
+            Ok(())
         } else {
-            return Err(TrySendError::Full(unsafe { _item.assume_init_read() }));
+            Err(TrySendError::Full(unsafe { _item.assume_init_read() }))
         }
     }
 
@@ -293,8 +293,8 @@ where
                     return Ok(());
                 }
                 match self._send_bounded(&_item, Some(deadline)) {
-                    Ok(_) => return Ok(()),
-                    Err(e) => return Err(e),
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
                 }
             }
         }
@@ -447,7 +447,7 @@ where
     fn send_timeout(
         &self, item: F::Item, timeout: Duration,
     ) -> Result<(), SendTimeoutError<F::Item>> {
-        Tx::send_timeout(&self, item, timeout)
+        Tx::send_timeout(self, item, timeout)
     }
 
     /// The number of messages in the channel at the moment

@@ -67,12 +67,12 @@ impl<T> Queue for ArrayMpsc<T> {
 impl<T> FlavorImpl for ArrayMpsc<T> {
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
-        return unsafe { self.0.push_with_ptr(item.as_ptr()) };
+        unsafe { self.0.push_with_ptr(item.as_ptr()) }
     }
 
     #[inline(always)]
     fn try_send_oneshot(&self, item: *const T) -> Option<bool> {
-        return unsafe { self.0.try_push_oneshot(item) };
+        unsafe { self.0.try_push_oneshot(item) }
     }
 
     #[inline(always)]

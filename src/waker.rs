@@ -2,7 +2,6 @@ use crate::collections::ArcCell;
 use crate::flavor::FlavorImpl;
 use std::cell::UnsafeCell;
 use std::fmt;
-use std::mem::transmute;
 use std::ops::Deref;
 use std::sync::{
     atomic::{AtomicU32, AtomicU8, Ordering},
@@ -90,6 +89,7 @@ impl<P> ArcWaker<P> {
         Self(inner)
     }
 
+    #[allow(clippy::wrong_self_convention)]
     #[inline(always)]
     pub fn to_arc(self) -> Arc<WakerInner<P>> {
         self.0
@@ -132,7 +132,7 @@ impl ThinWaker {
         // There might be situation like spurious wakeup, poll() again under no waking up ever
         // happened, waker still exists in registry but cannot be used to wake the current future.
         if let Self::Async(_waker) = self {
-            return _waker.will_wake(ctx.waker());
+            _waker.will_wake(ctx.waker())
         } else {
             unreachable!();
         }
@@ -153,17 +153,17 @@ unsafe impl<P> Sync for WakerInner<P> {}
 impl<P> WakerInner<P> {
     #[inline(always)]
     fn get_waker(&self) -> &ThinWaker {
-        unsafe { transmute(self.waker.get()) }
+        unsafe { &*self.waker.get() }
     }
 
     #[inline(always)]
     fn get_waker_mut(&self) -> &mut ThinWaker {
-        unsafe { transmute(self.waker.get()) }
+        unsafe { &mut *self.waker.get() }
     }
 
     #[inline(always)]
     fn get_payload_mut(&self) -> &mut P {
-        unsafe { transmute(self.payload.get()) }
+        unsafe { &mut *self.payload.get() }
     }
 
     #[inline(always)]
@@ -193,23 +193,21 @@ impl<P> WakerInner<P> {
     #[inline(always)]
     pub fn commit_waiting(&self) -> u8 {
         if let Err(s) = self.try_change_state(WakerState::Init, WakerState::Waiting) {
-            return s;
+            s
         } else {
-            return WakerState::Waiting as u8;
+            WakerState::Waiting as u8
         }
     }
 
     #[inline(always)]
     pub fn try_change_state(&self, cur: WakerState, new_state: WakerState) -> Result<(), u8> {
-        if let Err(s) = self.state.compare_exchange(
+        self.state.compare_exchange(
             cur as u8,
             new_state as u8,
             Ordering::SeqCst,
             Ordering::Acquire,
-        ) {
-            return Err(s);
-        }
-        return Ok(());
+        )?;
+        Ok(())
     }
 
     #[inline(always)]
@@ -240,7 +238,7 @@ impl<P> WakerInner<P> {
             self.get_waker().wake_by_ref();
             return true;
         }
-        return false;
+        false
     }
 
     // Return Ok(pre_state), otherwise return Err(current_state)
@@ -340,12 +338,12 @@ impl<T> WakerInner<*const T> {
                 return WakeResult::Skip;
             } else if state == WakerState::Waiting as u8 {
                 let p = self.get_payload();
-                if p == std::ptr::null_mut() {
+                if p.is_null() {
                     self.state.store(WakerState::Woken as u8, Ordering::SeqCst);
                     self.get_waker().wake_by_ref();
                     return WakeResult::Woken;
                 }
-                state = if let Some(true) = flavor.try_send_oneshot(p as *const T) {
+                state = if let Some(true) = flavor.try_send_oneshot(p) {
                     WakerState::Done as u8
                 } else {
                     WakerState::Woken as u8
@@ -392,7 +390,7 @@ impl<P: Copy> WakerCache<P> {
             inner.reset(payload);
             return ArcWaker::<P>::from_arc(inner);
         }
-        return ArcWaker::new_blocking(payload);
+        ArcWaker::new_blocking(payload)
     }
 
     #[inline(always)]

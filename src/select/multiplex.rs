@@ -33,14 +33,14 @@ pub type Mux<F> = FlavorWrap<F, <F as Flavor>::Send, SelectWakerWrapper>;
 /// - New channel may be added on the fly
 /// - This abstraction is only designed for stable channels for most efficient select.
 /// - If channel close by sender, the receiver will be automatically close inside the Multiplex,
-/// user will not be notify until all its channels closed.
+///   user will not be notify until all its channels closed.
 /// - Due to it binds on Flavor interface, it cannot be use between different type.
-/// If you want to multiplex between list and array, can use the
-/// [CompatFlavor](crate::compat::CompatFlavor)
+///   If you want to multiplex between list and array, can use the
+///   [CompatFlavor](crate::compat::CompatFlavor)
 /// - **NOTE** : It has internal mutability because it need to impl [BlockingRxTrait](crate::BlockingRxTrait),
-/// the adding channel process remains `&mut self`. Because `Multiplex` is a single consumer just
-/// like [Rx](crate::Rx), it does not have `Sync`. If you can guarantee no concurrent access you
-/// can manutally add the `Sync` back in parent struct.
+///   the adding channel process remains `&mut self`. Because `Multiplex` is a single consumer just
+///   like [Rx](crate::Rx), it does not have `Sync`. If you can guarantee no concurrent access you
+///   can manutally add the `Sync` back in parent struct.
 ///
 ///
 /// # Examples
@@ -112,8 +112,8 @@ impl<F: Flavor> Multiplex<F> {
     ///
     /// # Type Parameters
     ///
-    /// * `S` - The sender type that implements SenderType with the appropriate Flavor,
-    /// may be async or blocking sender, MP or SP that match the `Flavor` type.
+    /// * `S`: The sender type that implements SenderType with the appropriate Flavor,
+    ///   may be async or blocking sender, MP or SP that match the `Flavor` type.
     ///
     /// # Note
     ///
@@ -162,7 +162,7 @@ impl<F: Flavor> Multiplex<F> {
         S: SenderType<Flavor = Mux<F>>,
     {
         let shared = self._add_item(F::new(), DEFAULT_WEIGHT);
-        return S::new(shared);
+        S::new(shared)
     }
 
     /// Add a channel of flavor (impl FlavorNew), with custom weight instead of default
@@ -173,7 +173,7 @@ impl<F: Flavor> Multiplex<F> {
         S: SenderType<Flavor = Mux<F>>,
     {
         let shared = self._add_item(F::new(), weight);
-        return S::new(shared);
+        S::new(shared)
     }
 
     /// Creates a new bounded sender for the multiplexer
@@ -211,7 +211,7 @@ impl<F: Flavor> Multiplex<F> {
         S: SenderType<Flavor = Mux<F>>,
     {
         let shared = self._add_item(F::new_with_bound(size), DEFAULT_WEIGHT);
-        return S::new(shared);
+        S::new(shared)
     }
 
     /// Add a bounded channel to the multiplex, with custom weight (the default is 128)
@@ -221,7 +221,7 @@ impl<F: Flavor> Multiplex<F> {
         S: SenderType<Flavor = Mux<F>>,
     {
         let shared = self._add_item(F::new_with_bound(size), weight);
-        return S::new(shared);
+        S::new(shared)
     }
 
     /// Attempts to receive a message from any of the multiplexed channels without blocking.
@@ -297,16 +297,15 @@ impl<F: Flavor> Multiplex<F> {
         let last_idx = self.last_idx.get();
         let handle = unsafe { self.handlers.get_unchecked(last_idx) };
         let count = self.count.get();
-        let loop_count;
-        if count > 0 {
+        let loop_count = if count > 0 {
             if let Some(msg) = handle.shared.inner.try_recv_cached() {
                 handle.shared.on_recv();
                 self.count.set(count - 1);
                 return Ok(msg);
             }
-            loop_count = self.handlers.len() - 1;
+            self.handlers.len() - 1
         } else {
-            loop_count = self.handlers.len();
+            self.handlers.len()
         };
         if let Some(item) = self._try_select_all::<FINAL>(last_idx, loop_count) {
             return Ok(item);

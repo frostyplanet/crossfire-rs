@@ -143,7 +143,7 @@ impl FlavorSelect for Null {
     }
 
     #[inline(always)]
-    fn read_with_token(&self, _token: Token) -> () {
+    fn read_with_token(&self, _token: Token) {
         unreachable!();
     }
 }

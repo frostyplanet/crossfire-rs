@@ -158,10 +158,10 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
         }
         check_full!(tail);
         match self._try_push(tail, value) {
-            Ok(_) => return Some(true),
+            Ok(_) => Some(true),
             Err((_stamp, _new_tail)) => {
                 // after the first check_full with both loads are SeqCst, this is unlikely full, but also a hot path
-                return None;
+                None
             }
         }
     }
@@ -205,13 +205,13 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
             }
             // Write the value into the slot and update the stamp.
             unsafe {
-                let item: &mut MaybeUninit<T> = mem::transmute(slot.value.get());
+                let item: &mut MaybeUninit<T> = &mut *slot.value.get();
                 item.write(ptr::read(value));
             }
             slot.stamp.store(tail + 1, Ordering::Release);
-            return Ok(true);
+            Ok(true)
         } else {
-            return Err((stamp, None));
+            Err((stamp, None))
         }
     }
 
@@ -278,7 +278,7 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
     }
 
     #[inline]
-    fn _start_read<'a>(&'a self, final_check: bool) -> Option<(&'a Slot<T>, usize)> {
+    fn _start_read(&self, final_check: bool) -> Option<(&Slot<T>, usize)> {
         let mut head;
         if final_check {
             // because we need to check is_empty before park,
@@ -358,7 +358,7 @@ impl<T, const MP: bool, const MC: bool> ArrayQueue<T, MP, MC> {
         let slot: &Slot<T> = unsafe { &*token.pos.cast::<Slot<T>>() };
         let msg = unsafe { slot.value.get().read().assume_init() };
         slot.stamp.store(token.stamp, Ordering::Release);
-        return msg;
+        msg
     }
 
     /// Returns the capacity of the queue.

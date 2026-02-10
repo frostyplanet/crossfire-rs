@@ -123,7 +123,7 @@ impl<T> OneMpsc<T> {
             return None;
         }
         let index = head & 0x1;
-        return Some((index, tail));
+        Some((index, tail))
     }
 
     #[inline(always)]
@@ -132,8 +132,8 @@ impl<T> OneMpsc<T> {
         // Because we have two slot, the sender will write to next index,
         // it's safe to update the pos before we read, so that sender may begin to write
         self.pos.store(new_pos, SeqCst);
-        let msg = slot.read(next_head);
-        msg
+
+        slot.read(next_head)
     }
 
     #[inline(always)]
@@ -179,8 +179,8 @@ impl<T> Slot<T> {
                 }
             }
         }
-        let msg = unsafe { self.value.get().read().assume_init() };
-        msg
+
+        unsafe { self.value.get().read().assume_init() }
     }
 
     #[inline(always)]

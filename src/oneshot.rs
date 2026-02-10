@@ -40,7 +40,6 @@
 use crate::shared::*;
 use crate::trace_log;
 use core::cell::UnsafeCell;
-use core::mem::transmute;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
@@ -71,7 +70,7 @@ impl<T> OneShot<T> {
 
     #[inline(always)]
     fn value_mut(&self) -> &mut Option<T> {
-        unsafe { transmute(self.value.get()) }
+        unsafe { &mut *self.value.get() }
     }
 
     #[inline(always)]
@@ -127,7 +126,7 @@ struct Shared<T> {
 impl<T> Shared<T> {
     #[inline]
     fn get_waker(&self) -> &mut Option<ThinWaker> {
-        unsafe { transmute(self.waker.get()) }
+        unsafe { &mut *self.waker.get() }
     }
 }
 
@@ -208,12 +207,12 @@ impl<T> RxOneshot<T> {
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         match self.0.inner._try_recv(Ordering::Acquire) {
-            Ok(item) => return Ok(item),
+            Ok(item) => Ok(item),
             Err(state) => {
                 if state & CLOSE_FLAG > 0 {
-                    return Err(TryRecvError::Disconnected);
+                    Err(TryRecvError::Disconnected)
                 } else {
-                    return Err(TryRecvError::Empty);
+                    Err(TryRecvError::Empty)
                 }
             }
         }
@@ -283,7 +282,7 @@ impl<T> Future for RxOneshot<T> {
         match shared.inner._try_recv(Ordering::SeqCst) {
             Ok(item) => {
                 trace_log!("poll value");
-                return Poll::Ready(Ok(item));
+                Poll::Ready(Ok(item))
             }
             Err(mut state) => {
                 if state & WAKER_SET_FLAG > 0 {
@@ -328,7 +327,7 @@ impl<T> Future for RxOneshot<T> {
                     return Poll::Ready(Err(RecvError));
                 }
                 trace_log!("poll pending: state={}", state);
-                return Poll::Pending;
+                Poll::Pending
             }
         }
     }

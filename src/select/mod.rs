@@ -7,6 +7,7 @@
 //!
 //! Performance:  dedicated channel > multiplex > select
 
+#[allow(clippy::module_inception)]
 pub(crate) mod select;
 pub use select::{Select, SelectResult};
 #[allow(private_interfaces)]

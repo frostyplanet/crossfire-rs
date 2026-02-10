@@ -228,7 +228,7 @@ impl<T> RegistrySend<T> for RegistrySingle {
         F: FlavorImpl<Item = T>,
     {
         self._fire();
-        return WakeResult::Next;
+        WakeResult::Next
     }
 
     #[inline(always)]
@@ -347,7 +347,7 @@ impl<P: Copy> RegistryMulti<P> {
             match waker.try_change_state(WakerState::Woken, WakerState::Init) {
                 Ok(_) => {
                     if waker.will_wake(ctx) {
-                        self.reg_waker(&waker);
+                        self.reg_waker(waker);
                         return None;
                     }
                 }
@@ -387,7 +387,7 @@ impl<P: Copy> RegistryMulti<P> {
         let waker = ArcWaker::<P>::new_async(ctx, payload);
         self.reg_waker(&waker);
         o_waker.replace(waker);
-        return None;
+        None
     }
 
     #[inline(always)]
@@ -396,7 +396,7 @@ impl<P: Copy> RegistryMulti<P> {
     ) {
         if let Some(waker) = o_waker.as_ref() {
             waker.reset_init();
-            self.reg_waker(&waker);
+            self.reg_waker(waker);
             trace_log!("{}{:?}: re-reg {:?}", self._tag, tokio_task_id!(), waker);
         } else {
             debug_assert!(o_waker.is_none());
@@ -448,7 +448,7 @@ impl<P: Copy> RegistryMulti<P> {
                 }
             }
             // nothing changed, don't need to touch the state
-            return None;
+            None
         }
     }
 
@@ -577,7 +577,7 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
     /// Cancel outdated wakers until me, make sure it does not accumulate
     #[inline(always)]
     fn clear_wakers(&self, waker: &ArcWaker<P>) {
-        self._clear_wakers(&waker, false);
+        self._clear_wakers(waker, false);
     }
 
     #[inline(always)]
@@ -605,7 +605,7 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
     #[inline(always)]
     fn commit_waiting(&self, o_waker: &Option<ArcWaker<P>>) -> u8 {
         if let Some(waker) = &o_waker {
-            return waker.commit_waiting();
+            waker.commit_waiting()
         } else {
             unreachable!();
         }
@@ -618,12 +618,10 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
         match waker.abandon() {
             Ok(()) => {
                 trace_log!("{}: abandon cancel {:?}", self._tag, waker);
-                self.clear_wakers(&waker);
+                self.clear_wakers(waker);
                 Ok(())
             }
-            Err(state) => {
-                return Err(state);
-            }
+            Err(state) => Err(state),
         }
     }
 
@@ -682,14 +680,14 @@ impl<T: 'static> RegistrySend<T> for RegistryMultiSend<T> {
             if cur_state >= WakerState::Woken as u8 {
                 trace_log!("{}: cancel_reuse {:?} {}", self._tag, waker, cur_state);
                 if cur_state < state as u8 {
-                    return state as u8;
+                    state as u8
                 } else {
-                    return cur_state;
+                    cur_state
                 }
             } else {
-                self._clear_wakers(&waker, true);
+                self._clear_wakers(waker, true);
                 let _ = o_waker.take();
-                return state as u8;
+                state as u8
             }
         } else {
             unreachable!();
@@ -913,7 +911,7 @@ impl SelectWaker {
 
     #[inline(always)]
     fn get_waker(&self) -> &mut Option<ArcWaker<()>> {
-        unsafe { std::mem::transmute(self.o_waker.get()) }
+        unsafe { &mut *self.o_waker.get() }
     }
 
     #[inline(always)]

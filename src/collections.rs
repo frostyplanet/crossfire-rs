@@ -26,14 +26,14 @@ impl<T> ArcCell<T> {
 
     #[inline(always)]
     pub fn exists(&self) -> bool {
-        self.ptr.load(Ordering::Acquire) != ptr::null_mut()
+        !self.ptr.load(Ordering::Acquire).is_null()
     }
 
     #[inline(always)]
     pub fn pop(&self) -> Option<Arc<T>> {
         let ptr = self.ptr.swap(ptr::null_mut(), Ordering::SeqCst);
-        if ptr != ptr::null_mut() {
-            return Some(unsafe { Arc::from_raw(ptr) });
+        if !ptr.is_null() {
+            Some(unsafe { Arc::from_raw(ptr) })
         } else {
             None
         }
@@ -43,7 +43,7 @@ impl<T> ArcCell<T> {
     #[inline(always)]
     pub fn clear(&self) {
         let ptr = self.ptr.swap(ptr::null_mut(), Ordering::SeqCst);
-        if ptr != ptr::null_mut() {
+        if !ptr.is_null() {
             // Convert into Weak and drop
             let _ = unsafe { Arc::from_raw(ptr) };
         }
@@ -95,7 +95,7 @@ impl<T> WeakCell<T> {
     #[inline(always)]
     pub fn pop(&self) -> Option<Arc<T>> {
         let mut v = self.ptr.load(Ordering::SeqCst);
-        if v == ptr::null_mut() {
+        if v.is_null() {
             return None;
         }
         loop {
@@ -103,7 +103,7 @@ impl<T> WeakCell<T> {
             {
                 Ok(_) => return unsafe { Weak::from_raw(v) }.upgrade(),
                 Err(_v) => {
-                    if _v == ptr::null_mut() {
+                    if _v.is_null() {
                         return None;
                     }
                     v = _v;
@@ -117,17 +117,17 @@ impl<T> WeakCell<T> {
     pub fn clear(&self) -> bool {
         // Don't need accurate, it's optional
         let v = self.ptr.load(Ordering::Acquire);
-        if v == ptr::null_mut() {
+        if v.is_null() {
             return false;
         }
         match self.ptr.compare_exchange(v, ptr::null_mut(), Ordering::Release, Ordering::Relaxed) {
             Ok(_) => {
                 let _ = unsafe { Weak::from_raw(v) };
-                return true;
+                true
             }
             Err(_v) => {
                 // We don't really have to clear this on spurious failure
-                return false;
+                false
             }
         }
     }
@@ -135,7 +135,7 @@ impl<T> WeakCell<T> {
     #[inline(always)]
     pub fn replace(&self, item: Weak<T>) {
         let old_ptr = self.ptr.swap(item.into_raw() as *mut T, Ordering::SeqCst);
-        if old_ptr != ptr::null_mut() {
+        if !old_ptr.is_null() {
             let _ = unsafe { Weak::from_raw(old_ptr) };
         }
     }

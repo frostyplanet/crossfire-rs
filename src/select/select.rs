@@ -55,7 +55,7 @@ use std::time::{Duration, Instant};
 /// - The user add receivers for subscription.
 /// - call [Select::select] or [Select::select_timeout] and get [SelectResult]
 /// - Use [read_select](crate::Rx::read_select) to handle [SelectResult]. (**Safety**: If `SelectResult`
-///  dropped without processed, will result in message leak/hang.)
+///   dropped without processed, will result in message leak/hang.)
 /// - Although the `Select` object has a lifecycle and should live inside a function scope, it can be reused in a loop.
 /// - On drop it will automatically cancel all registration.
 ///
@@ -224,10 +224,8 @@ impl<'a> Select<'a> {
                     self.next_index = idx + 1;
                 }
                 return Some(res);
-            } else {
-                if final_check {
-                    trace_log!("select: final_check {}", idx);
-                }
+            } else if final_check {
+                trace_log!("select: final_check {}", idx);
             }
             idx += 1;
         }
@@ -236,7 +234,7 @@ impl<'a> Select<'a> {
 
     #[inline(always)]
     fn _try_select_begin(&mut self) -> usize {
-        return match self.mode {
+        match self.mode {
             SelectMode::Bias => 0,
             SelectMode::RR => {
                 if self.next_index >= self.handlers.len() {
@@ -253,7 +251,7 @@ impl<'a> Select<'a> {
                 self.rng = x;
                 (x as usize) % self.handlers.len()
             }
-        };
+        }
     }
 
     /// Blocking current thread and wait for message from multiple receivers or close event
@@ -264,7 +262,7 @@ impl<'a> Select<'a> {
     ///
     /// - Return Ok(SelectResult) when one of the channel has result or close.
     /// - For closed channel, you have to remove the receiver from select, otherwise the select
-    /// will already return immediately.
+    ///   will already return immediately.
     /// - If there's no handler left in it, will return RecvError
     pub fn select(&mut self) -> Result<SelectResult, RecvError> {
         match self._select_blocking(None) {
@@ -282,7 +280,7 @@ impl<'a> Select<'a> {
     ///
     /// - Return Ok(SelectResult) when one of the channel has result or close.
     /// - For closed channel, you have to remove the receiver from select, otherwise the select
-    /// will already return immediately.
+    ///   will already return immediately.
     /// - For Timeout returns RecvTimeoutError::Timeout;
     /// - If there's no handler left in it, will return RecvTimeoutError::Disconnected.
     pub fn select_timeout(&mut self, timeout: Duration) -> Result<SelectResult, RecvTimeoutError> {

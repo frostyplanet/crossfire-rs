@@ -91,10 +91,8 @@ impl<T> FlavorNew for List<T> {
 impl<T> FlavorSelect for List<T> {
     #[inline]
     fn try_select(&self, final_check: bool) -> Option<Token> {
-        if final_check {
-            if self.0.is_empty() {
-                return None;
-            }
+        if final_check && self.0.is_empty() {
+            return None;
         }
         self.0.start_read()
     }

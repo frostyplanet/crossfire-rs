@@ -62,6 +62,7 @@ pub type List<T> = FlavorWrap<crate::flavor::List<T>, RegistryDummy, RegistryMul
 pub type One<T> = FlavorWrap<crate::flavor::One<T>, RegistryMultiSend<T>, RegistryMultiRecv>;
 
 /// Flavor Type for bounded MPMC channel
+#[allow(clippy::large_enum_variant)]
 pub enum Array<T> {
     Array(crate::flavor::Array<T>),
     One(crate::flavor::One<T>),

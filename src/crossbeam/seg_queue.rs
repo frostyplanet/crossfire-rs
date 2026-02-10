@@ -409,7 +409,7 @@ impl<T> SegQueue<T> {
             } else if slot.state.fetch_or(READ, Ordering::AcqRel) & DESTROY != 0 {
                 Block::destroy(block, offset + 1);
             }
-            return value;
+            value
         }
     }
 

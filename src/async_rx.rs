@@ -128,7 +128,7 @@ where
     /// Returns Err([RecvError]) if the sender has been dropped.
     #[inline(always)]
     pub fn recv<'a>(&'a self) -> RecvFuture<'a, F> {
-        return RecvFuture { rx: self, waker: None };
+        RecvFuture { rx: self, waker: None }
     }
 
     /// Receives a message from the channel with a timeout.
@@ -173,8 +173,8 @@ where
     /// # Argument:
     ///
     /// * `fut`: The sleep function. It's possible to wrap this function with cancelable handle,
-    /// you can control when to stop polling. the return value of `fut` is ignore.
-    /// We add generic `R` just in order to support smol::Timer
+    ///   you can control when to stop polling. the return value of `fut` is ignore.
+    ///   We add generic `R` just in order to support smol::Timer
     ///
     /// # Example:
     ///
@@ -202,7 +202,7 @@ where
     where
         FR: Future<Output = R> + 'static,
     {
-        return RecvTimeoutFuture { rx: self, waker: None, sleep: Box::pin(fut) };
+        RecvTimeoutFuture { rx: self, waker: None, sleep: Box::pin(fut) }
     }
 
     /// Attempts to receive a message from the channel without blocking.
@@ -214,7 +214,7 @@ where
     /// Returns Err([TryRecvError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline(always)]
     pub fn try_recv(&self) -> Result<F::Item, TryRecvError> {
-        return self.shared.try_recv();
+        self.shared.try_recv()
     }
 
     /// This method use with [select](crate::select::Select), guarantee non-blocking
@@ -305,9 +305,9 @@ where
         if shared.is_tx_closed() {
             try_recv!(try_recv =>{ on_recv_waker!(WakerState::Closed)});
             trace_log!("rx{:?}: disconnected {:?}", tokio_task_id!(), o_waker);
-            return Err(TryRecvError::Disconnected);
+            Err(TryRecvError::Disconnected)
         } else {
-            return Err(TryRecvError::Empty);
+            Err(TryRecvError::Empty)
         }
     }
 }
@@ -343,14 +343,14 @@ where
             Err(e) => {
                 if !e.is_empty() {
                     let _ = _self.waker.take();
-                    return Poll::Ready(Err(RecvError {}));
+                    Poll::Ready(Err(RecvError {}))
                 } else {
-                    return Poll::Pending;
+                    Poll::Pending
                 }
             }
             Ok(item) => {
                 debug_assert!(_self.waker.is_none());
-                return Poll::Ready(Ok(item));
+                Poll::Ready(Ok(item))
             }
         }
     }
@@ -386,17 +386,13 @@ where
         let mut _self = self.get_mut();
         match _self.rx.poll_item::<false>(ctx, &mut _self.waker) {
             Err(TryRecvError::Empty) => {
-                if let Poll::Ready(_) = _self.sleep.as_mut().poll(ctx) {
+                if _self.sleep.as_mut().poll(ctx).is_ready() {
                     return Poll::Ready(Err(RecvTimeoutError::Timeout));
                 }
-                return Poll::Pending;
+                Poll::Pending
             }
-            Err(TryRecvError::Disconnected) => {
-                return Poll::Ready(Err(RecvTimeoutError::Disconnected));
-            }
-            Ok(item) => {
-                return Poll::Ready(Ok(item));
-            }
+            Err(TryRecvError::Disconnected) => Poll::Ready(Err(RecvTimeoutError::Disconnected)),
+            Ok(item) => Poll::Ready(Ok(item)),
         }
     }
 }
@@ -408,7 +404,7 @@ pub trait AsyncRxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt::Di
     /// Returns `Ok(T)` when successful.
     ///
     /// returns Err([RecvError]) when all Tx dropped.
-    fn recv<'a>(&'a self) -> impl Future<Output = Result<T, RecvError>> + Send
+    fn recv(&self) -> impl Future<Output = Result<T, RecvError>> + Send
     where
         T: Send + 'static;
 
@@ -444,10 +440,10 @@ pub trait AsyncRxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt::Di
     /// # Argument:
     ///
     /// * `fut`: The sleep function. It's possible to wrap this function with cancelable handle,
-    /// you can control when to stop polling. the return value of `fut` is ignore.
-    /// We add generic `R` just in order to support smol::Timer.
-    fn recv_with_timer<'a, FR, R>(
-        &'a self, fut: FR,
+    ///   you can control when to stop polling. the return value of `fut` is ignore.
+    ///   We add generic `R` just in order to support smol::Timer.
+    fn recv_with_timer<FR, R>(
+        &self, fut: FR,
     ) -> impl Future<Output = Result<T, RecvTimeoutError>> + Send
     where
         FR: Future<Output = R> + 'static,
@@ -523,8 +519,8 @@ where
     }
 
     #[inline(always)]
-    fn recv_with_timer<'a, FR, R>(
-        &'a self, fut: FR,
+    fn recv_with_timer<FR, R>(
+        &self, fut: FR,
     ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send
     where
         FR: Future<Output = R> + 'static,
@@ -686,7 +682,7 @@ where
     }
 
     #[inline(always)]
-    fn recv<'a>(&'a self) -> impl Future<Output = Result<F::Item, RecvError>> + Send
+    fn recv(&self) -> impl Future<Output = Result<F::Item, RecvError>> + Send
     where
         F::Item: Send + 'static,
     {
@@ -706,8 +702,8 @@ where
     }
 
     #[inline(always)]
-    fn recv_with_timer<'a, FR, R>(
-        &'a self, fut: FR,
+    fn recv_with_timer<FR, R>(
+        &self, fut: FR,
     ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send
     where
         FR: Future<Output = R> + 'static,

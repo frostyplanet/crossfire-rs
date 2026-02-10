@@ -55,6 +55,7 @@ pub type List<T> = FlavorWrap<crate::flavor::List<T>, RegistryDummy, RegistrySin
 pub type One<T> = FlavorWrap<crate::flavor::One<T>, RegistryMultiSend<T>, RegistrySingle>;
 
 /// Flavor Type alias for bounded MPSC channel wrapped with specified One impl
+#[allow(clippy::large_enum_variant)]
 pub enum Array<T> {
     Array(crate::flavor::ArrayMpsc<T>),
     One(crate::flavor::OneMpsc<T>),

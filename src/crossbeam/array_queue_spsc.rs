@@ -167,11 +167,11 @@ impl<T> ArrayQueueSpsc<T> {
         };
         // Write the value into the slot.
         unsafe {
-            let item: &mut MaybeUninit<T> = mem::transmute(slot.value.get());
+            let item: &mut MaybeUninit<T> = &mut *slot.value.get();
             item.write(ptr::read(value));
         }
         self.sender.store(((head_cached as u64) << 32) | (new_tail as u64), Ordering::SeqCst);
-        return true;
+        true
     }
 
     #[inline(always)]
@@ -227,7 +227,7 @@ impl<T> ArrayQueueSpsc<T> {
 
         if tail_cached == head {
             if SPIN {
-                // because we don't have stamp, and no spining loop,
+                // because we don't have stamp, and no spinning loop,
                 // this line is critical for performance
                 std::hint::spin_loop();
                 let tail = {
@@ -268,7 +268,7 @@ impl<T> ArrayQueueSpsc<T> {
             // Set to `{ lap: lap.wrapping_add(1), index: 0 }`.
             lap.wrapping_add(self.one_lap)
         };
-        return (slot, ((tail_cached as u64) << 32) | (new_head as u64));
+        (slot, ((tail_cached as u64) << 32) | (new_head as u64))
     }
 
     #[inline(always)]

@@ -126,7 +126,7 @@ where
     /// Returns Err([SendError]) if the receiver has been dropped.
     #[inline(always)]
     pub fn send<'a>(&'a self, item: F::Item) -> SendFuture<'a, F> {
-        return SendFuture { tx: &self, item: MaybeUninit::new(item), waker: None };
+        SendFuture { tx: self, item: MaybeUninit::new(item), waker: None }
     }
 
     /// Attempts to send a message without blocking.
@@ -144,9 +144,9 @@ where
         let _item = MaybeUninit::new(item);
         if self.shared.inner.try_send(&_item) {
             self.shared.on_send();
-            return Ok(());
+            Ok(())
         } else {
-            return unsafe { Err(TrySendError::Full(_item.assume_init())) };
+            unsafe { Err(TrySendError::Full(_item.assume_init())) }
         }
     }
 
@@ -318,10 +318,8 @@ impl<F: Flavor> Drop for SendFuture<'_, F> {
     fn drop(&mut self) {
         // Cancelling the future, poll is not ready
         if let Some(waker) = self.waker.as_ref() {
-            if self.tx.shared.abandon_send_waker(waker) {
-                if needs_drop::<F::Item>() {
-                    unsafe { self.item.assume_init_drop() };
-                }
+            if self.tx.shared.abandon_send_waker(waker) && needs_drop::<F::Item>() {
+                unsafe { self.item.assume_init_drop() };
             }
         }
     }
@@ -339,13 +337,13 @@ where
         match _self.tx.poll_send::<false>(ctx, &_self.item, &mut _self.waker) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
-                return Poll::Ready(Ok(()));
+                Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(())) => {
                 let _ = _self.waker.take();
-                return Poll::Ready(Err(SendError(unsafe { _self.item.assume_init_read() })));
+                Poll::Ready(Err(SendError(unsafe { _self.item.assume_init_read() })))
             }
-            Poll::Pending => return Poll::Pending,
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -366,10 +364,8 @@ impl<F: Flavor, R> Drop for SendTimeoutFuture<'_, F, R> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.as_ref() {
             // Cancelling the future, poll is not ready
-            if self.tx.shared.abandon_send_waker(waker) {
-                if needs_drop::<F::Item>() {
-                    unsafe { self.item.assume_init_drop() };
-                }
+            if self.tx.shared.abandon_send_waker(waker) && needs_drop::<F::Item>() {
+                unsafe { self.item.assume_init_drop() };
             }
         }
     }
@@ -387,16 +383,16 @@ where
         match _self.tx.poll_send::<false>(ctx, &_self.item, &mut _self.waker) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
-                return Poll::Ready(Ok(()));
+                Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(())) => {
                 let _ = _self.waker.take();
-                return Poll::Ready(Err(SendTimeoutError::Disconnected(unsafe {
+                Poll::Ready(Err(SendTimeoutError::Disconnected(unsafe {
                     _self.item.assume_init_read()
-                })));
+                })))
             }
             Poll::Pending => {
-                if let Poll::Ready(_) = _self.sleep.as_mut().poll(ctx) {
+                if _self.sleep.as_mut().poll(ctx).is_ready() {
                     if _self.tx.shared.abandon_send_waker(&_self.waker.take().unwrap()) {
                         return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
                             _self.item.assume_init_read()
@@ -406,7 +402,7 @@ where
                         return Poll::Ready(Ok(()));
                     }
                 }
-                return Poll::Pending;
+                Poll::Pending
             }
         }
     }
@@ -457,7 +453,7 @@ pub trait AsyncTxTrait<T: Send + 'static + Unpin>:
     /// Returns `Ok(())` on successful.
     ///
     /// Returns Err([SendError]) when all Rx is dropped.
-    fn send<'a>(&'a self, item: T) -> impl Future<Output = Result<(), SendError<T>>> + Send
+    fn send(&self, item: T) -> impl Future<Output = Result<(), SendError<T>>> + Send
     where
         T: Send + 'static + Unpin;
 
@@ -493,10 +489,10 @@ pub trait AsyncTxTrait<T: Send + 'static + Unpin>:
     /// # Argument:
     ///
     /// * `fut`: The sleep function. It's possible to wrap this function with cancelable handle,
-    /// you can control when to stop polling. the return value of `fut` is ignore.
-    /// We add generic `R` just in order to support smol::Timer
-    fn send_with_timer<'a, FR, R>(
-        &'a self, item: T, fut: FR,
+    ///   you can control when to stop polling. the return value of `fut` is ignore.
+    ///   We add generic `R` just in order to support smol::Timer
+    fn send_with_timer<FR, R>(
+        &self, item: T, fut: FR,
     ) -> impl Future<Output = Result<(), SendTimeoutError<T>>> + Send
     where
         FR: Future<Output = R> + 'static,
@@ -539,8 +535,8 @@ where
     }
 
     #[inline(always)]
-    fn send_with_timer<'a, FR, R>(
-        &'a self, item: F::Item, fut: FR,
+    fn send_with_timer<FR, R>(
+        &self, item: F::Item, fut: FR,
     ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
     where
         FR: Future<Output = R> + 'static,
@@ -692,9 +688,7 @@ where
     }
 
     #[inline(always)]
-    fn send<'a>(
-        &'a self, item: F::Item,
-    ) -> impl Future<Output = Result<(), SendError<F::Item>>> + Send
+    fn send(&self, item: F::Item) -> impl Future<Output = Result<(), SendError<F::Item>>> + Send
     where
         F::Item: Send + 'static + Unpin,
     {
@@ -714,8 +708,8 @@ where
     }
 
     #[inline(always)]
-    fn send_with_timer<'a, FR, R>(
-        &'a self, item: F::Item, fut: FR,
+    fn send_with_timer<FR, R>(
+        &self, item: F::Item, fut: FR,
     ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
     where
         FR: Future<Output = R> + 'static,
