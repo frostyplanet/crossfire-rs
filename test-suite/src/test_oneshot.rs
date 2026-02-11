@@ -14,14 +14,14 @@ fn setup_log() {
 #[logfn]
 #[rstest]
 fn test_oneshot_blocking_basic(setup_log: ()) {
-    let (tx, rx) = oneshot::oneshot();
+    let (tx, mut rx) = oneshot::oneshot();
     assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     assert_eq!(rx.is_empty(), true);
     tx.send(42);
     assert_eq!(rx.is_empty(), false);
     assert_eq!(rx.recv(), Ok(42));
 
-    let (tx, rx) = oneshot::oneshot();
+    let (tx, mut rx) = oneshot::oneshot();
     assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     tx.send(41);
     assert_eq!(rx.try_recv(), Ok(41));
@@ -88,13 +88,13 @@ fn test_oneshot_blocking_drop_after_recv(setup_log: ()) {
 #[rstest]
 fn test_oneshot_async_basic(setup_log: ()) {
     runtime_block_on!(async move {
-        let (tx, rx) = oneshot::oneshot();
+        let (tx, mut rx) = oneshot::oneshot();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
         assert_eq!(rx.is_empty(), true);
         tx.send(42);
         assert_eq!(rx.is_empty(), false);
         assert_eq!(rx.await, Ok(42));
-        let (tx, rx) = oneshot::oneshot();
+        let (tx, mut rx) = oneshot::oneshot();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
         tx.send(41);
         assert_eq!(rx.try_recv(), Ok(41));

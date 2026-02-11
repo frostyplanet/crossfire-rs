@@ -37,35 +37,52 @@
 //! }
 //! ```
 
+use crate::backoff::Backoff;
 use crate::shared::*;
-use crate::trace_log;
+#[allow(unused_imports)]
+use crate::{tokio_task_id, trace_log};
 use core::cell::UnsafeCell;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{
-    atomic::{AtomicU8, Ordering},
-    Arc,
+use std::ptr::NonNull;
+use std::sync::atomic::{
+    fence, AtomicU8,
+    Ordering::{self, AcqRel, Acquire, Relaxed, SeqCst},
 };
 use std::task::{Context, Poll};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-const EXIST_FLAG: u8 = 0x1;
+/// Send/TxOneshot::drop will set this flag once, never changed. use value Option to determine
+/// message existence.
+const DONE_FLAG: u8 = 0x1;
+/// set by RxOneshot
 const WAKER_SET_FLAG: u8 = 0x2;
+/// set by any of TxOneshot/RxOneshot if it exit
 const CLOSE_FLAG: u8 = 0x4;
 
-struct OneShot<T> {
+struct OneShotInner<T> {
     state: AtomicU8,
     value: UnsafeCell<Option<T>>,
+    o_waker: UnsafeCell<Option<ThinWaker>>,
 }
 
-unsafe impl<T: Send> Send for OneShot<T> {}
-unsafe impl<T: Send> Sync for OneShot<T> {}
+unsafe impl<T: Send> Send for OneShotInner<T> {}
+unsafe impl<T: Send> Sync for OneShotInner<T> {}
 
-impl<T> OneShot<T> {
+impl<T> OneShotInner<T> {
     #[inline]
-    pub fn new() -> Self {
-        Self { value: UnsafeCell::new(None), state: AtomicU8::new(0) }
+    fn new() -> Box<Self> {
+        Box::new(Self {
+            value: UnsafeCell::new(None),
+            state: AtomicU8::new(0),
+            o_waker: UnsafeCell::new(None),
+        })
+    }
+
+    #[inline]
+    fn get_waker(&self) -> &mut Option<ThinWaker> {
+        unsafe { &mut *self.o_waker.get() }
     }
 
     #[inline(always)]
@@ -78,106 +95,167 @@ impl<T> OneShot<T> {
         self.state.fetch_or(flag, Ordering::AcqRel)
     }
 
+    /// return (item, need_destroy)
     #[inline(always)]
-    fn unset_state(&self, flag: u8) -> u8 {
-        self.state.fetch_and(!flag, Ordering::AcqRel)
+    fn _try_recv(&self, order: Ordering) -> Result<(Option<T>, bool), u8> {
+        let state = self.state.load(order);
+        if state & DONE_FLAG > 0 {
+            return Ok(self._consume_value(state));
+        }
+        return Err(state);
     }
 
     #[inline(always)]
-    fn _try_recv(&self, order: Ordering) -> Result<T, u8> {
-        let state = self.state.load(order);
-        if state & EXIST_FLAG > 0 {
-            if let Some(item) = self._consume_value() {
-                Ok(item)
-            } else {
-                Err(state | CLOSE_FLAG)
+    fn _consume_value(&self, mut state: u8) -> (Option<T>, bool) {
+        debug_assert!(
+            state & DONE_FLAG > 0,
+            "oneshot:({:?}) cancel_waker unexpected {state}",
+            tokio_task_id!()
+        );
+        let item = self.value_mut().take();
+        loop {
+            if state & CLOSE_FLAG > 0 {
+                trace_log!(
+                    "oneshot:({:?}) recv value={} & destroy",
+                    tokio_task_id!(),
+                    item.is_some()
+                );
+                // they close first
+                return (item, true);
             }
-        } else {
-            Err(state)
+            if let Err(s) =
+                self.state.compare_exchange_weak(state, CLOSE_FLAG | state, AcqRel, Acquire)
+            {
+                state = s;
+            } else {
+                trace_log!("oneshot:({:?}) recv value={}", tokio_task_id!(), item.is_some());
+                // we close first
+                return (item, false);
+            }
         }
     }
 
+    /// return true to destroy
     #[inline(always)]
-    fn _consume_value(&self) -> Option<T> {
-        self.value_mut().take()
-    }
-
-    #[inline(always)]
-    fn send_value(&self, item: T) -> u8 {
-        self.value_mut().replace(item);
-        self.set_state(EXIST_FLAG)
+    fn notify_rx(&self) -> bool {
+        let mut old_state = 0;
+        loop {
+            let new_state = if old_state == 0 {
+                DONE_FLAG | CLOSE_FLAG
+            } else if old_state == WAKER_SET_FLAG {
+                DONE_FLAG | WAKER_SET_FLAG
+            } else if old_state & CLOSE_FLAG > 0 {
+                // WAKER_SET_FLAG | CLOSE_FLAG, or just CLOSE_FLAG
+                trace_log!("oneshot:({:?}) rx closed", tokio_task_id!());
+                return true;
+            } else {
+                panic!("unexpected state {}", old_state);
+            };
+            match self.state.compare_exchange_weak(old_state, new_state, AcqRel, Acquire) {
+                Ok(_) => {
+                    if old_state == 0 {
+                        trace_log!("oneshot:({:?}) send value", tokio_task_id!());
+                        return false;
+                    } else {
+                        if let Some(waker) = self.get_waker().as_ref() {
+                            // the sender should never move the waker, because rx::poll will
+                            // validate it.
+                            trace_log!("oneshot:({:?}) wake rx", tokio_task_id!());
+                            waker.wake_by_ref();
+                        } else {
+                            unreachable!();
+                        }
+                        if let Err(state) = self.state.compare_exchange(
+                            new_state,
+                            CLOSE_FLAG | DONE_FLAG,
+                            AcqRel,
+                            Relaxed,
+                        ) {
+                            debug_assert!(state & CLOSE_FLAG > 0, "unexpected state {state}");
+                            trace_log!("oneshot:({:?}) rx closed", tokio_task_id!());
+                            return true;
+                        } else {
+                            // we close first, let rx do the cleanup
+                            return false;
+                        }
+                    }
+                }
+                Err(s) => {
+                    old_state = s;
+                }
+            }
+        }
     }
 
     #[inline(always)]
     fn is_empty(&self) -> bool {
         let state = self.state.load(Ordering::SeqCst);
-        state & EXIST_FLAG == 0
+        state & DONE_FLAG == 0
     }
 }
-
-/// In order to save some extra cost for async,
-/// use special shared struct instead of ChannelShared,
-/// and we opt out stander AsyncRx/Rx.
-struct Shared<T> {
-    inner: OneShot<T>,
-    waker: UnsafeCell<Option<ThinWaker>>,
-}
-
-impl<T> Shared<T> {
-    #[inline]
-    fn get_waker(&self) -> &mut Option<ThinWaker> {
-        unsafe { &mut *self.waker.get() }
-    }
-}
-
-unsafe impl<T: Send> Send for Shared<T> {}
-unsafe impl<T: Send> Sync for Shared<T> {}
 
 /// Sender for oneshot channel
-pub struct TxOneshot<T>(Option<Arc<Shared<T>>>);
+pub struct TxOneshot<T>(NonNull<OneShotInner<T>>);
+
+unsafe impl<T> Send for TxOneshot<T> {}
 
 impl<T> TxOneshot<T> {
-    /// Consume itself and send the item
+    /// Sending the item is one-time non-blocking behavior
     #[inline]
-    pub fn send(mut self, item: T) {
-        if let Some(shared) = self.0.take() {
-            let state = shared.inner.send_value(item);
-            if state & WAKER_SET_FLAG > 0 {
-                if let Some(waker) = shared.get_waker().as_ref() {
-                    trace_log!("tx: wake");
-                    waker.wake_by_ref();
-                } else {
-                    trace_log!("tx: wake flag is set but no waker");
-                }
-            } else {
-                trace_log!("tx: set value");
-            }
+    pub fn send(self, item: T) {
+        let inner = unsafe { self.0.as_ref() };
+        inner.value_mut().replace(item);
+        if inner.notify_rx() {
+            // drop inner
+            let _ = unsafe { Box::from_raw(self.0.as_ptr()) };
         }
+        std::mem::forget(self);
     }
 }
 
 impl<T> Drop for TxOneshot<T> {
     #[inline]
     fn drop(&mut self) {
-        if let Some(shared) = self.0.take() {
-            let state = shared.inner.set_state(CLOSE_FLAG);
-            if state & WAKER_SET_FLAG > 0 {
-                if let Some(waker) = shared.get_waker().as_ref() {
-                    trace_log!("drop noti");
-                    waker.wake_by_ref();
-                } else {
-                    trace_log!("drop missing waker but flag set");
-                }
-            } else {
-                trace_log!("drop no waker");
-            }
+        let inner = unsafe { self.0.as_ref() };
+        if inner.notify_rx() {
+            // drop inner
+            let _ = unsafe { Box::from_raw(self.0.as_ptr()) };
         }
     }
 }
 
 /// Receiver for oneshot channel
 #[must_use]
-pub struct RxOneshot<T>(Arc<Shared<T>>);
+pub struct RxOneshot<T>(Option<NonNull<OneShotInner<T>>>);
+
+unsafe impl<T> Send for RxOneshot<T> {}
+
+impl<T> Drop for RxOneshot<T> {
+    #[inline]
+    fn drop(&mut self) {
+        if let Some(p) = self.0.as_ref() {
+            let inner = unsafe { p.as_ref() };
+            let old_state = inner.set_state(CLOSE_FLAG);
+            if old_state & CLOSE_FLAG > 0 {
+                trace_log!("oneshot:({:?}) rx drop destroy, state={}", tokio_task_id!(), old_state);
+                debug_assert_eq!(old_state, CLOSE_FLAG | DONE_FLAG, "unexpected state {old_state}"); // tx drop
+                                                                                                     // drop inner
+                let _ = unsafe { Box::from_raw(p.as_ptr()) };
+            } else {
+                // let tx do the cleanup
+                trace_log!("oneshot:({:?}) rx drop, state={}", tokio_task_id!(), old_state);
+                debug_assert!(
+                    old_state == 0 // we drop first, tx not trigger
+                        || old_state == WAKER_SET_FLAG // rx.await cancel, or rx.recv_timeout() timeout
+                        || old_state == (DONE_FLAG | WAKER_SET_FLAG), // tx waking while rx.await cancel, or rx.recv_timeout() timeout
+                    "oneshot:({:?}) rx drop, unexpected state={}",
+                    tokio_task_id!(),
+                    old_state
+                );
+            }
+        }
+    }
+}
 
 impl<T> RxOneshot<T> {
     /// NOTE: this will blocking current thread
@@ -191,8 +269,9 @@ impl<T> RxOneshot<T> {
 
     /// NOTE: this will blocking current thread with a timeout
     #[inline]
-    pub fn recv_timeout(self) -> Result<T, RecvTimeoutError> {
-        match self._recv_blocking(None) {
+    pub fn recv_timeout(self, timeout: Duration) -> Result<T, RecvTimeoutError> {
+        let deadline = Instant::now() + timeout;
+        match self._recv_blocking(Some(deadline)) {
             Ok(item) => Ok(item),
             Err(true) => Err(RecvTimeoutError::Timeout),
             Err(false) => Err(RecvTimeoutError::Disconnected),
@@ -201,20 +280,80 @@ impl<T> RxOneshot<T> {
 
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.0.inner.is_empty()
+        if let Some(p) = self.0.as_ref() {
+            let inner = unsafe { p.as_ref() };
+            inner.is_empty()
+        } else {
+            true
+        }
+    }
+
+    #[inline(always)]
+    fn destroy(&mut self) {
+        if let Some(p) = self.0.take() {
+            fence(Acquire); // prevent re-order
+                            // drop inner
+            let _ = unsafe { Box::from_raw(p.as_ptr()) };
+        }
+    }
+
+    #[inline(always)]
+    fn set_waker(&mut self, waker: ThinWaker) -> Result<(), Option<T>> {
+        // thread context only need set waker once.
+        // NOTE we should guarantee waker not set twice
+        // (the recv_timeout API should not allow recv twice),
+        // it will complicate things (like async poll).
+        let inner = unsafe { self.0.as_ref().unwrap().as_ref() };
+        inner.get_waker().replace(waker);
+        if let Err(state) =
+            inner.state.compare_exchange(0, WAKER_SET_FLAG, Ordering::AcqRel, Ordering::Acquire)
+        {
+            let (item, need_destroy) = inner._consume_value(state);
+            if need_destroy {
+                self.destroy();
+            }
+            return Err(item);
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn cancel_waker(&mut self, abandon: bool) -> Result<(), Option<T>> {
+        let inner = unsafe { self.0.as_ref().unwrap().as_ref() };
+        let new_state = if abandon { CLOSE_FLAG } else { 0 };
+        if let Err(state) = inner.state.compare_exchange(WAKER_SET_FLAG, new_state, AcqRel, Acquire)
+        {
+            // expect DONE_FLAG | CLOSE_FLAG, or DONE_FLAG | WAKER_SET_FLAG
+            let (item, need_destroy) = inner._consume_value(state);
+            if need_destroy {
+                self.destroy();
+            }
+            return Err(item);
+        } else {
+            Ok(())
+        }
     }
 
     #[inline]
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        match self.0.inner._try_recv(Ordering::Acquire) {
-            Ok(item) => Ok(item),
-            Err(state) => {
-                if state & CLOSE_FLAG > 0 {
-                    Err(TryRecvError::Disconnected)
+    pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
+        if let Some(p) = self.0.as_ref() {
+            let inner = unsafe { p.as_ref() };
+            if let Ok((item, need_destroy)) = inner._try_recv(Acquire) {
+                if need_destroy {
+                    self.destroy();
                 } else {
-                    Err(TryRecvError::Empty)
+                    let _ = self.0.take();
                 }
+                if let Some(item) = item {
+                    return Ok(item);
+                } else {
+                    return Err(TryRecvError::Disconnected);
+                }
+            } else {
+                Err(TryRecvError::Empty)
             }
+        } else {
+            Err(TryRecvError::Disconnected)
         }
     }
 
@@ -223,46 +362,130 @@ impl<T> RxOneshot<T> {
         self.await
     }
 
-    #[inline(always)]
-    pub(crate) fn _recv_blocking(&self, deadline: Option<Instant>) -> Result<T, bool> {
-        let shared = &self.0;
-        loop {
-            match shared.inner._try_recv(Ordering::SeqCst) {
-                Ok(item) => {
-                    trace_log!("poll value");
-                    return Ok(item);
+    #[inline]
+    fn poll(&mut self, ctx: &mut Context<'_>) -> Poll<Result<T, ()>> {
+        let inner = if let Some(p) = self.0.as_ref() {
+            unsafe { p.as_ref() }
+        } else {
+            // might poll after try_recv() finish
+            return Poll::Ready(Err(()));
+        };
+        let state;
+        macro_rules! check_exist {
+            ($order: expr) => {
+                match inner._try_recv($order) {
+                    Ok((item, need_destroy)) => {
+                        if need_destroy {
+                            self.destroy();
+                        } else {
+                            let _ = self.0.take();
+                        }
+                        if let Some(item) = item {
+                            return Poll::Ready(Ok(item));
+                        } else {
+                            return Poll::Ready(Err(()));
+                        }
+                    }
+                    Err(s) => {
+                        state = s;
+                    }
                 }
-                Err(mut state) => {
-                    if state & CLOSE_FLAG > 0 {
-                        trace_log!("poll closed");
+            };
+        }
+        check_exist!(Acquire);
+        let mut backoff = Backoff::new();
+        backoff.set_step(2);
+        backoff.spin();
+        if state & WAKER_SET_FLAG > 0 {
+            let waker = inner.get_waker().as_ref().unwrap();
+            if waker.will_wake(ctx) {
+                trace_log!("oneshot:({:?}) spurious waked state {}", tokio_task_id!(), state,);
+                return Poll::Pending;
+            }
+            if let Err(_item) = self.cancel_waker(false) {
+                let _ = self.0.take();
+                if let Some(item) = _item {
+                    return Poll::Ready(Ok(item));
+                } else {
+                    // tx disconnected
+                    return Poll::Ready(Err(()));
+                }
+            }
+        }
+        if let Err(_item) = self.set_waker(ThinWaker::Async(ctx.waker().clone())) {
+            let _ = self.0.take();
+            if let Some(item) = _item {
+                return Poll::Ready(Ok(item));
+            } else {
+                // tx disconnected
+                return Poll::Ready(Err(()));
+            }
+        }
+        Poll::Pending
+    }
+
+    /// On Disconnected return Err(false),
+    /// Err(true) when timeout.
+    #[inline(always)]
+    pub(crate) fn _recv_blocking(mut self, deadline: Option<Instant>) -> Result<T, bool> {
+        let inner = if let Some(p) = self.0.as_ref() {
+            unsafe { p.as_ref() }
+        } else {
+            // might recv() after try_recv() ok/disconnect
+            return Err(false);
+        };
+        macro_rules! try_recv {
+            ($order: expr) => {
+                if let Ok((item, need_destroy)) = inner._try_recv($order) {
+                    if need_destroy {
+                        self.destroy();
+                    } else {
+                        std::mem::forget(self);
+                    }
+                    if let Some(item) = item {
+                        return Ok(item);
+                    } else {
                         return Err(false);
                     }
-                    if state & WAKER_SET_FLAG == 0 {
-                        shared.get_waker().replace(ThinWaker::Blocking(thread::current()));
-                        state = shared.inner.set_state(WAKER_SET_FLAG);
-                        if state & EXIST_FLAG > 0 {
-                            if let Some(item) = shared.inner._consume_value() {
-                                trace_log!("poll value");
+                }
+            };
+        }
+        try_recv!(Acquire);
+        let mut backoff = Backoff::new();
+        while !backoff.snooze() {
+            try_recv!(Acquire);
+        }
+        if let Err(_item) = self.set_waker(ThinWaker::Blocking(thread::current())) {
+            std::mem::forget(self);
+            if let Some(item) = _item {
+                return Ok(item);
+            } else {
+                return Err(false);
+            }
+        }
+        loop {
+            try_recv!(SeqCst);
+            match check_timeout(deadline) {
+                Ok(None) => {
+                    std::thread::park();
+                }
+                Ok(Some(dur)) => {
+                    std::thread::park_timeout(dur);
+                }
+                Err(_) => {
+                    let res = self.cancel_waker(true);
+                    std::mem::forget(self);
+                    match res {
+                        Err(_item) => {
+                            if let Some(item) = _item {
                                 return Ok(item);
+                            } else {
+                                // tx disconnected
+                                return Err(false);
                             }
-                            trace_log!("poll value closed");
-                            // Might have try_recv consume the value
-                            return Err(false);
                         }
-                    }
-                    if state & CLOSE_FLAG > 0 {
-                        trace_log!("poll closed");
-                        return Err(false);
-                    }
-                    match check_timeout(deadline) {
-                        Ok(None) => {
-                            std::thread::park();
-                        }
-                        Ok(Some(dur)) => {
-                            std::thread::park_timeout(dur);
-                        }
-                        Err(_) => {
-                            trace_log!("poll timeout");
+                        Ok(()) => {
+                            // timeout
                             return Err(true);
                         }
                     }
@@ -277,66 +500,53 @@ impl<T> Future for RxOneshot<T> {
 
     #[inline]
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
-        let mut _self = self.get_mut();
-        let shared = &_self.0;
-        match shared.inner._try_recv(Ordering::SeqCst) {
-            Ok(item) => {
-                trace_log!("poll value");
-                Poll::Ready(Ok(item))
-            }
-            Err(mut state) => {
-                if state & WAKER_SET_FLAG > 0 {
-                    let waker = shared.get_waker().as_ref().unwrap();
-                    if waker.will_wake(ctx) {
-                        trace_log!("spurious waked state {}", state);
-                        if state & CLOSE_FLAG > 0 {
-                            trace_log!("poll closed");
-                            return Poll::Ready(Err(RecvError));
-                        }
-                        return Poll::Pending;
-                    } else {
-                        state = shared.inner.unset_state(WAKER_SET_FLAG);
-                        if state & EXIST_FLAG > 0 {
-                            if let Some(item) = shared.inner._consume_value() {
-                                trace_log!("poll value");
-                                return Poll::Ready(Ok(item));
-                            } else {
-                                trace_log!("poll value closed");
-                                // Might have try_recv consume the value
-                                return Poll::Ready(Err(RecvError));
-                            }
-                        }
-                    }
-                }
-                if state & CLOSE_FLAG == 0 {
-                    shared.get_waker().replace(ThinWaker::Async(ctx.waker().clone()));
-                    state = shared.inner.set_state(WAKER_SET_FLAG);
-                    if state & EXIST_FLAG > 0 {
-                        if let Some(item) = shared.inner._consume_value() {
-                            trace_log!("poll value");
-                            return Poll::Ready(Ok(item));
-                        } else {
-                            trace_log!("poll value closed");
-                            // Might have try_recv consume the value
-                            return Poll::Ready(Err(RecvError));
-                        }
-                    }
-                }
-                if state & CLOSE_FLAG > 0 {
-                    trace_log!("poll closed");
-                    return Poll::Ready(Err(RecvError));
-                }
-                trace_log!("poll pending: state={}", state);
-                Poll::Pending
-            }
+        let this = self.get_mut();
+        match this.poll(ctx) {
+            Poll::Ready(Ok(item)) => Poll::Ready(Ok(item)),
+            Poll::Ready(Err(())) => Poll::Ready(Err(RecvError)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+pub struct OneshotTimeoutFuture<'a, T, F, R>
+where
+    F: Future<Output = R> + Unpin,
+    T: Send + 'static,
+{
+    rx: &'a mut RxOneshot<T>,
+    sleep: F,
+}
+
+impl<'a, T, F, R> Future for OneshotTimeoutFuture<'a, T, F, R>
+where
+    F: Future<Output = R> + Unpin,
+    T: Send + 'static,
+{
+    type Output = Result<T, RecvTimeoutError>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match this.rx.poll(ctx) {
+            Poll::Ready(Ok(item)) => return Poll::Ready(Ok(item)),
+            Poll::Ready(Err(())) => return Poll::Ready(Err(RecvTimeoutError::Disconnected)),
+            _ => {}
+        }
+        // Since F is Unpin, we can safely get &mut F and pin it
+        let sleep = Pin::new(&mut this.sleep);
+        if sleep.poll(ctx).is_ready() {
+            Poll::Ready(Err(RecvTimeoutError::Timeout))
+        } else {
+            Poll::Pending
         }
     }
 }
 
 #[inline]
 pub fn oneshot<T>() -> (TxOneshot<T>, RxOneshot<T>) {
-    let shared = Arc::new(Shared { inner: OneShot::new(), waker: UnsafeCell::new(None) });
-    let tx = TxOneshot(Some(shared.clone()));
-    let rx = RxOneshot(shared);
+    let p = unsafe { NonNull::new_unchecked(Box::into_raw(OneShotInner::new())) };
+    let tx = TxOneshot(p);
+    let rx = RxOneshot(Some(p));
     (tx, rx)
 }
