@@ -246,7 +246,8 @@ impl<F: Flavor> Multiplex<F> {
     /// ```
     #[inline]
     pub fn try_recv(&self) -> Result<F::Item, TryRecvError> {
-        if let Ok(item) = self._try_select_cached::<true>() {
+        let last_idx = self.last_idx.get();
+        if let Some(item) = self._try_select_all::<true>(last_idx, self.handlers.len()) {
             return Ok(item);
         }
         if self.waker.get_opened_count() == 0 {
@@ -292,6 +293,8 @@ impl<F: Flavor> Multiplex<F> {
         }
     }
 
+    /// NOTE: be aware that _try_recv_cached does not guarantee all message will be receive,
+    /// should retry again
     #[inline(always)]
     fn _try_select_cached<const FINAL: bool>(&self) -> Result<F::Item, usize> {
         let last_idx = self.last_idx.get();
@@ -367,13 +370,13 @@ impl<F: Flavor> Multiplex<F> {
             }
             // TODO For thread, actually the waker can be reuse and not change
             self.waker.init_blocking();
+            let closing = self.waker.get_opened_count() == 0;
             if let Some(item) = self._try_select_all::<true>(start_idx, len) {
                 return Ok(item);
             }
-            if self.waker.get_opened_count() == 0 {
-                if let Ok(item) = self.try_recv() {
-                    return Ok(item);
-                }
+            if closing {
+                // NOTE: double check the channels after checking close count, otherwise we will be
+                // missing some last messages
                 return Err(true);
             }
             let mut state = WakerState::Init as u8;
