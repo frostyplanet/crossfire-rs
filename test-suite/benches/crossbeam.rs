@@ -1,4 +1,5 @@
 use criterion::*;
+use crossbeam_utils::sync::WaitGroup;
 use std::thread;
 use std::time::Duration;
 
@@ -239,10 +240,28 @@ fn bench_crossbeam_select_mpsc(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_crossbeam_wait_group(c: &mut Criterion) {
+    let mut group = c.benchmark_group("crossbeam_wait_group");
+    let count = TEN_THOUSAND;
+    group.throughput(Throughput::Elements(count as u64));
+    group.bench_function("add_guard", |b| {
+        let wg = WaitGroup::new();
+        b.iter(|| {
+            let mut guards: Vec<crossbeam_utils::sync::WaitGroup> = Vec::with_capacity(count);
+            for _i in 0..count {
+                guards.push(wg.clone());
+            }
+            // guards are dropped here
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_crossbeam_bounded_sync,
     bench_crossbeam_unbounded_sync,
-    bench_crossbeam_select_mpsc
+    bench_crossbeam_select_mpsc,
+    bench_crossbeam_wait_group
 );
 criterion_main!(benches);

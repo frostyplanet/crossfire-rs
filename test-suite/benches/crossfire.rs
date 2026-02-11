@@ -1,4 +1,5 @@
 use criterion::*;
+use crossfire::waitgroup::{WaitGroup, WaitGroupGuard};
 use crossfire::*;
 use std::thread;
 use std::time::Duration;
@@ -662,6 +663,23 @@ fn crossfire_oneshot_async(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_crossfire_wait_group(c: &mut Criterion) {
+    let mut group = c.benchmark_group("crossfire_wait_group");
+    let count = TEN_THOUSAND; // Or some appropriate number for throughput
+    group.throughput(Throughput::Elements(count as u64));
+    group.bench_function("add_guard", |b| {
+        let wg = WaitGroup::new(0);
+        b.iter(|| {
+            let mut guards: Vec<WaitGroupGuard> = Vec::with_capacity(count);
+            for _i in 0..count {
+                guards.push(wg.add_guard());
+            }
+            // guards are dropped here
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     crossfire_bounded_1_blocking_1_1,
@@ -684,5 +702,6 @@ criterion_group!(
     crossfire_unbounded_async_mpmc,
     crossfire_oneshot_blocking,
     crossfire_oneshot_async,
+    bench_crossfire_wait_group,
 );
 criterion_main!(benches);
