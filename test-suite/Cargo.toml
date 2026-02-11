@@ -28,9 +28,9 @@ oneshot = "0.1"
 [features]
 default = []
 
-tokio = []
+tokio = ["crossfire/tokio"]
 
-async_std = ["dep:async-std"]
+async_std = ["dep:async-std", "crossfire/async_std"]
 
 smol = ["dep:smol"]
 
