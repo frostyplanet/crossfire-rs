@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.0.6] - 2026-02-11
+
+### Fixed
+
+- Fix multiplex: Ensure all message received before disconnect
+
 ## [3.0.5] - 2026-02-11
 
 ### Fixed
