@@ -1,0 +1,24 @@
+name: leak
+
+on:
+  schedule: [cron: "30 */10 * * *"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_and_test:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Run test-suite with LSAN
+      run: env NIGHTLY="+nightly" RUSTFLAGS="-Zsanitizer=leak" WORKFLOW=1 make test
+
+    - name: Run internal test
+      run: make test_internal
