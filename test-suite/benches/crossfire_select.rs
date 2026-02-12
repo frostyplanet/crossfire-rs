@@ -29,7 +29,6 @@ fn init_logger() {
             let mut config = Builder::default()
                 .signal(signal_consts::SIGINT)
                 .signal(signal_consts::SIGTERM)
-                .tracing_global()
                 .add_sink(ring)
                 .add_sink(LogConsole::new(
                     ConsoleTarget::Stdout,

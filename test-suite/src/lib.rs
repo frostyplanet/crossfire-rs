@@ -44,7 +44,7 @@ pub fn _setup_log() {
             let _ = std::fs::remove_file("/tmp/crossfire_miri.log");
             let file = LogRawFile::new("/tmp", "crossfire_miri.log", Level::Debug, format);
             captains_log::Builder::default()
-                .tracing_global()
+                //                .tracing_global()
                 .add_sink(file)
                 .test()
                 .build()
@@ -61,7 +61,7 @@ pub fn _setup_log() {
             let mut config = Builder::default()
                 .signal(signal_consts::SIGINT)
                 .signal(signal_consts::SIGTERM)
-                .tracing_global()
+                //                .tracing_global()
                 .add_sink(ring)
                 .add_sink(LogConsole::new(
                     ConsoleTarget::Stdout,
