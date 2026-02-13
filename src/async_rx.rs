@@ -130,6 +130,7 @@ where
         RecvFuture { rx: self, waker: None }
     }
 
+    // NOTE: we cannot use async fn recv_timeout signature because &self is not Send
     /// Receives a message from the channel with a timeout.
     /// Will await when channel is empty.
     ///
@@ -140,22 +141,22 @@ where
     /// Returns Err([RecvTimeoutError::Timeout]) when a message could not be received because the channel is empty and the operation timed out.
     ///
     /// Returns Err([RecvTimeoutError::Disconnected]) if the sender has been dropped and the channel is empty.
-    #[cfg(any(feature = "tokio", feature = "async_std"))]
-    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
     #[inline]
-    pub fn recv_timeout<'a>(
-        &'a self, duration: std::time::Duration,
-    ) -> RecvTimeoutFuture<'a, F, ()> {
-        let sleep = {
-            #[cfg(feature = "tokio")]
-            {
-                tokio::time::sleep(duration)
-            }
-            #[cfg(feature = "async_std")]
-            {
-                async_std::task::sleep(duration)
-            }
-        };
+    pub fn recv_timeout(
+        &self, duration: std::time::Duration,
+    ) -> RecvTimeoutFuture<'_, F, tokio::time::Sleep, ()> {
+        let sleep = tokio::time::sleep(duration);
+        self.recv_with_timer(sleep)
+    }
+    #[cfg(feature = "async_std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "async_std")))]
+    #[inline]
+    pub fn recv_timeout(
+        &self, duration: std::time::Duration,
+    ) -> RecvTimeoutFuture<'_, F, impl Future<Output = ()>, ()> {
+        let sleep = async_std::task::sleep(duration);
         self.recv_with_timer(sleep)
     }
 
@@ -171,13 +172,14 @@ where
     ///
     /// # Argument:
     ///
-    /// * `fut`: The sleep function. It's possible to wrap this function with cancelable handle,
-    ///   you can control when to stop polling. the return value of `fut` is ignore.
-    ///   We add generic `R` just in order to support smol::Timer
+    /// * `sleep`: The sleep function.
+    ///   The return value of `sleep` is ignore. We add generic `R` just in order to support smol::Timer
     ///
     /// # Example:
     ///
-    /// ```ignore
+    /// with smol timer
+    ///
+    /// ```rust
     /// extern crate smol;
     /// use std::time::Duration;
     /// use crossfire::*;
@@ -197,11 +199,11 @@ where
     /// }
     /// ```
     #[inline]
-    pub fn recv_with_timer<'a, FR, R>(&'a self, fut: FR) -> RecvTimeoutFuture<'a, F, R>
+    pub fn recv_with_timer<'a, FR, R>(&'a self, sleep: FR) -> RecvTimeoutFuture<'a, F, FR, R>
     where
-        FR: Future<Output = R> + 'static,
+        FR: Future<Output = R>,
     {
-        RecvTimeoutFuture { rx: self, waker: None, sleep: Box::pin(fut) }
+        RecvTimeoutFuture { rx: self, waker: None, sleep }
     }
 
     /// Attempts to receive a message from the channel without blocking.
@@ -357,15 +359,28 @@ where
 
 /// A fixed-sized future object constructed by [AsyncRx::recv_timeout()]
 #[must_use]
-pub struct RecvTimeoutFuture<'a, F: Flavor, R> {
+pub struct RecvTimeoutFuture<'a, F, FR, R>
+where
+    F: Flavor,
+    FR: Future<Output = R>,
+{
     rx: &'a AsyncRx<F>,
     waker: Option<<F::Recv as Registry>::Waker>,
-    sleep: Pin<Box<dyn Future<Output = R>>>,
+    sleep: FR,
 }
 
-unsafe impl<F: Flavor, R> Send for RecvTimeoutFuture<'_, F, R> {}
+unsafe impl<F, FR, R> Send for RecvTimeoutFuture<'_, F, FR, R>
+where
+    F: Flavor,
+    FR: Future<Output = R>,
+{
+}
 
-impl<F: Flavor, R> Drop for RecvTimeoutFuture<'_, F, R> {
+impl<F, FR, R> Drop for RecvTimeoutFuture<'_, F, FR, R>
+where
+    F: Flavor,
+    FR: Future<Output = R>,
+{
     #[inline]
     fn drop(&mut self) {
         if let Some(waker) = self.waker.as_ref() {
@@ -374,18 +389,22 @@ impl<F: Flavor, R> Drop for RecvTimeoutFuture<'_, F, R> {
     }
 }
 
-impl<F: Flavor, R> Future for RecvTimeoutFuture<'_, F, R>
+impl<F, FR, R> Future for RecvTimeoutFuture<'_, F, FR, R>
 where
+    F: Flavor,
+    FR: Future<Output = R>,
     F::Item: Send + 'static,
 {
     type Output = Result<F::Item, RecvTimeoutError>;
 
     #[inline]
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
-        let mut _self = self.get_mut();
+        // NOTE: we can use unchecked to bypass pin because we are not movig "sleep",
+        // neither it's exposed outside
+        let mut _self = unsafe { self.get_unchecked_mut() };
         match _self.rx.poll_item::<false>(ctx, &mut _self.waker) {
             Err(TryRecvError::Empty) => {
-                if _self.sleep.as_mut().poll(ctx).is_ready() {
+                if unsafe { Pin::new_unchecked(&mut _self.sleep) }.poll(ctx).is_ready() {
                     return Poll::Ready(Err(RecvTimeoutError::Timeout));
                 }
                 Poll::Pending
@@ -420,8 +439,8 @@ pub trait AsyncRxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt::Di
     /// returns Err([RecvTimeoutError::Disconnected]) when all Tx dropped and channel is empty.
     #[cfg(any(feature = "tokio", feature = "async_std"))]
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
-    fn recv_timeout<'a>(
-        &'a self, timeout: std::time::Duration,
+    fn recv_timeout(
+        &self, timeout: std::time::Duration,
     ) -> impl Future<Output = Result<T, RecvTimeoutError>> + Send
     where
         T: Send + 'static;
@@ -445,7 +464,7 @@ pub trait AsyncRxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt::Di
         &self, fut: FR,
     ) -> impl Future<Output = Result<T, RecvTimeoutError>> + Send
     where
-        FR: Future<Output = R> + 'static,
+        FR: Future<Output = R>,
         T: Send + 'static;
 
     /// Try to receive message, non-blocking.
@@ -519,13 +538,13 @@ where
 
     #[inline(always)]
     fn recv_with_timer<FR, R>(
-        &self, fut: FR,
+        &self, sleep: FR,
     ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send
     where
-        FR: Future<Output = R> + 'static,
+        FR: Future<Output = R>,
         F::Item: Send + 'static,
     {
-        AsyncRx::recv_with_timer(self, fut)
+        AsyncRx::recv_with_timer(self, sleep)
     }
 
     #[inline(always)]
@@ -690,8 +709,8 @@ where
     #[cfg(any(feature = "tokio", feature = "async_std"))]
     #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
     #[inline(always)]
-    fn recv_timeout<'a>(
-        &'a self, duration: std::time::Duration,
+    fn recv_timeout(
+        &self, duration: std::time::Duration,
     ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send
     where
         F::Item: Send + 'static,
@@ -702,9 +721,9 @@ where
     #[inline(always)]
     fn recv_with_timer<FR, R>(
         &self, fut: FR,
-    ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send
+    ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>>
     where
-        FR: Future<Output = R> + 'static,
+        FR: Future<Output = R>,
         F::Item: Send + 'static,
     {
         self.0.recv_with_timer(fut)

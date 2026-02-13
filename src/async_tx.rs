@@ -160,22 +160,22 @@ where
     /// Returns Err([SendTimeoutError::Timeout]) if the operation timed out. The error contains the message that failed to be sent.
     ///
     /// Returns Err([SendTimeoutError::Disconnected]) if the receiver has been dropped. The error contains the message that failed to be sent.
-    #[cfg(any(feature = "tokio", feature = "async_std"))]
-    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
     #[inline]
-    pub fn send_timeout<'a>(
-        &'a self, item: F::Item, duration: std::time::Duration,
-    ) -> SendTimeoutFuture<'a, F, ()> {
-        let sleep = {
-            #[cfg(feature = "tokio")]
-            {
-                tokio::time::sleep(duration)
-            }
-            #[cfg(feature = "async_std")]
-            {
-                async_std::task::sleep(duration)
-            }
-        };
+    pub fn send_timeout(
+        &self, item: F::Item, duration: std::time::Duration,
+    ) -> SendTimeoutFuture<'_, F, tokio::time::Sleep, ()> {
+        let sleep = tokio::time::sleep(duration);
+        self.send_with_timer(item, sleep)
+    }
+    #[cfg(feature = "async_std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "async_std")))]
+    #[inline]
+    pub fn send_timeout(
+        &self, item: F::Item, duration: std::time::Duration,
+    ) -> SendTimeoutFuture<'_, F, impl Future<Output = ()>, ()> {
+        let sleep = async_std::task::sleep(duration);
         self.send_with_timer(item, sleep)
     }
 
@@ -197,7 +197,7 @@ where
     ///
     /// # Example:
     ///
-    /// ```ignore
+    /// ```rust
     /// extern crate smol;
     /// use std::time::Duration;
     /// use crossfire::*;
@@ -217,18 +217,11 @@ where
     /// }
     /// ```
     #[inline]
-    pub fn send_with_timer<'a, FR, R>(
-        &'a self, item: F::Item, fut: FR,
-    ) -> SendTimeoutFuture<'a, F, R>
+    pub fn send_with_timer<FR, R>(&self, item: F::Item, fut: FR) -> SendTimeoutFuture<'_, F, FR, R>
     where
-        FR: Future<Output = R> + 'static,
+        FR: Future<Output = R>,
     {
-        SendTimeoutFuture {
-            tx: self,
-            item: MaybeUninit::new(item),
-            waker: None,
-            sleep: Box::pin(fut),
-        }
+        SendTimeoutFuture { tx: self, item: MaybeUninit::new(item), waker: None, sleep: fut }
     }
 
     /// Internal function might change in the future. For public version, use AsyncSink::poll_send() instead.
@@ -350,16 +343,29 @@ where
 
 /// A fixed-sized future object constructed by [AsyncTx::send_timeout()]
 #[must_use]
-pub struct SendTimeoutFuture<'a, F: Flavor, R> {
+pub struct SendTimeoutFuture<'a, F, FR, R>
+where
+    F: Flavor,
+    FR: Future<Output = R>,
+{
     tx: &'a AsyncTx<F>,
-    sleep: Pin<Box<dyn Future<Output = R>>>,
+    sleep: FR,
     item: MaybeUninit<F::Item>,
     waker: Option<<F::Send as Registry>::Waker>,
 }
 
-unsafe impl<F: Flavor, R> Send for SendTimeoutFuture<'_, F, R> {}
+unsafe impl<F, FR, R> Send for SendTimeoutFuture<'_, F, FR, R>
+where
+    F: Flavor,
+    FR: Future<Output = R>,
+{
+}
 
-impl<F: Flavor, R> Drop for SendTimeoutFuture<'_, F, R> {
+impl<F, FR, R> Drop for SendTimeoutFuture<'_, F, FR, R>
+where
+    F: Flavor,
+    FR: Future<Output = R>,
+{
     #[inline]
     fn drop(&mut self) {
         if let Some(waker) = self.waker.as_ref() {
@@ -371,15 +377,19 @@ impl<F: Flavor, R> Drop for SendTimeoutFuture<'_, F, R> {
     }
 }
 
-impl<F: Flavor, R> Future for SendTimeoutFuture<'_, F, R>
+impl<F, FR, R> Future for SendTimeoutFuture<'_, F, FR, R>
 where
+    F: Flavor,
+    FR: Future<Output = R>,
     F::Item: Send + 'static + Unpin,
 {
     type Output = Result<(), SendTimeoutError<F::Item>>;
 
     #[inline]
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
-        let mut _self = self.get_mut();
+        // NOTE: we can use unchecked to bypass pin because we are not movig "sleep",
+        // neither it's exposed outside
+        let mut _self = unsafe { self.get_unchecked_mut() };
         match _self.tx.poll_send::<false>(ctx, &_self.item, &mut _self.waker) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
@@ -392,7 +402,8 @@ where
                 })))
             }
             Poll::Pending => {
-                if _self.sleep.as_mut().poll(ctx).is_ready() {
+                let sleep = unsafe { Pin::new_unchecked(&mut _self.sleep) };
+                if sleep.poll(ctx).is_ready() {
                     if _self.tx.shared.abandon_send_waker(&_self.waker.take().unwrap()) {
                         return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
                             _self.item.assume_init_read()
@@ -495,7 +506,7 @@ pub trait AsyncTxTrait<T: Send + 'static + Unpin>:
         &self, item: T, fut: FR,
     ) -> impl Future<Output = Result<(), SendTimeoutError<T>>> + Send
     where
-        FR: Future<Output = R> + 'static,
+        FR: Future<Output = R>,
         T: Send + 'static + Unpin;
 }
 
@@ -539,7 +550,7 @@ where
         &self, item: F::Item, fut: FR,
     ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
     where
-        FR: Future<Output = R> + 'static,
+        FR: Future<Output = R>,
         F::Item: Send + 'static + Unpin,
     {
         AsyncTx::send_with_timer(self, item, fut)
@@ -711,7 +722,7 @@ where
         &self, item: F::Item, fut: FR,
     ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
     where
-        FR: Future<Output = R> + 'static,
+        FR: Future<Output = R>,
         F::Item: Send + 'static + Unpin,
     {
         self.0.send_with_timer::<FR, R>(item, fut)
