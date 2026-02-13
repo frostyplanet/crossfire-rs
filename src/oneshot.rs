@@ -493,6 +493,82 @@ impl<T> RxOneshot<T> {
             }
         }
     }
+
+    /// Wrap RxOneshot with timeout, consume self when it's done.
+    /// The Future returns `Result<T, RecvTimeoutError>`
+    #[cfg(any(feature = "tokio", feature = "async_std"))]
+    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
+    #[inline]
+    pub async fn recv_async_timeout(
+        self, timeout: std::time::Duration,
+    ) -> Result<T, RecvTimeoutError> {
+        #[cfg(feature = "tokio")]
+        {
+            let sleep = tokio::time::sleep(timeout);
+            self.recv_async_with_timer(sleep).await
+        }
+        #[cfg(feature = "async_std")]
+        {
+            let sleep = async_std::task::sleep(timeout);
+            self.recv_async_with_timer(sleep).await
+        }
+    }
+
+    /// Wrap RxOneshot with custom sleep function, consume self when it's done.
+    ///
+    /// The behavior is atomic: the message is either received successfully or the operation is canceled due to a timeout.
+    ///
+    /// Returns `Ok(T)` when successful.
+    ///
+    /// Returns Err([RecvTimeoutError::Timeout]) when a message could not be received because the channel is empty and the operation timed out.
+    ///
+    /// Returns Err([RecvTimeoutError::Disconnected]) if the sender has been dropped and the channel is empty.
+    ///
+    /// # Argument:
+    ///
+    /// * `sleep`: The sleep function. the return value of `sleep` is ignore. We add generic `R` just in order to support smol::Timer
+    /// # Example
+    ///
+    /// Example with smol
+    ///
+    /// ```rust
+    /// extern crate smol;
+    /// use std::time::Duration;
+    /// use crossfire::*;
+    /// async fn foo() {
+    ///     let (tx, rx) = oneshot::oneshot::<usize>();
+    ///     match rx.recv_async_with_timer(smol::Timer::after(Duration::from_secs(1))).await {
+    ///         Ok(_item)=>{
+    ///             println!("message recv");
+    ///         }
+    ///         Err(RecvTimeoutError::Timeout)=>{
+    ///             println!("timeout");
+    ///         }
+    ///         Err(RecvTimeoutError::Disconnected)=>{
+    ///             println!("sender-side closed");
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Example with tokio:
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    /// use crossfire::*;
+    /// async fn foo() {
+    ///     let (tx, rx) = oneshot::oneshot::<usize>();
+    ///     let sleep = tokio::time::sleep(Duration::from_secs(1));
+    ///     let _r = rx.recv_async_with_timer(sleep).await;
+    /// }
+    /// ```
+    #[inline]
+    pub fn recv_async_with_timer<F, R>(self, sleep: F) -> OneshotTimeoutFuture<T, F, R>
+    where
+        F: Future<Output = R>,
+    {
+        OneshotTimeoutFuture { rx: self, sleep }
+    }
 }
 
 impl<T> Future for RxOneshot<T> {
@@ -509,32 +585,31 @@ impl<T> Future for RxOneshot<T> {
     }
 }
 
-pub struct OneshotTimeoutFuture<'a, T, F, R>
+pub struct OneshotTimeoutFuture<T, F, R>
 where
-    F: Future<Output = R> + Unpin,
-    T: Send + 'static,
+    F: Future<Output = R>,
 {
-    rx: &'a mut RxOneshot<T>,
+    rx: RxOneshot<T>,
     sleep: F,
 }
 
-impl<'a, T, F, R> Future for OneshotTimeoutFuture<'a, T, F, R>
+impl<T, F, R> Future for OneshotTimeoutFuture<T, F, R>
 where
-    F: Future<Output = R> + Unpin,
-    T: Send + 'static,
+    F: Future<Output = R>,
 {
     type Output = Result<T, RecvTimeoutError>;
 
     #[inline]
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
-        let this = self.get_mut();
+        // NOTE: we can use unchecked to bypass pin because we are not movig "sleep",
+        // neither it's exposed outside
+        let this = unsafe { self.get_unchecked_mut() };
         match this.rx.poll(ctx) {
             Poll::Ready(Ok(item)) => return Poll::Ready(Ok(item)),
             Poll::Ready(Err(())) => return Poll::Ready(Err(RecvTimeoutError::Disconnected)),
             _ => {}
         }
-        // Since F is Unpin, we can safely get &mut F and pin it
-        let sleep = Pin::new(&mut this.sleep);
+        let sleep = unsafe { Pin::new_unchecked(&mut this.sleep) };
         if sleep.poll(ctx).is_ready() {
             Poll::Ready(Err(RecvTimeoutError::Timeout))
         } else {
