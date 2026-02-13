@@ -327,3 +327,87 @@ fn test_oneshot_async_batch_with_interval(setup_log: ()) {
         });
     }
 }
+
+#[logfn]
+#[rstest]
+fn test_oneshot_blocking_timeout_fail(setup_log: ()) {
+    let (_tx, rx) = oneshot::oneshot::<i32>();
+    let start = std::time::Instant::now();
+    let res = rx.recv_timeout(Duration::from_millis(100));
+    assert_eq!(res, Err(RecvTimeoutError::Timeout));
+    assert!(start.elapsed() >= Duration::from_millis(100));
+}
+
+#[logfn]
+#[rstest]
+fn test_oneshot_blocking_timeout_success(setup_log: ()) {
+    let (tx, rx) = oneshot::oneshot::<i32>();
+    let th = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        tx.send(42);
+    });
+    let _res = rx.recv_timeout(Duration::from_millis(200));
+    let _ = th.join();
+    #[cfg(not(miri))]
+    assert_eq!(_res, Ok(42));
+}
+
+#[logfn]
+#[rstest]
+fn test_oneshot_blocking_timeout_disconnected(setup_log: ()) {
+    let (tx, rx) = oneshot::oneshot::<i32>();
+    let th = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        drop(tx);
+    });
+    let _res = rx.recv_timeout(Duration::from_millis(200));
+    let _ = th.join();
+    #[cfg(not(miri))]
+    assert_eq!(_res, Err(RecvTimeoutError::Disconnected));
+}
+
+#[logfn]
+#[rstest]
+fn test_oneshot_async_timeout_fail(setup_log: ()) {
+    runtime_block_on!(async move {
+        let (_tx, rx) = oneshot::oneshot::<i32>();
+        let start = std::time::Instant::now();
+        let sleep_fut = sleep(Duration::from_millis(100));
+        futures_util::pin_mut!(sleep_fut);
+        let res = rx.recv_async_with_timer(sleep_fut).await;
+        assert_eq!(res, Err(RecvTimeoutError::Timeout));
+        assert!(start.elapsed() >= Duration::from_millis(100));
+    });
+}
+
+#[logfn]
+#[rstest]
+fn test_oneshot_async_timeout_disconnected(setup_log: ()) {
+    runtime_block_on!(async move {
+        let (tx, rx) = oneshot::oneshot::<i32>();
+        let th = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(tx);
+        });
+        let _res = rx.recv_async_with_timer(Box::pin(sleep(Duration::from_secs(1)))).await;
+        let _ = th.join();
+        #[cfg(not(miri))]
+        assert_eq!(_res, Err(RecvTimeoutError::Disconnected));
+    });
+}
+
+#[logfn]
+#[rstest]
+fn test_oneshot_async_timeout_success(setup_log: ()) {
+    runtime_block_on!(async move {
+        let (tx, rx) = oneshot::oneshot::<i32>();
+        let th = async_spawn!(async move {
+            sleep(Duration::from_millis(50)).await;
+            tx.send(42);
+        });
+        let _res = rx.recv_async_with_timer(Box::pin(sleep(Duration::from_secs(2)))).await;
+        #[cfg(not(miri))]
+        assert_eq!(_res, Ok(42));
+        async_join_result!(th);
+    });
+}
