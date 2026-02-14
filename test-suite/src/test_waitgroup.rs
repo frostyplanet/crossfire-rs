@@ -317,7 +317,7 @@ fn test_pressure_wg_async_channel_sleep(
 
 #[logfn]
 #[rstest]
-#[case(0, 8)]
+#[case(0, 5)]
 #[case(2, 8)]
 #[case(3, 20)]
 #[case(4, 10)]

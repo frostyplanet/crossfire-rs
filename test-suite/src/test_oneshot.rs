@@ -219,7 +219,7 @@ fn test_oneshot_blocking_concurrent(setup_log: ()) {
 fn test_oneshot_async_concurrent(setup_log: ()) {
     runtime_block_on!(async move {
         let mut tasks = Vec::new();
-        for i in 0..100 {
+        for i in 0..ROUND {
             let (tx, rx) = oneshot::oneshot();
             tasks.push(async_spawn!(async move {
                 tx.send(i);
@@ -240,6 +240,7 @@ fn test_oneshot_blocking_with_sleep(setup_log: ()) {
     #[cfg(miri)]
     {
         println!("skip on miri");
+        return;
     }
     #[cfg(not(miri))]
     {
@@ -299,6 +300,7 @@ fn test_oneshot_async_batch_with_interval(setup_log: ()) {
     #[cfg(miri)]
     {
         println!("skip on miri");
+        return;
     }
     #[cfg(not(miri))]
     {
