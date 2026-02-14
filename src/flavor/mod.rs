@@ -192,7 +192,7 @@ macro_rules! flavor_select_dispatch {
 pub(super) use flavor_select_dispatch;
 
 pub trait Flavor: Send + 'static + FlavorImpl {
-    type Send: RegistrySend<Self::Item>;
+    type Send: RegistrySend;
     type Recv: RegistryRecv;
 }
 
@@ -219,7 +219,7 @@ unsafe impl<F, S, R> Send for FlavorWrap<F, S, R> {}
 impl<F, S, R> FlavorWrap<F, S, R>
 where
     F: FlavorImpl,
-    S: RegistrySend<F::Item>,
+    S: RegistrySend,
     R: RegistryRecv,
 {
     #[inline(always)]
@@ -239,7 +239,7 @@ where
 impl<F, S, R> FlavorNew for FlavorWrap<F, S, R>
 where
     F: FlavorImpl + FlavorNew,
-    S: RegistrySend<F::Item>,
+    S: RegistrySend,
     R: RegistryRecv,
 {
     #[inline(always)]
@@ -251,7 +251,7 @@ where
 impl<F, S, R> FlavorBounded for FlavorWrap<F, S, R>
 where
     F: FlavorImpl + FlavorBounded,
-    S: RegistrySend<F::Item>,
+    S: RegistrySend,
     R: RegistryRecv,
 {
     #[inline(always)]
@@ -263,7 +263,7 @@ where
 impl<F, S, R> Flavor for FlavorWrap<F, S, R>
 where
     F: FlavorImpl + 'static,
-    S: RegistrySend<F::Item>,
+    S: RegistrySend,
     R: RegistryRecv,
 {
     type Send = S;
@@ -273,7 +273,7 @@ where
 impl<F, S, R> Deref for FlavorWrap<F, S, R>
 where
     F: FlavorImpl,
-    S: RegistrySend<F::Item>,
+    S: RegistrySend,
     R: RegistryRecv,
 {
     type Target = F;
@@ -290,14 +290,14 @@ where
     R: RegistryRecv,
 {
 }
-impl<T, F, R> FlavorMP for FlavorWrap<F, RegistryMultiSend<T>, R>
+impl<F, R> FlavorMP for FlavorWrap<F, RegistryMulti, R>
 where
     F: FlavorImpl,
     R: RegistryRecv,
 {
 }
 
-impl<F: FlavorImpl, S> FlavorMC for FlavorWrap<F, S, RegistryMultiRecv> {}
+impl<F: FlavorImpl, S> FlavorMC for FlavorWrap<F, S, RegistryMulti> {}
 
 macro_rules! wrap_new_type {
     ($self: expr, $method:ident $($arg:expr)*)=>{
@@ -308,7 +308,7 @@ macro_rules! wrap_new_type {
 impl<F, S, R> Queue for FlavorWrap<F, S, R>
 where
     F: FlavorImpl,
-    S: RegistrySend<F::Item>,
+    S: RegistrySend,
     R: RegistryRecv,
 {
     type Item = F::Item;
@@ -318,7 +318,7 @@ where
 impl<F, S, R> FlavorImpl for FlavorWrap<F, S, R>
 where
     F: FlavorImpl,
-    S: RegistrySend<F::Item>,
+    S: RegistrySend,
     R: RegistryRecv,
 {
     flavor_dispatch!(wrap_new_type);
@@ -327,7 +327,7 @@ where
 impl<F, S, R> FlavorSelect for FlavorWrap<F, S, R>
 where
     F: FlavorImpl + FlavorSelect,
-    S: RegistrySend<F::Item>,
+    S: RegistrySend,
     R: RegistryRecv,
 {
     flavor_select_dispatch!(wrap_new_type);
