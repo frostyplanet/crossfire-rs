@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.0] - 2026-02-14
+
+### Added
+
+- Add WaitGroup that support async & blocking, with custom threshold.
+
+- oneshot: Add recv_async_timeout & recv_async_with_timer
+
+### Changed
+
+- oneshot: Refactor oneshot and optimize out arc cost. try_recv() now require `&mut self`.
+
+- async_tx/async_rx: Refactor SendTimeoutFuture/RecvTimeoutFuture signature, to remove boxed future usage
+
 ## [3.0.6] - 2026-02-11
 
 ### Fixed
