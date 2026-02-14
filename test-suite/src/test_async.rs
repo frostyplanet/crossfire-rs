@@ -430,8 +430,18 @@ fn test_basic_timeout_recv_async_waker<T: AsyncTxTrait<usize>, R: AsyncRxTrait<u
     setup_log: (), #[case] channel: (T, R),
 ) {
     let (tx, rx) = channel;
+    let rounds = {
+        #[cfg(miri)]
+        {
+            10
+        }
+        #[cfg(not(miri))]
+        {
+            1000
+        }
+    };
     runtime_block_on!(async move {
-        for _ in 0..1000 {
+        for _ in 0..rounds {
             assert!(rx.recv_with_timer(sleep(Duration::from_millis(1))).await.is_err());
         }
         let (tx_wakers, rx_wakers) = rx.get_wakers_count();
