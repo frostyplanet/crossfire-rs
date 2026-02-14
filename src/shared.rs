@@ -220,9 +220,10 @@ impl<F: Flavor> ChannelShared<F> {
     /// Wake up one tx
     #[inline(always)]
     pub(crate) fn on_recv(&self) {
-        if WakeResult::Sent == self.senders.fire(&self.inner) {
-            self.on_send();
-        }
+        self.senders.fire();
+        //        if WakeResult::Sent == self.senders.fire(&self.inner) {
+        //            self.on_send();
+        //        }
     }
 
     /// Call on cancellation, return true to indicate drop temporary message

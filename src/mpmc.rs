@@ -56,10 +56,10 @@ use crate::{ReceiverType, SenderType};
 use std::mem::MaybeUninit;
 
 /// Flavor Type for unbounded MPMC channel
-pub type List<T> = FlavorWrap<crate::flavor::List<T>, RegistryDummy, RegistryMultiRecv>;
+pub type List<T> = FlavorWrap<crate::flavor::List<T>, RegistryDummy, RegistryMulti>;
 
 /// Flavor Type for one-sized MPMC channel
-pub type One<T> = FlavorWrap<crate::flavor::One<T>, RegistryMultiSend<T>, RegistryMultiRecv>;
+pub type One<T> = FlavorWrap<crate::flavor::One<T>, RegistryMulti, RegistryMulti>;
 
 /// Flavor Type for bounded MPMC channel
 #[allow(clippy::large_enum_variant)]
@@ -112,8 +112,8 @@ impl<T> FlavorBounded for Array<T> {
 }
 
 impl<T: Send + 'static> Flavor for Array<T> {
-    type Send = RegistryMultiSend<T>;
-    type Recv = RegistryMultiRecv;
+    type Send = RegistryMulti;
+    type Recv = RegistryMulti;
 }
 
 /// The generic builder for all mpmc channel types with a new method (except Array).
@@ -251,7 +251,7 @@ where
 }
 
 /// Flavor type for close notification, refer to [crate::null] for usage
-pub type Null = FlavorWrap<crate::null::Null, RegistryDummy, RegistryMultiRecv>;
+pub type Null = FlavorWrap<crate::null::Null, RegistryDummy, RegistryMulti>;
 
 impl Null {
     #[inline(always)]

@@ -100,8 +100,8 @@ impl<T> FlavorMC for CompatFlavor<T> {}
 // There's not much performance difference between old RegistrySingle and RegistryMulti,
 // we just use RegistryMulti here since this is just for compatible reason.
 impl<T: Send + 'static> Flavor for CompatFlavor<T> {
-    type Send = RegistryMultiSend<T>;
-    type Recv = RegistryMultiRecv;
+    type Send = RegistryMulti;
+    type Recv = RegistryMulti;
 }
 
 #[inline(always)]
@@ -155,7 +155,7 @@ pub mod spsc {
 
     macro_rules! init_share {
         ($flavor: expr) => {{
-            ChannelShared::new($flavor, RegistryMultiSend::new(), RegistryMultiRecv::new())
+            ChannelShared::new($flavor, RegistryMulti::new(), RegistryMulti::new())
         }};
     }
 
@@ -230,7 +230,7 @@ pub mod mpsc {
 
     macro_rules! init_share {
         ($flavor: expr) => {{
-            ChannelShared::new($flavor, RegistryMultiSend::new(), RegistryMultiRecv::new())
+            ChannelShared::new($flavor, RegistryMulti::new(), RegistryMulti::new())
         }};
     }
 
@@ -306,7 +306,7 @@ pub mod mpmc {
 
     macro_rules! init_share {
         ($flavor: expr) => {{
-            ChannelShared::new($flavor, RegistryMultiSend::new(), RegistryMultiRecv::new())
+            ChannelShared::new($flavor, RegistryMulti::new(), RegistryMulti::new())
         }};
     }
 

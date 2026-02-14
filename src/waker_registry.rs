@@ -17,8 +17,6 @@ use std::sync::{
 use std::task::{Context, Poll};
 
 // pub(crate) on type alias does not matter, mpmc::List alias works because RegistryMulti is pub
-pub(crate) type RegistryMultiSend<T> = RegistryMulti<*const T>;
-pub(crate) type RegistryMultiRecv = RegistryMulti<()>;
 
 pub(crate) trait Registry: Send + Sync + 'static {
     type Waker: Send + Unpin + 'static + Debug;
@@ -49,9 +47,14 @@ pub(crate) trait Registry: Send + Sync + 'static {
     fn abandon_waker(&self, _waker: &Self::Waker) -> Result<(), u8> {
         Ok(())
     }
+
+    #[inline(always)]
+    fn fire(&self) -> WakeResult {
+        WakeResult::Next
+    }
 }
 
-pub(crate) trait RegistrySend<T>: Registry {
+pub(crate) trait RegistrySend: Registry {
     fn new() -> Self;
 
     #[inline(always)]
@@ -60,10 +63,7 @@ pub(crate) trait RegistrySend<T>: Registry {
     }
 
     #[inline(always)]
-    fn reg_waker_blocking(
-        &self, _o_waker: &mut Option<<Self as Registry>::Waker>, _cache: &WakerCache<*const T>,
-        _payload: *const T,
-    ) {
+    fn reg_waker_blocking(&self, _o_waker: &mut Option<<Self as Registry>::Waker>) {
         unreachable!();
     }
 
@@ -88,31 +88,18 @@ pub(crate) trait RegistrySend<T>: Registry {
         state as u8
     }
 
-    #[inline(always)]
-    fn fire<F>(&self, _flavor: &F) -> WakeResult
-    where
-        F: FlavorImpl<Item = T>,
-    {
-        WakeResult::Next
-    }
-
-    #[inline(always)]
-    fn cache_waker(
-        &self, _o_waker: Option<<Self as Registry>::Waker>, _cache: &WakerCache<*const T>,
-    ) {
-    }
+    //    #[inline(always)]
+    //    fn cache_waker(
+    //        &self, _o_waker: Option<<Self as Registry>::Waker>, _cache: &WakerCache<*const T>,
+    //    ) {
+    //    }
 }
 
 pub(crate) trait RegistryRecv: Registry {
     fn new() -> Self;
 
     #[inline(always)]
-    fn fire(&self) {}
-
-    #[inline(always)]
-    fn reg_waker_blocking(
-        &self, _o_waker: &mut Option<<Self as Registry>::Waker>, _cache: &WakerCache<()>,
-    ) {
+    fn reg_waker_blocking(&self, _o_waker: &mut Option<<Self as Registry>::Waker>) {
         unreachable!();
     }
 
@@ -123,8 +110,8 @@ pub(crate) trait RegistryRecv: Registry {
         unreachable!();
     }
 
-    #[inline(always)]
-    fn cache_waker(&self, _o_waker: Option<<Self as Registry>::Waker>, _cache: &WakerCache<()>) {}
+    //    #[inline(always)]
+    //    fn cache_waker(&self, _o_waker: Option<<Self as Registry>::Waker>, _cache: &WakerCache<()>) {}
 
     fn reg_select_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool;
 
@@ -147,18 +134,18 @@ impl Registry for RegistryDummy {
     fn close(&self) {}
 }
 
-impl<T> RegistrySend<T> for RegistryDummy {
+impl RegistrySend for RegistryDummy {
     #[inline(always)]
     fn new() -> Self {
         Self()
     }
 }
 
-type SingleWaker = ArcWaker<()>;
+type SingleWaker = ArcWaker;
 //type SingleWaker = ThinWaker;
 
 pub struct RegistrySingle {
-    cell: WeakCell<WakerInner<()>>,
+    cell: WeakCell<WakerInner>,
     // OneSpmc has comparable speed as WeakCell and does not allocate on waker registration,
     // but since miri will report datarace issue, commented out for now.
     //cell: OneSpmc<ThinWaker>,
@@ -177,7 +164,7 @@ impl RegistrySingle {
     #[inline(always)]
     fn _reg_waker_async(&self, ctx: &mut Context, o_waker: &mut Option<SingleWaker>) {
         // XXX don't know what the waker was, always generate new
-        let waker = ArcWaker::<()>::new_async(ctx, ());
+        let waker = ArcWaker::new_async(ctx);
         //let waker = ThinWaker::Async(ctx.waker().clone());
         trace_log!("{}{:?}: reg {:?}", self._tag, tokio_task_id!(), waker);
         self.cell.replace(waker.weak());
@@ -188,7 +175,7 @@ impl RegistrySingle {
 
     #[inline(always)]
     fn _reg_waker_blocking(&self, o_waker: &mut Option<SingleWaker>) {
-        let waker = ArcWaker::<()>::new_blocking(());
+        let waker = ArcWaker::new_blocking();
         //        let waker = ThinWaker::Blocking(thread::current());
         trace_log!("{}{:?}: reg {:?}", self._tag, tokio_task_id!(), waker);
         self.cell.replace(waker.weak());
@@ -213,9 +200,15 @@ impl Registry for RegistrySingle {
     fn close(&self) {
         self._fire();
     }
+
+    #[inline(always)]
+    fn fire(&self) -> WakeResult {
+        self._fire();
+        WakeResult::Next
+    }
 }
 
-impl<T> RegistrySend<T> for RegistrySingle {
+impl RegistrySend for RegistrySingle {
     #[inline(always)]
     fn new() -> Self {
         //Self { cell: _OneSpmc::new(), _tag: "tx" }
@@ -223,18 +216,7 @@ impl<T> RegistrySend<T> for RegistrySingle {
     }
 
     #[inline(always)]
-    fn fire<F>(&self, _flavor: &F) -> WakeResult
-    where
-        F: FlavorImpl<Item = T>,
-    {
-        self._fire();
-        WakeResult::Next
-    }
-
-    #[inline(always)]
-    fn reg_waker_blocking(
-        &self, o_waker: &mut Option<SingleWaker>, _cache: &WakerCache<*const T>, _payload: *const T,
-    ) {
+    fn reg_waker_blocking(&self, o_waker: &mut Option<SingleWaker>) {
         self._reg_waker_blocking(o_waker);
     }
 
@@ -255,12 +237,7 @@ impl RegistryRecv for RegistrySingle {
     }
 
     #[inline(always)]
-    fn fire(&self) {
-        self._fire();
-    }
-
-    #[inline(always)]
-    fn reg_waker_blocking(&self, o_waker: &mut Option<SingleWaker>, _cache: &WakerCache<()>) {
+    fn reg_waker_blocking(&self, o_waker: &mut Option<SingleWaker>) {
         self._reg_waker_blocking(o_waker)
     }
 
@@ -280,13 +257,13 @@ impl RegistryRecv for RegistrySingle {
     }
 }
 
-struct RegistryMultiInner<P> {
-    queue: VecDeque<Weak<WakerInner<P>>>,
+struct RegistryMultiInner {
+    queue: VecDeque<Weak<WakerInner>>,
     selectors: Vec<SelectWakerWrapper>,
     seq: u32,
 }
 
-impl<P> RegistryMultiInner<P> {
+impl RegistryMultiInner {
     #[inline(always)]
     fn new() -> Self {
         Self { queue: VecDeque::with_capacity(32), selectors: Vec::with_capacity(32), seq: 0 }
@@ -317,15 +294,15 @@ const MULTI_EMPTY: u8 = 0;
 const MULTI_HAS_SELECT: u8 = 1;
 const MULTI_HAS_WAKER: u8 = 2;
 
-pub struct RegistryMulti<P> {
+pub struct RegistryMulti {
     state: AtomicU8,
-    inner: Mutex<RegistryMultiInner<P>>,
+    inner: Mutex<RegistryMultiInner>,
     _tag: &'static str,
 }
 
-impl<P: Copy> RegistryMulti<P> {
+impl RegistryMulti {
     #[inline(always)]
-    fn reg_waker(&self, waker: &ArcWaker<P>) {
+    fn reg_waker(&self, waker: &ArcWaker) {
         let weak = waker.weak();
         {
             let mut guard = self.inner.lock();
@@ -341,7 +318,7 @@ impl<P: Copy> RegistryMulti<P> {
 
     #[inline(always)]
     fn _reg_waker_async(
-        &self, ctx: &mut Context, o_waker: &mut Option<ArcWaker<P>>, payload: P,
+        &self, ctx: &mut Context, o_waker: &mut Option<ArcWaker>,
     ) -> Option<Poll<()>> {
         if let Some(waker) = o_waker.as_ref() {
             match waker.try_change_state(WakerState::Woken, WakerState::Init) {
@@ -384,24 +361,21 @@ impl<P: Copy> RegistryMulti<P> {
                 }
             }
         }
-        let waker = ArcWaker::<P>::new_async(ctx, payload);
+        let waker = ArcWaker::new_async(ctx);
         self.reg_waker(&waker);
         o_waker.replace(waker);
         None
     }
 
     #[inline(always)]
-    fn _reg_waker_blocking(
-        &self, o_waker: &mut Option<ArcWaker<P>>, _cache: &WakerCache<P>, payload: P,
-    ) {
+    fn _reg_waker_blocking(&self, o_waker: &mut Option<ArcWaker>) {
         if let Some(waker) = o_waker.as_ref() {
             waker.reset_init();
             self.reg_waker(waker);
             trace_log!("{}{:?}: re-reg {:?}", self._tag, tokio_task_id!(), waker);
         } else {
             debug_assert!(o_waker.is_none());
-            //let waker = cache.new_blocking(payload);
-            let waker = ArcWaker::<P>::new_blocking(payload);
+            let waker = ArcWaker::new_blocking();
             self.reg_waker(&waker);
             trace_log!("{}{:?}: reg {:?}", self._tag, tokio_task_id!(), waker);
             o_waker.replace(waker);
@@ -412,7 +386,7 @@ impl<P: Copy> RegistryMulti<P> {
     /// return Some((waker, again))
     /// if there's more waker after pop_first, again=true
     #[inline(always)]
-    fn pop_first(&self) -> Option<(ArcWaker<P>, Option<u32>)> {
+    fn pop_first(&self) -> Option<(ArcWaker, Option<u32>)> {
         // This is a snapshot, it's safe to ignore the new situation after acquire lock
         let flag = self.state.load(Ordering::SeqCst);
         if flag == MULTI_EMPTY {
@@ -455,7 +429,7 @@ impl<P: Copy> RegistryMulti<P> {
     /// ignore the selectors (since triggered in pop_first())
     /// return the flags
     #[inline(always)]
-    fn pop_again(&self) -> Option<ArcWaker<P>> {
+    fn pop_again(&self) -> Option<ArcWaker> {
         // This is a snapshot, it's safe to ignore the new situation after acquire lock
         let flag = self.state.load(Ordering::Acquire);
         if flag == MULTI_EMPTY {
@@ -486,7 +460,7 @@ impl<P: Copy> RegistryMulti<P> {
 
     /// Call when waker is cancelled
     #[inline(always)]
-    fn _clear_wakers(&self, old_waker: &ArcWaker<P>, oneshot: bool) {
+    fn _clear_wakers(&self, old_waker: &ArcWaker, oneshot: bool) {
         // Don't need accurate, it's optional
         if self.state.load(Ordering::Acquire) & MULTI_HAS_WAKER == 0 {
             return;
@@ -552,7 +526,7 @@ impl<P: Copy> RegistryMulti<P> {
     }
 
     #[inline(always)]
-    fn _cache_waker(_o_waker: Option<ArcWaker<P>>, _cache: &WakerCache<P>) {
+    fn _cache_waker(_o_waker: Option<ArcWaker>) {
         // XXX: skip cache for now, until we find out miri report of race
         //if let Some(waker) = o_waker {
         //    if waker.get_state() >= WakerState::Woken as u8 {
@@ -562,11 +536,11 @@ impl<P: Copy> RegistryMulti<P> {
     }
 }
 
-impl<P: 'static + Copy> Registry for RegistryMulti<P> {
-    type Waker = ArcWaker<P>;
+impl Registry for RegistryMulti {
+    type Waker = ArcWaker;
 
     #[inline(always)]
-    fn get_waker_state(&self, o_waker: &Option<ArcWaker<P>>, order: Ordering) -> u8 {
+    fn get_waker_state(&self, o_waker: &Option<ArcWaker>, order: Ordering) -> u8 {
         if let Some(waker) = o_waker {
             waker._get_state(order)
         } else {
@@ -576,7 +550,7 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
 
     /// Cancel outdated wakers until me, make sure it does not accumulate
     #[inline(always)]
-    fn clear_wakers(&self, waker: &ArcWaker<P>) {
+    fn clear_wakers(&self, waker: &ArcWaker) {
         self._clear_wakers(waker, false);
     }
 
@@ -603,7 +577,7 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
     }
 
     #[inline(always)]
-    fn commit_waiting(&self, o_waker: &Option<ArcWaker<P>>) -> u8 {
+    fn commit_waiting(&self, o_waker: &Option<ArcWaker>) -> u8 {
         if let Some(waker) = &o_waker {
             waker.commit_waiting()
         } else {
@@ -613,7 +587,7 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
 
     /// return false when waker is none
     #[inline(always)]
-    fn abandon_waker(&self, waker: &ArcWaker<P>) -> Result<(), u8> {
+    fn abandon_waker(&self, waker: &ArcWaker) -> Result<(), u8> {
         // which change Waiting/Init to Closed
         match waker.abandon() {
             Ok(()) => {
@@ -627,7 +601,7 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
 
     /// cancel one outdated waker, make sure it does not accumulate
     #[inline(always)]
-    fn cancel_waker(&self, o_waker: &mut Option<ArcWaker<P>>) {
+    fn cancel_waker(&self, o_waker: &mut Option<ArcWaker>) {
         if let Some(waker) = o_waker.take() {
             // If we se Woken here, only possible otherside has woken it
             if waker.get_state_relaxed() >= WakerState::Woken as u8 {
@@ -636,69 +610,9 @@ impl<P: 'static + Copy> Registry for RegistryMulti<P> {
             self._clear_wakers(&waker, true);
         }
     }
-}
-
-impl<T: 'static> RegistrySend<T> for RegistryMultiSend<T> {
-    #[inline(always)]
-    fn new() -> Self {
-        Self { inner: Mutex::new(RegistryMultiInner::new()), state: AtomicU8::new(0), _tag: "tx" }
-    }
 
     #[inline(always)]
-    fn use_direct_copy(&self) -> bool {
-        self.state.load(Ordering::Relaxed) != MULTI_EMPTY
-    }
-
-    #[inline(always)]
-    fn reg_waker_blocking(
-        &self, o_waker: &mut Option<ArcWaker<*const T>>, cache: &WakerCache<*const T>,
-        payload: *const T,
-    ) {
-        self._reg_waker_blocking(o_waker, cache, payload)
-    }
-
-    #[inline(always)]
-    fn reg_waker_async(
-        &self, ctx: &mut Context, o_waker: &mut Option<ArcWaker<*const T>>,
-    ) -> Option<Poll<()>> {
-        self._reg_waker_async(ctx, o_waker, std::ptr::null_mut())
-    }
-
-    /// remove outdated waker, make sure it does not accumulate.
-    ///
-    /// It's ok to set state with Relaxed here, two scenario:
-    /// * set Done while the state is Init, does not matter other thread see it or not.
-    /// * other thread might have wake it in the process, but we are dropping it anyway, and then
-    ///   reg_waker with a new one.
-    #[inline(always)]
-    fn cancel_reuse_waker(
-        &self, o_waker: &mut Option<ArcWaker<*const T>>, state: WakerState,
-    ) -> u8 {
-        if let Some(waker) = o_waker.as_ref() {
-            let cur_state = waker.get_state();
-            // If we se Woken here, only possible otherside has woken it
-            if cur_state >= WakerState::Woken as u8 {
-                trace_log!("{}: cancel_reuse {:?} {}", self._tag, waker, cur_state);
-                if cur_state < state as u8 {
-                    state as u8
-                } else {
-                    cur_state
-                }
-            } else {
-                self._clear_wakers(waker, true);
-                let _ = o_waker.take();
-                state as u8
-            }
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[inline(always)]
-    fn fire<F>(&self, _flavor: &F) -> WakeResult
-    where
-        F: FlavorImpl<Item = T>,
-    {
+    fn fire(&self) -> WakeResult {
         if let Some((waker, _last_seq)) = self.pop_first() {
             let r = waker.wake();
             trace_log!("wake {} {:?} {:?}", self._tag, waker, r);
@@ -727,63 +641,86 @@ impl<T: 'static> RegistrySend<T> for RegistryMultiSend<T> {
         WakeResult::Next
     }
 
+    //    #[inline(always)]
+    //    fn cache_waker(&self, o_waker: Option<ArcWaker>) {
+    //        Self::_cache_waker(o_waker, cache);
+    //    }
+}
+
+impl RegistrySend for RegistryMulti {
     #[inline(always)]
-    fn cache_waker(&self, o_waker: Option<ArcWaker<*const T>>, cache: &WakerCache<*const T>) {
-        Self::_cache_waker(o_waker, cache);
+    fn new() -> Self {
+        Self { inner: Mutex::new(RegistryMultiInner::new()), state: AtomicU8::new(0), _tag: "tx" }
+    }
+
+    #[inline(always)]
+    fn use_direct_copy(&self) -> bool {
+        self.state.load(Ordering::Relaxed) != MULTI_EMPTY
+    }
+
+    #[inline(always)]
+    fn reg_waker_blocking(&self, o_waker: &mut Option<ArcWaker>) {
+        self._reg_waker_blocking(o_waker)
+    }
+
+    #[inline(always)]
+    fn reg_waker_async(
+        &self, ctx: &mut Context, o_waker: &mut Option<ArcWaker>,
+    ) -> Option<Poll<()>> {
+        self._reg_waker_async(ctx, o_waker)
+    }
+
+    /// remove outdated waker, make sure it does not accumulate.
+    ///
+    /// It's ok to set state with Relaxed here, two scenario:
+    /// * set Done while the state is Init, does not matter other thread see it or not.
+    /// * other thread might have wake it in the process, but we are dropping it anyway, and then
+    ///   reg_waker with a new one.
+    #[inline(always)]
+    fn cancel_reuse_waker(&self, o_waker: &mut Option<ArcWaker>, state: WakerState) -> u8 {
+        if let Some(waker) = o_waker.as_ref() {
+            let cur_state = waker.get_state();
+            // If we se Woken here, only possible otherside has woken it
+            if cur_state >= WakerState::Woken as u8 {
+                trace_log!("{}: cancel_reuse {:?} {}", self._tag, waker, cur_state);
+                if cur_state < state as u8 {
+                    state as u8
+                } else {
+                    cur_state
+                }
+            } else {
+                self._clear_wakers(waker, true);
+                let _ = o_waker.take();
+                state as u8
+            }
+        } else {
+            unreachable!();
+        }
     }
 }
 
-impl RegistryRecv for RegistryMultiRecv {
+impl RegistryRecv for RegistryMulti {
     #[inline(always)]
     fn new() -> Self {
         Self { inner: Mutex::new(RegistryMultiInner::new()), state: AtomicU8::new(0), _tag: "rx" }
     }
 
     #[inline(always)]
-    fn reg_waker_blocking(&self, o_waker: &mut Option<ArcWaker<()>>, cache: &WakerCache<()>) {
-        self._reg_waker_blocking(o_waker, cache, ())
+    fn reg_waker_blocking(&self, o_waker: &mut Option<ArcWaker>) {
+        self._reg_waker_blocking(o_waker)
     }
 
     #[inline(always)]
     fn reg_waker_async(
-        &self, ctx: &mut Context, o_waker: &mut Option<ArcWaker<()>>,
+        &self, ctx: &mut Context, o_waker: &mut Option<ArcWaker>,
     ) -> Option<Poll<()>> {
-        self._reg_waker_async(ctx, o_waker, ())
+        self._reg_waker_async(ctx, o_waker)
     }
 
-    #[inline(always)]
-    fn fire(&self) {
-        if let Some((waker, _last_seq)) = self.pop_first() {
-            let r = waker.wake();
-            trace_log!("wake {} {:?} {:?}", self._tag, waker, r);
-            if r.is_done() {
-                return;
-            }
-            drop(waker);
-            if let Some(mut last_seq) = _last_seq {
-                last_seq = last_seq.wrapping_sub(1);
-                while let Some(_waker) = self.pop_again() {
-                    let r = _waker.wake();
-                    trace_log!("wake {} {:?} {:?}", self._tag, _waker, r);
-                    if r.is_done() {
-                        return;
-                    }
-                    // The latest seq in RegistryMulti is always last_waker.get_seq() +1
-                    // Because some waker (issued by sink / stream) might be INIT all the time,
-                    // prevent to dead loop situation when they are wake up and re-register again.
-                    if _waker.get_seq() >= last_seq {
-                        trace_log!("wake {} stop at {}", self._tag, last_seq);
-                        return;
-                    }
-                }
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn cache_waker(&self, o_waker: Option<ArcWaker<()>>, cache: &WakerCache<()>) {
-        Self::_cache_waker(o_waker, cache);
-    }
+    //    #[inline(always)]
+    //    fn cache_waker(&self, o_waker: Option<ArcWaker>) {
+    //        Self::_cache_waker(o_waker, cache);
+    //    }
 
     #[inline(always)]
     fn reg_select_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool {
@@ -830,10 +767,10 @@ impl SelectWakerWrapper {
 
 // For multiplex
 impl Registry for SelectWakerWrapper {
-    type Waker = ArcWaker<()>;
+    type Waker = ArcWaker;
 
     #[inline(always)]
-    fn get_waker_state(&self, _o_waker: &Option<ArcWaker<()>>, _order: Ordering) -> u8 {
+    fn get_waker_state(&self, _o_waker: &Option<ArcWaker>, _order: Ordering) -> u8 {
         unreachable!();
     }
 
@@ -843,6 +780,12 @@ impl Registry for SelectWakerWrapper {
         self.0.close();
         self.wake();
     }
+
+    #[inline(always)]
+    fn fire(&self) -> WakeResult {
+        self.wake();
+        WakeResult::Next
+    }
 }
 
 // For multiplex
@@ -851,21 +794,16 @@ impl RegistryRecv for SelectWakerWrapper {
         unreachable!();
     }
 
-    #[inline(always)]
-    fn fire(&self) {
-        self.wake();
-    }
-
     fn reg_select_waker(&self, _channel_id: usize, _waker: &Arc<SelectWaker>) -> bool {
         unreachable!();
     }
 }
 
 pub(crate) struct SelectWaker {
-    cell: WeakCell<WakerInner<()>>,
+    cell: WeakCell<WakerInner>,
     // does not need to be correct, just a hint for the try_select
     hint: AtomicUsize,
-    o_waker: UnsafeCell<Option<ArcWaker<()>>>,
+    o_waker: UnsafeCell<Option<ArcWaker>>,
     // For multiplex, not for select
     opened_channels: AtomicUsize,
 }
@@ -890,7 +828,7 @@ impl SelectWaker {
             waker.reset_init();
             waker.weak()
         } else {
-            let waker = ArcWaker::new_blocking(());
+            let waker = ArcWaker::new_blocking();
             let weak = waker.weak();
             self.get_waker().replace(waker);
             weak
@@ -902,7 +840,7 @@ impl SelectWaker {
     #[allow(dead_code)]
     #[inline(always)]
     pub fn init_async(&self, ctx: &mut Context) {
-        let waker = ArcWaker::new_async(ctx, ());
+        let waker = ArcWaker::new_async(ctx);
         let weak = waker.weak();
         self.get_waker().replace(waker);
         self.cell.replace(weak);
@@ -910,12 +848,12 @@ impl SelectWaker {
     }
 
     #[inline(always)]
-    fn get_waker(&self) -> &mut Option<ArcWaker<()>> {
+    fn get_waker(&self) -> &mut Option<ArcWaker> {
         unsafe { &mut *self.o_waker.get() }
     }
 
     #[inline(always)]
-    fn clone_weak(&self) -> Weak<WakerInner<()>> {
+    fn clone_weak(&self) -> Weak<WakerInner> {
         self.get_waker().as_ref().unwrap().weak()
     }
 
@@ -961,25 +899,23 @@ mod tests {
     #[test]
     fn print_waker_registry_size() {
         use std::mem::size_of;
-        println!("RegistryMultiSend<usize> size {}", size_of::<RegistryMultiSend<usize>>());
-        println!("RegistryMultiRecv size {}", size_of::<RegistryMultiRecv>());
+        println!("RegistryMulti size {}", size_of::<RegistryMulti>());
         println!("RegistrySingle size {}", size_of::<RegistrySingle>());
-        println!("RegistryMulti<()> size {}", size_of::<RegistryMultiRecv>());
     }
 
     #[test]
     fn test_registry_multi_pop() {
-        let reg = RegistryMultiRecv::new();
+        let reg = RegistryMulti::new();
 
         // test push
-        let waker1 = ArcWaker::new_blocking(());
+        let waker1 = ArcWaker::new_blocking();
         assert_eq!(reg.len(), 0);
         reg.reg_waker(&waker1);
         assert_eq!(waker1.get_state(), WakerState::Init as u8);
         assert_eq!(waker1.get_seq(), 1);
         assert_eq!(reg.len(), 1);
 
-        let waker2 = ArcWaker::new_blocking(());
+        let waker2 = ArcWaker::new_blocking();
         reg.reg_waker(&waker2);
         waker2.commit_waiting();
         assert_eq!(waker2.get_seq(), 2);
@@ -1002,13 +938,13 @@ mod tests {
 
     #[test]
     fn test_registry_multi_clear_waiting() {
-        let reg = RegistryMultiRecv::new();
+        let reg = RegistryMulti::new();
         // test seq
-        let waker3 = ArcWaker::new_blocking(());
+        let waker3 = ArcWaker::new_blocking();
         reg.reg_waker(&waker3);
         waker3.commit_waiting();
         assert_eq!(waker3.get_state(), WakerState::Waiting as u8);
-        let waker4 = ArcWaker::new_blocking(());
+        let waker4 = ArcWaker::new_blocking();
         reg.reg_waker(&waker4); // Init
         assert_eq!(waker4.get_state(), WakerState::Init as u8);
         let num_workers = reg.len();
@@ -1016,7 +952,7 @@ mod tests {
         reg.clear_wakers(&waker4);
         assert_eq!(reg.len(), num_workers);
         for _ in 0..10 {
-            let _waker = ArcWaker::new_blocking(());
+            let _waker = ArcWaker::new_blocking();
             reg.reg_waker(&_waker);
         }
         let num_workers = reg.len();
@@ -1025,17 +961,17 @@ mod tests {
 
     #[test]
     fn test_registry_multi_clear_oneshot() {
-        let reg = RegistryMultiRecv::new();
+        let reg = RegistryMulti::new();
         // test seq
-        let waker1 = ArcWaker::new_blocking(());
+        let waker1 = ArcWaker::new_blocking();
         reg.reg_waker(&waker1);
         assert_eq!(waker1.get_state(), WakerState::Init as u8);
-        let waker2 = ArcWaker::new_blocking(());
+        let waker2 = ArcWaker::new_blocking();
         reg.reg_waker(&waker2); // Init
         waker2.commit_waiting();
         assert_eq!(waker2.get_state(), WakerState::Waiting as u8);
         for _ in 0..10 {
-            let _waker = ArcWaker::new_blocking(());
+            let _waker = ArcWaker::new_blocking();
             reg.reg_waker(&_waker);
         }
         let num_workers = reg.len();
@@ -1048,19 +984,19 @@ mod tests {
 
     #[test]
     fn test_registry_multi_clear() {
-        let reg = RegistryMultiRecv::new();
+        let reg = RegistryMulti::new();
         // test seq
-        let waker1 = ArcWaker::new_blocking(());
+        let waker1 = ArcWaker::new_blocking();
         reg.reg_waker(&waker1);
         assert_eq!(waker1.get_state(), WakerState::Init as u8);
-        let waker2 = ArcWaker::new_blocking(());
+        let waker2 = ArcWaker::new_blocking();
         reg.reg_waker(&waker2); // Init
         drop(waker2); // waker4 is dropped, weak is left
         for _ in 0..10 {
-            let _waker = ArcWaker::new_blocking(());
+            let _waker = ArcWaker::new_blocking();
             reg.reg_waker(&_waker);
         }
-        let waker3 = ArcWaker::new_blocking(());
+        let waker3 = ArcWaker::new_blocking();
         reg.reg_waker(&waker3);
         let _num_workers = reg.len(); // Keep for debugging context, though not used in assertion
         println!("clear waker3 seq={}", waker3.get_seq());
@@ -1074,10 +1010,10 @@ mod tests {
 
     #[test]
     fn test_registry_multi_close() {
-        let reg = RegistryMultiRecv::new();
+        let reg = RegistryMulti::new();
         println!("test close");
         for _ in 0..10 {
-            let _waker = ArcWaker::new_blocking(());
+            let _waker = ArcWaker::new_blocking();
             reg.reg_waker(&_waker);
         }
         assert!(reg.len() > 0);

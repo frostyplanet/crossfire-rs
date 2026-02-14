@@ -52,7 +52,7 @@ use std::mem::MaybeUninit;
 pub type List<T> = FlavorWrap<crate::flavor::List<T>, RegistryDummy, RegistrySingle>;
 
 /// Flavor type for one-sized MPSC channel
-pub type One<T> = FlavorWrap<crate::flavor::One<T>, RegistryMultiSend<T>, RegistrySingle>;
+pub type One<T> = FlavorWrap<crate::flavor::One<T>, RegistryMulti, RegistrySingle>;
 
 /// Flavor Type alias for bounded MPSC channel wrapped with specified One impl
 #[allow(clippy::large_enum_variant)]
@@ -104,7 +104,7 @@ impl<T> FlavorBounded for Array<T> {
 }
 
 impl<T: Send + 'static> Flavor for Array<T> {
-    type Send = RegistryMultiSend<T>;
+    type Send = RegistryMulti;
     type Recv = RegistrySingle;
 }
 
