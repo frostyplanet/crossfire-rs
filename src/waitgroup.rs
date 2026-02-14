@@ -320,6 +320,7 @@ pub struct WaitGroupGuard {
 }
 
 unsafe impl Send for WaitGroupGuard {}
+unsafe impl Sync for WaitGroupGuard {}
 
 impl Drop for WaitGroupGuard {
     #[inline(always)]
