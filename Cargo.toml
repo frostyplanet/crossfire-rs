@@ -3,7 +3,7 @@ members = ["test-suite"]
 
 [package]
 name = "crossfire"
-version = "3.1.1"
+version = "3.1.2"
 authors = ["plan <frostyplanet@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"

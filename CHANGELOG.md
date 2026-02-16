@@ -15,11 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.2] - 2026-2-16
+
+### Changed
+
+- waitgroup: Add inner T inside, just like Arc, this break previous 3.1.0 and 3.1.1
+
 ## [3.1.1] - 2026-02-15
 
 ### Changed
 
-- Add Sync for WaitGroupGuard
+- waitgroup: Add Sync for WaitGroupGuard
 
 ## [3.1.0] - 2026-02-14
 
