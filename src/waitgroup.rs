@@ -2,6 +2,7 @@
 //!
 //! Features:
 //! - Only one waiter, concurrent ref count.
+//! - Carry optional shared state inside, just like Arc.
 //! - Change threshold at any time.
 //!   - **NOTE**:
 //!     threshold is carried inside generated [WaitGroupGuard] to minimize the cost of atomic ops.
@@ -24,34 +25,38 @@
 //! use crossfire::waitgroup::WaitGroup;
 //! use std::sync::Arc;
 //! pub struct Parent {
-//!     wg: WaitGroup,
+//!     wg: WaitGroup<()>,
 //! }
 //! // allow parent to have Sync marker
 //! unsafe impl Sync for Parent {}
 //!
 //! let _parent = Arc::new(Parent{
-//!     wg: WaitGroup::new(0),
+//!     wg: WaitGroup::new((), 0),
 //! });
 //! ```
 //!
 //! # Examples
 //!
+//!
 //! **Blocking Example: Concurrency Limiter**
 //!
 //! This example simulates a task scheduler that uses a `WaitGroup` to limit
 //! the number of concurrently running tasks to a specific watermark.
+//! It also uses the generic `T` to carry a shared state (e.g. `AtomicBool`)
 //!
 //! ```
 //! use crossfire::waitgroup::WaitGroup;
 //! use std::thread;
 //! use std::time::Duration;
+//! use std::sync::atomic::{AtomicBool, Ordering};
 //!
 //! const MAX_CONCURRENT_TASKS: usize = 4;
 //! const TOTAL_TASKS: usize = 10;
 //!
 //! // Initialize WaitGroup with a threshold of N-1.
 //! // `wait()` will block when the number of running tasks is >= N.
-//! let mut wg = WaitGroup::new(MAX_CONCURRENT_TASKS - 1);
+//! // The `AtomicBool` is used to track if any task failed.
+//! let mut wg = WaitGroup::<AtomicBool>::new(AtomicBool::new(true), MAX_CONCURRENT_TASKS - 1);
 //!
 //! // Use a simple for loop to spawn a total of 10 tasks.
 //! for i in 0..TOTAL_TASKS {
@@ -63,6 +68,10 @@
 //!     thread::spawn(move || {
 //!         thread::sleep(Duration::from_millis(100));
 //!         // do some work
+//!         if i == 5 {
+//!             // Notify failure
+//!             guard.store(false, Ordering::SeqCst);
+//!         }
 //!         drop(guard);
 //!     });
 //! }
@@ -72,6 +81,7 @@
 //! wg.wait();
 //!
 //! assert_eq!(wg.get_left_seqcst(), 0);
+//! assert_eq!(wg.load(Ordering::SeqCst), false);
 //! ```
 //!
 //! **Async Example**
@@ -84,7 +94,7 @@
 //!
 //! #[tokio::test]
 //! async fn wait_group_async_example() {
-//!     let wg = WaitGroup::new(0);
+//!     let wg = WaitGroup::new((), 0);
 //!     for _j in 0..4 {
 //!         // Create a guard for the manager task.
 //!         let parent_guard = wg.add_guard();
@@ -116,6 +126,7 @@ use crate::{tokio_task_id, trace_log};
 use std::cell::UnsafeCell;
 use std::future::Future;
 use std::mem::transmute;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::atomic::{
@@ -147,18 +158,18 @@ use std::time::{Duration, Instant};
 /// If you know what you are doing when put it inside other struct, use unsafe impl.
 ///
 /// See module level [doc](crate::waitgroup) for example.
-pub struct WaitGroup {
+pub struct WaitGroup<T> {
     threshold: usize,
-    inner: NonNull<WaitGroupInner>,
+    inner: NonNull<WaitGroupInner<T>>,
     // Remove the Sync marker to prevent concurrent waiting
 }
 
-unsafe impl Send for WaitGroup {}
+unsafe impl<T: Send> Send for WaitGroup<T> {}
 
-impl WaitGroup {
+impl<T> WaitGroup<T> {
     #[inline(always)]
-    pub fn new(threshold: usize) -> Self {
-        let inner = WaitGroupInner::new();
+    pub fn new(inner: T, threshold: usize) -> Self {
+        let inner = WaitGroupInner::new(inner);
         Self {
             // one ref owned by myself
             threshold: threshold + 1,
@@ -179,7 +190,7 @@ impl WaitGroup {
     }
 
     #[inline(always)]
-    fn get_inner(&self) -> &WaitGroupInner {
+    fn get_inner(&self) -> &WaitGroupInner<T> {
         unsafe { self.inner.as_ref() }
     }
 
@@ -199,7 +210,7 @@ impl WaitGroup {
 
     /// Add one ref count to the WaitGroup, return a guard to decrease the count on drop.
     #[inline(always)]
-    pub fn add_guard(&self) -> WaitGroupGuard {
+    pub fn add_guard(&self) -> WaitGroupGuard<T> {
         self.get_inner().add();
         WaitGroupGuard { inner: self.inner, threshold: self.threshold }
     }
@@ -217,7 +228,10 @@ impl WaitGroup {
 
     /// Wait until count drop below threshold.
     #[inline]
-    pub fn wait_async<'a>(&'a self) -> WaitGroupFuture<'a> {
+    pub fn wait_async<'a>(&'a self) -> WaitGroupFuture<'a, T>
+    where
+        T: Send + Unpin,
+    {
         let inner = self.get_inner();
         WaitGroupFuture { inner, threshold: self.threshold, waker: None }
     }
@@ -227,7 +241,10 @@ impl WaitGroup {
     #[inline]
     pub fn wait_async_timeout<'a>(
         &'a self, timeout: Duration,
-    ) -> WaitGroupTimeoutFuture<'a, tokio::time::Sleep, ()> {
+    ) -> WaitGroupTimeoutFuture<'a, T, tokio::time::Sleep, ()>
+    where
+        T: Send + Unpin,
+    {
         let sleep = tokio::time::sleep(timeout);
         self.wait_async_with_timer(sleep)
     }
@@ -236,15 +253,21 @@ impl WaitGroup {
     #[inline]
     pub fn wait_async_timeout<'a>(
         &'a self, timeout: Duration,
-    ) -> WaitGroupTimeoutFuture<'a, impl Future<Output = ()>, ()> {
+    ) -> WaitGroupTimeoutFuture<'a, T, impl Future<Output = ()>, ()>
+    where
+        T: Send + Unpin,
+    {
         let sleep = async_std::task::sleep(timeout);
         self.wait_async_with_timer(sleep)
     }
 
     #[inline]
-    pub fn wait_async_with_timer<'a, FR, R>(&'a self, fut: FR) -> WaitGroupTimeoutFuture<'a, FR, R>
+    pub fn wait_async_with_timer<'a, FR, R>(
+        &'a self, fut: FR,
+    ) -> WaitGroupTimeoutFuture<'a, T, FR, R>
     where
         FR: Future<Output = R>,
+        T: Send + Unpin,
     {
         let inner = self.get_inner();
         WaitGroupTimeoutFuture { inner, threshold: self.threshold, sleep: fut, waker: None }
@@ -301,10 +324,18 @@ impl WaitGroup {
     }
 }
 
-impl Drop for WaitGroup {
+impl<T> Drop for WaitGroup<T> {
     #[inline]
     fn drop(&mut self) {
         WaitGroupInner::destroy(self.inner);
+    }
+}
+
+impl<T> Deref for WaitGroup<T> {
+    type Target = T;
+    #[inline]
+    fn deref(&self) -> &T {
+        &unsafe { self.inner.as_ref() }.inner
     }
 }
 
@@ -314,22 +345,22 @@ impl Drop for WaitGroup {
 ///
 /// **NOTE**: Threshold is carried in inside as non-atomic,
 /// will wake up the waiter once ref count decrease below threshold.
-pub struct WaitGroupGuard {
-    inner: NonNull<WaitGroupInner>,
+pub struct WaitGroupGuard<T> {
+    inner: NonNull<WaitGroupInner<T>>,
     threshold: usize,
 }
 
-unsafe impl Send for WaitGroupGuard {}
-unsafe impl Sync for WaitGroupGuard {}
+unsafe impl<T: Send> Send for WaitGroupGuard<T> {}
+unsafe impl<T: Sync> Sync for WaitGroupGuard<T> {}
 
-impl Drop for WaitGroupGuard {
+impl<T> Drop for WaitGroupGuard<T> {
     #[inline(always)]
     fn drop(&mut self) {
         WaitGroupInner::done(self.inner, 1, self.threshold);
     }
 }
 
-impl Clone for WaitGroupGuard {
+impl<T> Clone for WaitGroupGuard<T> {
     #[inline]
     fn clone(&self) -> Self {
         let inner = unsafe { self.inner.as_ref() };
@@ -338,19 +369,27 @@ impl Clone for WaitGroupGuard {
     }
 }
 
-struct WaitGroupInner {
+impl<T> Deref for WaitGroupGuard<T> {
+    type Target = T;
+    #[inline]
+    fn deref(&self) -> &T {
+        &unsafe { self.inner.as_ref() }.inner
+    }
+}
+
+struct WaitGroupInner<T> {
     /// Refer to the doc of State
     state: AtomicUsize,
     o_waker: UnsafeCell<Option<ThinWaker>>,
+    inner: T,
 }
 
-unsafe impl Send for WaitGroupInner {}
-unsafe impl Sync for WaitGroupInner {}
+unsafe impl<T: Sync> Sync for WaitGroupInner<T> {}
 
-impl WaitGroupInner {
+impl<T> WaitGroupInner<T> {
     #[inline(always)]
-    fn new() -> Box<Self> {
-        Box::new(Self { state: AtomicUsize::new(1), o_waker: UnsafeCell::new(None) })
+    fn new(inner: T) -> Box<Self> {
+        Box::new(Self { state: AtomicUsize::new(1), o_waker: UnsafeCell::new(None), inner })
     }
 
     #[inline]
@@ -544,13 +583,16 @@ impl WaitGroupInner {
 }
 
 #[must_use]
-pub struct WaitGroupFuture<'a> {
-    inner: &'a WaitGroupInner,
+pub struct WaitGroupFuture<'a, T> {
+    inner: &'a WaitGroupInner<T>,
     threshold: usize,
     waker: Option<Waker>,
 }
 
-impl<'a> Future for WaitGroupFuture<'a> {
+impl<'a, T> Future for WaitGroupFuture<'a, T>
+where
+    T: Send + Unpin,
+{
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
@@ -562,19 +604,21 @@ impl<'a> Future for WaitGroupFuture<'a> {
 /// Wait until the ref count is below threshold, return `Ok(())`.
 /// If timeout happens returns `Err(())`
 #[must_use]
-pub struct WaitGroupTimeoutFuture<'a, FR, R>
+pub struct WaitGroupTimeoutFuture<'a, T, FR, R>
 where
     FR: Future<Output = R>,
+    T: Send + Unpin,
 {
-    inner: &'a WaitGroupInner,
+    inner: &'a WaitGroupInner<T>,
     sleep: FR,
     threshold: usize,
     waker: Option<Waker>,
 }
 
-impl<'a, FR, R> Future for WaitGroupTimeoutFuture<'a, FR, R>
+impl<'a, T, FR, R> Future for WaitGroupTimeoutFuture<'a, T, FR, R>
 where
     FR: Future<Output = R>,
+    T: Send + Unpin,
 {
     type Output = Result<(), ()>;
 
@@ -680,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_waitgroup_inner_count() {
-        let wg = WaitGroup::new(0);
+        let wg = WaitGroup::new((), 0);
         assert_eq!(wg.get_left_seqcst(), 0);
         let guard1 = wg.add_guard();
         assert_eq!(wg.get_left_seqcst(), 1);
@@ -732,7 +776,7 @@ mod tests {
 
     #[test]
     fn test_waitgroup_inner() {
-        let inner = WaitGroupInner::new();
+        let inner = WaitGroupInner::new(());
         assert_eq!(inner.count(SeqCst), 1);
         assert_eq!(State::new(inner.state.load(Ordering::SeqCst)).waker_flag(), 0);
 

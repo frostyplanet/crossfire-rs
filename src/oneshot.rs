@@ -211,9 +211,7 @@ impl<T> OneShotInner<T> {
         // (the recv_timeout API should not allow recv twice),
         // it will complicate things (like async poll).
         self.get_waker().replace(waker);
-        if let Err(state) = self.state.compare_exchange(0, WAKER_SET_FLAG, AcqRel, Acquire) {
-            return Err(state);
-        }
+        self.state.compare_exchange(0, WAKER_SET_FLAG, AcqRel, Acquire)?;
         Ok(())
     }
 

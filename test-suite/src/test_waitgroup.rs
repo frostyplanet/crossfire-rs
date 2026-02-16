@@ -17,7 +17,7 @@ fn setup_log() {
 #[logfn]
 #[rstest]
 fn test_basic_wg_try_wait(setup_log: ()) {
-    let mut wg = WaitGroup::new(0);
+    let mut wg = WaitGroup::new((), 0);
     assert_eq!(wg.get_left(), 0);
     wg.wait(); // should return immediately
     assert_eq!(wg.try_wait(), Ok(()));
@@ -35,16 +35,35 @@ fn test_basic_wg_try_wait(setup_log: ()) {
     assert_eq!(wg.try_wait(), Err(()));
     drop(guard1);
     assert_eq!(wg.try_wait(), Ok(()));
+    assert_eq!(wg.try_wait(), Ok(()));
+}
+
+#[logfn]
+#[rstest]
+fn test_waitgroup_with_state(setup_log: ()) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let wg = WaitGroup::new(AtomicBool::new(true), 0);
+    for i in 0..10 {
+        let guard = wg.add_guard();
+        std::thread::spawn(move || {
+            if i == 5 {
+                guard.store(false, Ordering::SeqCst);
+            }
+            drop(guard);
+        });
+    }
+    wg.wait();
+    assert_eq!(wg.load(Ordering::SeqCst), false);
 }
 
 #[logfn]
 #[rstest]
 fn test_basic_wg_timeout_blocking(setup_log: ()) {
     // Test timeout case
-    let wg = WaitGroup::new(0);
+    let wg = WaitGroup::new((), 0);
     let _guard = wg.add_guard();
     assert_eq!(wg.wait_timeout(Duration::from_millis(100)), Err(()));
-    let _wg = WaitGroup::new(0);
+    let _wg = WaitGroup::new((), 0);
     let _guard_parent = _wg.add_guard();
     // Test drop while guard not finish
     let th = std::thread::spawn(move || {
@@ -65,7 +84,7 @@ fn test_basic_wg_timeout_blocking(setup_log: ()) {
 #[rstest]
 fn test_basic_no_wait_async(setup_log: ()) {
     runtime_block_on!(async move {
-        let wg = WaitGroup::new(0);
+        let wg = WaitGroup::new((), 0);
         assert_eq!(wg.get_left(), 0);
         wg.wait_async().await; // should return immediately
         assert_eq!(wg.try_wait(), Ok(()));
@@ -76,7 +95,7 @@ fn test_basic_no_wait_async(setup_log: ()) {
 #[rstest]
 fn test_basic_wg_one_guard_async(setup_log: ()) {
     runtime_block_on!(async move {
-        let wg = WaitGroup::new(0);
+        let wg = WaitGroup::new((), 0);
         let guard = wg.add_guard();
         assert_eq!(wg.get_left(), 1);
         assert_eq!(wg.try_wait(), Err(()));
@@ -96,7 +115,7 @@ fn test_basic_wg_one_guard_async(setup_log: ()) {
 fn test_basic_wg_multi_guards_async(setup_log: ()) {
     const NUM_GUARDS: usize = 10;
     runtime_block_on!(async move {
-        let mut wg = WaitGroup::new(3);
+        let mut wg = WaitGroup::new((), 3);
         let mut guards = Vec::new();
         for _ in 0..NUM_GUARDS {
             guards.push(wg.add_guard());
@@ -127,7 +146,7 @@ fn test_basic_wg_multi_guards_async(setup_log: ()) {
 #[rstest]
 fn test_basic_wg_timeout_async(setup_log: ()) {
     runtime_block_on!(async move {
-        let wg = WaitGroup::new(0);
+        let wg = WaitGroup::new((), 0);
         let guard = wg.add_guard();
         let th = async_spawn!(async move {
             sleep(Duration::from_millis(50)).await;
@@ -138,7 +157,7 @@ fn test_basic_wg_timeout_async(setup_log: ()) {
 
         #[cfg(feature = "tokio")]
         {
-            let wg_child = WaitGroup::new(0);
+            let wg_child = WaitGroup::new((), 0);
             let guard_parent = wg_child.add_guard();
             let guard = wg.add_guard();
             let th = async_spawn!(async move {
@@ -162,7 +181,7 @@ fn test_basic_wg_timeout_async(setup_log: ()) {
 #[rstest]
 #[cfg_attr(miri, ignore)]
 fn test_pressure_wg_blocking_spawn_sleep(setup_log: ()) {
-    let wg = WaitGroup::new(0);
+    let wg = WaitGroup::new((), 0);
     let mut loop_cnt = 0;
     for _ in 0..50 {
         let num_guards = fastrand::u32(1..=10); // Generate between 1 and 10 guards
@@ -208,7 +227,7 @@ fn test_pressure_wg_async_channel(
     }
     runtime_block_on!(async move {
         let (tx, rx) = mpmc::unbounded_async();
-        let mut wg = WaitGroup::new(threshold);
+        let mut wg = WaitGroup::new((), threshold);
         let mut total_received = 0;
 
         // Spawn consumer tasks
@@ -272,7 +291,7 @@ fn test_pressure_wg_async_channel_sleep(
     };
     runtime_block_on!(async move {
         let (tx, rx) = mpmc::unbounded_async();
-        let mut wg = WaitGroup::new(threshold);
+        let mut wg = WaitGroup::new((), threshold);
         let mut total_received = 0;
 
         // Spawn consumer tasks
@@ -333,7 +352,7 @@ fn test_pressure_wg_blocking_channel(
     }
     runtime_block_on!(async move {
         let (tx, rx) = mpmc::unbounded_blocking();
-        let mut wg = WaitGroup::new(threshold);
+        let mut wg = WaitGroup::new((), threshold);
         let mut total_received = 0;
 
         // Spawn consumer tasks
