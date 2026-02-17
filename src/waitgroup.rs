@@ -2,13 +2,13 @@
 //!
 //! Features:
 //! - Only one waiter, concurrent ref count.
-//! - Carry optional shared state inside, just like Arc.
+//! - Carry optional state inside, shared between the main thread and WaitGroupGuard, just like Arc.
 //! - Change threshold at any time.
 //!   - **NOTE**:
 //!     threshold is carried inside generated [WaitGroupGuard] to minimize the cost of atomic ops.
 //!     When changing threshold to larger value, wait() might not wake up as soon as new threshold reached.
 //! - Low-cost create and drop, because reference count and waker state is packed inside one atomic.
-//! - WaitGroupGuard dropping is wait-free
+//! - WaitGroupGuard dropping is wait-free, which decrease ref count with SeqCst CAS.
 //! - Max reference count to (1 << (usize::BITS - 2) - 2)
 //!
 //! You don't need to put WaitGroup into Arc, use [WaitGroup::add_guard()] to get [WaitGroupGuard].
@@ -16,9 +16,7 @@
 //!
 //! # Safety
 //!
-//! Due to
-//!
-//! It's not safe to concurrently wait, so it does not have `Sync` marker.
+//! Due to only one slot for waker, it's not safe to concurrently wait, so it does not have `Sync` marker.
 //! If you know what you are doing when put it inside other struct, use unsafe impl.
 //!
 //! ```
@@ -27,7 +25,7 @@
 //! pub struct Parent {
 //!     wg: WaitGroup<()>,
 //! }
-//! // allow parent to have Sync marker
+//! // allow parent to have Sync marker for Arc
 //! unsafe impl Sync for Parent {}
 //!
 //! let _parent = Arc::new(Parent{
@@ -36,7 +34,6 @@
 //! ```
 //!
 //! # Examples
-//!
 //!
 //! **Blocking Example: Concurrency Limiter**
 //!
@@ -141,12 +138,13 @@ use std::time::{Duration, Instant};
 ///
 /// Features:
 /// - Only one waiter, concurrent ref count.
+/// - Carry optional state inside, shared between the main thread and WaitGroupGuard, just like Arc.
 /// - Change threshold at any time.
 ///   - **NOTE**:
 ///     threshold is carried inside generated [WaitGroupGuard] to minimize the cost of atomic ops.
 ///     When changing threshold to larger value, wait() might not wake up as soon as new threshold reached.
 /// - Low-cost create and drop, because reference count and waker state is packed inside one atomic.
-/// - WaitGroupGuard dropping is wait-free
+/// - WaitGroupGuard dropping is wait-free, which decrease ref count with SeqCst CAS.
 /// - Max reference count to (1 << (usize::BITS - 2) - 2)
 ///
 /// You don't need to put WaitGroup into Arc, use [WaitGroup::add_guard()] to get `WaitGroupGuard`.
@@ -341,10 +339,14 @@ impl<T> Deref for WaitGroup<T> {
 
 /// An RAII implementation got represent ref count in WaitGroup.
 ///
-/// **NOTE**: When cloning WaitGroupGuard, which will increase the count in WaitGroup
+/// When cloning WaitGroupGuard, which will increase the ref count in WaitGroup.
 ///
-/// **NOTE**: Threshold is carried in inside as non-atomic,
+/// WaitGroupGuard dropping is wait-free, which decrease ref count with SeqCst CAS.
 /// will wake up the waiter once ref count decrease below threshold.
+///
+/// **NOTE**: Threshold is carried inside as non-atomic, not syned with the main thread for
+/// efficiency. But it's sufficient for most scenario.
+///
 pub struct WaitGroupGuard<T> {
     inner: NonNull<WaitGroupInner<T>>,
     threshold: usize,
