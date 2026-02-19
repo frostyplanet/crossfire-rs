@@ -125,9 +125,19 @@ fn test_oneshot_async_drop_tx(setup_log: ()) {
 #[logfn]
 #[rstest]
 fn test_oneshot_async_pressure(setup_log: ()) {
+    let count = {
+        #[cfg(miri)]
+        {
+            10usize
+        }
+        #[cfg(not(miri))]
+        {
+            100usize
+        }
+    };
     runtime_block_on!(async move {
         let mut tasks = Vec::new();
-        for i in 0..ROUND {
+        for i in 0..count {
             tasks.push(async_spawn!(async move {
                 let (tx, rx) = oneshot::oneshot();
                 tx.send(i);
@@ -143,10 +153,9 @@ fn test_oneshot_async_pressure(setup_log: ()) {
 #[logfn]
 #[rstest]
 fn test_oneshot_blocking_batch(setup_log: ()) {
-    let count = ROUND;
-    let mut txs = Vec::with_capacity(count);
-    let mut rxs = Vec::with_capacity(count);
-    for _i in 0..count {
+    let mut txs = Vec::with_capacity(ROUND);
+    let mut rxs = Vec::with_capacity(ROUND);
+    for _i in 0..ROUND {
         let (tx, rx) = oneshot::oneshot();
         txs.push(tx);
         rxs.push(rx);
@@ -166,10 +175,9 @@ fn test_oneshot_blocking_batch(setup_log: ()) {
 #[rstest]
 fn test_oneshot_async_batch(setup_log: ()) {
     runtime_block_on!(async move {
-        let count = ROUND;
-        let mut txs = Vec::with_capacity(count);
-        let mut rxs = Vec::with_capacity(count);
-        for _i in 0..count {
+        let mut txs = Vec::with_capacity(ROUND);
+        let mut rxs = Vec::with_capacity(ROUND);
+        for _i in 0..ROUND {
             let (tx, rx) = oneshot::oneshot();
             txs.push(tx);
             rxs.push(rx);
@@ -189,18 +197,18 @@ fn test_oneshot_async_batch(setup_log: ()) {
 #[logfn]
 #[rstest]
 fn test_oneshot_blocking_concurrent(setup_log: ()) {
-    let round = {
+    let count = {
         #[cfg(miri)]
         {
-            10
+            10usize
         }
         #[cfg(not(miri))]
         {
-            50
+            50usize
         }
     };
     let mut th_s = Vec::new();
-    for i in 0..round {
+    for i in 0..count {
         let (tx, rx) = oneshot::oneshot();
         th_s.push(thread::spawn(move || {
             tx.send(i);
@@ -217,9 +225,19 @@ fn test_oneshot_blocking_concurrent(setup_log: ()) {
 #[logfn]
 #[rstest]
 fn test_oneshot_async_concurrent(setup_log: ()) {
+    let count = {
+        #[cfg(miri)]
+        {
+            10usize
+        }
+        #[cfg(not(miri))]
+        {
+            100usize
+        }
+    };
     runtime_block_on!(async move {
         let mut tasks = Vec::new();
-        for i in 0..ROUND {
+        for i in 0..count {
             let (tx, rx) = oneshot::oneshot();
             tasks.push(async_spawn!(async move {
                 tx.send(i);
@@ -239,13 +257,15 @@ fn test_oneshot_async_concurrent(setup_log: ()) {
 fn test_oneshot_blocking_with_sleep(setup_log: ()) {
     #[cfg(miri)]
     {
+        // sleep in miri will be too slow
         println!("skip on miri");
         return;
     }
     #[cfg(not(miri))]
     {
+        let count = 50usize;
         let mut th_s = Vec::new();
-        for i in 0..(ROUND as u64) {
+        for i in 0..(count as u64) {
             th_s.push(thread::spawn(move || {
                 let (tx, rx) = oneshot::oneshot();
                 // Spawn a thread that sends after a short delay
@@ -268,13 +288,15 @@ fn test_oneshot_blocking_with_sleep(setup_log: ()) {
 fn test_oneshot_async_with_sleep(setup_log: ()) {
     #[cfg(miri)]
     {
+        // sleep in miri will be too slow
         println!("skip on miri");
     }
     #[cfg(not(miri))]
     {
+        let count = 50usize;
         runtime_block_on!(async move {
             let mut tasks = Vec::new();
-            for i in 0..ROUND {
+            for i in 0..count {
                 tasks.push(async_spawn!(async move {
                     let (tx, rx) = oneshot::oneshot();
                     let th = async_spawn!(async move {
@@ -299,6 +321,7 @@ fn test_oneshot_async_with_sleep(setup_log: ()) {
 fn test_oneshot_async_batch_with_interval(setup_log: ()) {
     #[cfg(miri)]
     {
+        // sleep in miri will be too slow
         println!("skip on miri");
         return;
     }
