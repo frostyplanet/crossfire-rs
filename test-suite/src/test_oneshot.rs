@@ -103,6 +103,7 @@ fn test_oneshot_async_basic(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_oneshot_async_drop_tx(setup_log: ()) {
@@ -283,6 +284,7 @@ fn test_oneshot_blocking_with_sleep(setup_log: ()) {
     }
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_oneshot_async_with_sleep(setup_log: ()) {
@@ -316,6 +318,7 @@ fn test_oneshot_async_with_sleep(setup_log: ()) {
     }
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_oneshot_async_batch_with_interval(setup_log: ()) {
@@ -353,6 +356,7 @@ fn test_oneshot_async_batch_with_interval(setup_log: ()) {
     }
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_oneshot_blocking_timeout_fail(setup_log: ()) {
@@ -363,6 +367,7 @@ fn test_oneshot_blocking_timeout_fail(setup_log: ()) {
     assert!(start.elapsed() >= Duration::from_millis(100));
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_oneshot_blocking_timeout_success(setup_log: ()) {
@@ -377,6 +382,7 @@ fn test_oneshot_blocking_timeout_success(setup_log: ()) {
     let _ = th.join();
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_oneshot_blocking_timeout_disconnected(setup_log: ()) {
@@ -391,6 +397,7 @@ fn test_oneshot_blocking_timeout_disconnected(setup_log: ()) {
     // might be timeout or disconnected
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_oneshot_async_timeout_fail(setup_log: ()) {
@@ -405,6 +412,7 @@ fn test_oneshot_async_timeout_fail(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_oneshot_async_timeout_disconnected(setup_log: ()) {
@@ -421,6 +429,7 @@ fn test_oneshot_async_timeout_disconnected(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_oneshot_async_timeout_success(setup_log: ()) {

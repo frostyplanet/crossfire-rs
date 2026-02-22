@@ -10,6 +10,7 @@ fn setup_log() {
     _setup_log();
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_mpmc_null_async_close(setup_log: ()) {
@@ -28,6 +29,7 @@ fn test_mpmc_null_async_close(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_mpsc_null_async_close(setup_log: ()) {
@@ -46,6 +48,7 @@ fn test_mpsc_null_async_close(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_mpmc_null_select(setup_log: ()) {
@@ -72,6 +75,7 @@ fn test_mpmc_null_select(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_mpsc_null_select(setup_log: ()) {
@@ -98,6 +102,7 @@ fn test_mpsc_null_select(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_null_select_timeout(setup_log: ()) {
@@ -145,6 +150,7 @@ fn test_null_mixed_with_active_channel(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_null_mixed_trigger(setup_log: ()) {

@@ -90,6 +90,7 @@ fn test_basic_compile_bounded_empty_full() {
     assert_eq!(tx.is_disconnected(), true);
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_sync() {
@@ -223,6 +224,7 @@ fn test_basic_unbounded_rx_drop<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(spsc::bounded_async(10))]
@@ -268,6 +270,7 @@ fn test_basic_bounded_1_thread<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(spsc::unbounded_async())]
@@ -312,6 +315,7 @@ fn test_basic_unbounded_1_thread<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usiz
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(spsc::unbounded_async())]
@@ -421,6 +425,7 @@ fn test_basic_unbounded_recv_after_sender_close<
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(spsc::bounded_async(100))]
@@ -458,6 +463,7 @@ fn test_basic_timeout_recv_async_waker<T: AsyncTxTrait<usize>, R: AsyncRxTrait<u
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(spsc::unbounded_async())]
@@ -490,6 +496,7 @@ fn test_basic_unbounded_recv_timeout_async<T: BlockingTxTrait<usize>, R: AsyncRx
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(spsc::bounded_async(10))]
@@ -543,6 +550,7 @@ fn test_basic_send_timeout_async<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(mpmc::bounded_async(1))]
@@ -999,6 +1007,7 @@ impl<F: Flavor<Item = usize> + Unpin> Future for SpuriousRx<F> {
     }
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_spurious_sink(setup_log: ()) {
@@ -1048,6 +1057,7 @@ fn test_spurious_sink(setup_log: ()) {
     }
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_spurious_stream(setup_log: ()) {
@@ -1172,6 +1182,7 @@ fn test_pressure_stream_multi<F: Flavor<Item = usize> + 'static>(
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(mpmc::bounded_async(1), 2)]

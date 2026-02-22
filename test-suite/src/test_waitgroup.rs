@@ -92,6 +92,7 @@ fn test_basic_no_wait_async(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_basic_wg_one_guard_async(setup_log: ()) {
@@ -111,6 +112,7 @@ fn test_basic_wg_one_guard_async(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_basic_wg_multi_guards_async(setup_log: ()) {
@@ -143,6 +145,7 @@ fn test_basic_wg_multi_guards_async(setup_log: ()) {
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_basic_wg_timeout_async(setup_log: ()) {
@@ -269,6 +272,7 @@ fn test_pressure_wg_async_channel(
     });
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(0, 5)]
@@ -414,7 +418,10 @@ fn test_waitgroup_inline(setup_log: ()) {
         let _wg = wg.clone();
         wg.add();
         async_spawn!(async move {
-            sleep(Duration::from_secs(1)).await;
+            #[cfg(feature = "time")]
+            {
+                sleep(Duration::from_secs(1)).await;
+            }
             unsafe { _wg.done() };
         });
         unsafe { wg.wait_async().await };

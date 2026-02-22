@@ -76,6 +76,7 @@ fn test_basic_compile_bounded_empty_full() {
     assert_eq!(tx.is_disconnected(), true);
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(spsc::bounded_async_blocking(100))]
@@ -125,6 +126,7 @@ fn test_basic_1_tx_async_1_rx_blocking<T: AsyncTxTrait<usize>, R: BlockingRxTrai
     let _ = th.join().unwrap();
 }
 
+#[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 #[case(mpsc::bounded_async_blocking(10), 5)]
