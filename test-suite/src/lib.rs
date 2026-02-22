@@ -17,7 +17,7 @@ mod test_waitgroup;
 
 // we don't want to import smol-timeout
 #[cfg(test)]
-#[cfg(not(feature = "smol"))]
+#[cfg(all(feature = "time", not(feature = "smol")))]
 mod test_type_switch;
 
 use captains_log::*;
@@ -224,6 +224,7 @@ pub fn reset_drop_counter() {
     DROP_COUNTER.store(0, Ordering::SeqCst);
 }
 
+#[cfg(feature = "time")]
 pub async fn sleep(duration: std::time::Duration) {
     #[cfg(feature = "smol")]
     {
@@ -248,7 +249,7 @@ pub async fn sleep(duration: std::time::Duration) {
     }
 }
 
-#[cfg(not(feature = "smol"))]
+#[cfg(all(feature = "time", not(feature = "smol")))]
 pub async fn timeout<F, T>(duration: std::time::Duration, future: F) -> Result<T, String>
 where
     F: std::future::Future<Output = T>,

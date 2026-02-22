@@ -11,8 +11,8 @@ crossfire = {path="../"}
 async-std = {version = "1", optional=true}
 log = { version="0"}
 smol = {version = "2", optional=true }
-compio = { version = "0.17", optional = true, features = ["runtime", "time", "dispatcher", "polling"], default-features = false}
-tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
+compio = { version = "0.17", optional = true, features = ["runtime", "dispatcher", "polling"], default-features = false}
+tokio = { version = "1", optional = true, features = ["sync", "rt-multi-thread", "rt", "macros"] }
 fastrand = "2.3"
 rstest = "0"
 captains-log = {version="0.13", features = ["ringfile", "tracing"] }
@@ -43,6 +43,8 @@ compio_dispatcher = ["dep:compio"]
 # for test workflow debugging
 trace_log = ["crossfire/trace_log"]
 
+# test invoking timer function in async runtime, try to opt-out time driver for miri
+time = ["compio?/time", "tokio?/time"]
 
 [[bench]]
 name = "crossfire"
