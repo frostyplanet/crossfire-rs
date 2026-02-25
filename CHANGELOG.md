@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.4] - 2026-2-25
+
+- oneshot: Add Sync for TxOneshot
+
 ## [3.1.2] - 2026-2-16
 
 ### Changed
