@@ -238,6 +238,7 @@ impl<T> OneShotInner<T> {
 pub struct TxOneshot<T>(NonNull<OneShotInner<T>>);
 
 unsafe impl<T> Send for TxOneshot<T> {}
+unsafe impl<T> Sync for TxOneshot<T> {}
 
 impl<T> TxOneshot<T> {
     /// Sending the item is one-time non-blocking behavior
