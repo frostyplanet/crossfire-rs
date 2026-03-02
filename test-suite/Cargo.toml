@@ -11,7 +11,7 @@ crossfire = {path="../"}
 async-std = {version = "1", optional=true}
 log = { version="0"}
 smol = {version = "2", optional=true }
-compio = { version = "0.17", optional = true, features = ["runtime", "polling"], default-features = false}
+compio = { git="https://github.com/compio-rs/compio.git", rev="a6869e2ec46065ebe10881675c714c774f417606", optional = true, features = ["runtime"], default-features = false}
 tokio = { version = "1", optional = true, features = ["sync", "rt-multi-thread", "rt", "macros"] }
 fastrand = "2.3"
 rstest = "0"

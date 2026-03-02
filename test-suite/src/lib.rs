@@ -140,6 +140,7 @@ macro_rules! async_spawn {
             let disp = COMPIO_DISPATCHER.get_or_init(|| {
                 compio::dispatcher::DispatcherBuilder::new()
                     .worker_threads(std::num::NonZero::new(8).unwrap())
+                    .block_signals(false)
                     .build()
                     .expect("create dispatcher")
             });
