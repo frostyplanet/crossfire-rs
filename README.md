@@ -189,7 +189,7 @@ If you like to use poll function directly for complex behavior, you can call
 Cargo.toml:
 ```toml
 [dependencies]
-crossfire = "3.0"
+crossfire = "3.1"
 ```
 
 ### Feature flags
