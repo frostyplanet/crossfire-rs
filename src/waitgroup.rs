@@ -1,23 +1,23 @@
 //! A WaitGroup implementation allows custom threshold (>=0), works in blocking & async context.
 //!
 //! Features:
-//! - Only one waiter, concurrent ref count.
-//! - Carry optional state inside, shared between the main thread and WaitGroupGuard, just like Arc.
-//! - Change threshold at any time.
+//! - WaitGroup is a box container, optional state inside may be shared between the threads of WaitGroup and its guards.
+//! - Low-cost ref-count (ref-count and waker state is packed inside one atomic)
+//! - Only one waiter is allowed.
+//! - Use [WaitGroup::add_guard()] to get [WaitGroupGuard].
+//! - `WaitGroupGuard` will increase ref, and drop will decrease ref and protentially wake the main
+//! thread.
+//! - Max ref-count is (1 << (usize::BITS - 2) - 2)
+//! - May change threshold at any time.
 //!   - **NOTE**:
 //!     threshold is carried inside generated [WaitGroupGuard] to minimize the cost of atomic ops.
 //!     When changing threshold to larger value, wait() might not wake up as soon as new threshold reached.
-//! - Low-cost create and drop, because reference count and waker state is packed inside one atomic.
-//! - WaitGroupGuard dropping is wait-free, which decrease ref count with SeqCst CAS.
-//! - Max reference count to (1 << (usize::BITS - 2) - 2)
-//!
-//! You don't need to put WaitGroup into Arc, use [WaitGroup::add_guard()] to get [WaitGroupGuard].
-//! It's ok to clone `WaitGroupGuard`, which will increase internal ref count.
 //!
 //! # Safety
 //!
-//! Due to only one slot for waker, it's not safe to concurrently wait, so it does not have `Sync` marker.
-//! If you know what you are doing when put it inside other struct, use unsafe impl.
+//! `WaitGroup` does not have `Sync` marker,  it's not safe to concurrently wait, due to only one slot reserved for waker.
+//! If you know what you are doing when put it inside other struct, use unsafe impl on its parent
+//! struct.
 //!
 //! ```
 //! use crossfire::waitgroup::WaitGroup;
