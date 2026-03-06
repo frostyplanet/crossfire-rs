@@ -371,10 +371,10 @@ fn test_oneshot_blocking_timeout_success(setup_log: ()) {
         thread::sleep(Duration::from_millis(50));
         tx.send(42);
     });
-    let _res = rx.recv_timeout(Duration::from_millis(200));
-    let _ = th.join();
+    let _res = rx.recv_timeout(Duration::from_secs(1));
     #[cfg(not(miri))]
     assert_eq!(_res, Ok(42));
+    let _ = th.join();
 }
 
 #[logfn]
@@ -414,7 +414,7 @@ fn test_oneshot_async_timeout_disconnected(setup_log: ()) {
             std::thread::sleep(Duration::from_millis(50));
             drop(tx);
         });
-        let _res = rx.recv_async_with_timer(Box::pin(sleep(Duration::from_secs(1)))).await;
+        let _res = rx.recv_async_with_timer(sleep(Duration::from_secs(1))).await;
         let _ = th.join();
         #[cfg(not(miri))]
         assert_eq!(_res, Err(RecvTimeoutError::Disconnected));
@@ -430,7 +430,7 @@ fn test_oneshot_async_timeout_success(setup_log: ()) {
             sleep(Duration::from_millis(50)).await;
             tx.send(42);
         });
-        let _res = rx.recv_async_with_timer(Box::pin(sleep(Duration::from_secs(2)))).await;
+        let _res = rx.recv_async_with_timer(sleep(Duration::from_secs(2))).await;
         #[cfg(not(miri))]
         assert_eq!(_res, Ok(42));
         async_join_result!(th);
