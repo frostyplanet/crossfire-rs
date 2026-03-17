@@ -1,8 +1,9 @@
 use crate::*;
-use crossfire::waitgroup::WaitGroup;
+use crossfire::waitgroup::{WaitGroup, WaitGroupInline};
 use crossfire::*;
 use fastrand;
 use rstest::*;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[fixture]
@@ -391,4 +392,40 @@ fn test_pressure_wg_blocking_channel(
         }
         assert_eq!(num_threads * ROUND, total_received);
     });
+}
+
+#[logfn]
+#[rstest]
+fn test_waitgroup_inline(setup_log: ()) {
+    let wg = Arc::new(WaitGroupInline::<0>::new());
+    assert_eq!(wg.get_left_seqcst(), 0);
+    wg.add_many(1);
+    assert!(wg.try_wait().is_err());
+    let _wg = wg.clone();
+    let th = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(1));
+        unsafe { _wg.done_many(1) };
+    });
+    unsafe { wg.wait() };
+    th.join().expect("join");
+    assert_eq!(wg.get_left_seqcst(), 0);
+
+    runtime_block_on!(async move {
+        let _wg = wg.clone();
+        wg.add();
+        async_spawn!(async move {
+            sleep(Duration::from_secs(1)).await;
+            unsafe { _wg.done() };
+        });
+        unsafe { wg.wait_async().await };
+        assert_eq!(wg.get_left_seqcst(), 0);
+    });
+}
+
+#[test]
+#[should_panic]
+fn test_waitgroup_inline_underflow() {
+    recipe::console_logger(ConsoleTarget::Stdout, Level::Trace).test().build().expect("log");
+    let wg = WaitGroupInline::<0>::new();
+    unsafe { wg.done() };
 }

@@ -36,6 +36,7 @@ smallvec = "1"
 log = "0"
 tokio = { version = "1", features = ["time", "sync", "rt-multi-thread", "rt", "macros"] }
 smol = "2"
+captains-log = "0"
 
 ## For profiling symbol
 #[profile.release]

@@ -1,21 +1,26 @@
-//! A WaitGroup implementation allows custom threshold (>=0), works in blocking & async context.
+//! This module provides two waitgroup implementation, works in blocking & async context.
+//! The implementation is low-cost ref-counting (counter and waker state is packed inside one atomic), the max value
+//! is (1 << (usize::BITS - 2) - 2)
 //!
-//! Features:
-//! - WaitGroup is a box container, optional state inside may be shared between the threads of WaitGroup and its guards.
-//! - Low-cost ref-count (ref-count and waker state is packed inside one atomic)
-//! - Only one waiter is allowed.
-//! - Use [WaitGroup::add_guard()] to get [WaitGroupGuard].
-//! - `WaitGroupGuard` will increase ref, and drop will decrease ref and protentially wake the main
-//! thread.
-//! - Max ref-count is (1 << (usize::BITS - 2) - 2)
-//! - May change threshold at any time.
+//! - [WaitGroupInline]: Which embedded inline with its parent structure (with no dereference cost)
+//!   - (Arc or other container should be used to share among threads).
+//!   - Threshold is const
+//!   - Requires manual ref count manager (add_many(), done_many()).
+//!   - only one waiter thread is allowed.
+//!
+//! - [WaitGroup]: which is a safe RAII guard API.
+//!   - Its a box container, optional state inside may be shared between the threads of WaitGroup and its guards.
+//!   - Only one waiter is allowed.
+//!   - Use [WaitGroup::add_guard()] to get [WaitGroupGuard].
+//!   - `WaitGroupGuard` will increase ref, and drop will decrease ref and protentially wake the main thread.
+//!   - Can change threshold at any time.
 //!   - **NOTE**:
 //!     threshold is carried inside generated [WaitGroupGuard] to minimize the cost of atomic ops.
 //!     When changing threshold to larger value, wait() might not wake up as soon as new threshold reached.
 //!
 //! # Safety
 //!
-//! `WaitGroup` does not have `Sync` marker,  it's not safe to concurrently wait, due to only one slot reserved for waker.
+//! [WaitGroup] does not have `Sync` marker, because it's not safe to concurrently wait, due to only one slot reserved for waker.
 //! If you know what you are doing when put it inside other struct, use unsafe impl on its parent
 //! struct.
 //!
@@ -128,11 +133,164 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::atomic::{
     AtomicUsize,
-    Ordering::{self, Acquire, Relaxed, SeqCst},
+    Ordering::{self, Acquire, Relaxed, Release, SeqCst},
 };
 use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// An unsafe version WaitGroup which does not allocate, must embedded in a parent Arc structure.
+///
+/// # Limitation
+///
+/// - THRESHOLD is const, default to zero
+/// - Only one thread / coroutine to wait, all wait_XXX() function is unsafe.
+/// - done() is unsafe.
+/// - Also provide add_many() done_many().
+pub struct WaitGroupInline<const THRESHOLD: usize = 0> {
+    inner: WaitGroupInner<()>,
+}
+
+impl<const THRESHOLD: usize> WaitGroupInline<THRESHOLD> {
+    pub fn new() -> Self {
+        // the inline version don't need its ref to represent ownership
+        Self { inner: WaitGroupInner::new((), 0) }
+    }
+
+    /// load total reference count of `WaitGroupGuard` with SeqCst
+    #[inline(always)]
+    pub fn get_left_seqcst(&self) -> usize {
+        self.inner.count(SeqCst)
+    }
+
+    /// Return total reference count of `WaitGroupGuard` with Acquire
+    #[inline(always)]
+    pub fn get_left(&self) -> usize {
+        self.inner.count(Acquire)
+    }
+
+    /// Add one count to the WaitGroup
+    #[inline(always)]
+    pub fn add(&self) {
+        self.inner.add(1);
+    }
+
+    /// Add multiple count to the WaitGroup
+    #[inline(always)]
+    pub fn add_many(&self, count: usize) {
+        debug_assert!(count < COUNT_MASK - 2);
+        self.inner.add(count);
+    }
+
+    /// Decrease one count, if it reduced to zero, will waking the waiter thread.
+    ///
+    /// Return true when zero has been reached
+    ///
+    /// # Safety
+    ///
+    /// You have to be careful for underflow, which will panic
+    pub unsafe fn done(&self) -> bool {
+        self.inner.done::<false>(1, THRESHOLD)
+    }
+
+    /// Decrease multiple count, if it reduced to zero, will waking the waiter thread.
+    ///
+    /// Return true when zero has been reached
+    ///
+    /// # Safety
+    ///
+    /// You have to be careful for underflow, which will panic
+    pub unsafe fn done_many(&self, count: usize) -> bool {
+        debug_assert!(count < COUNT_MASK - 2);
+        self.inner.done::<false>(count, THRESHOLD)
+    }
+
+    /// If the ref count reaches zero, return `Ok(())`, otherwise `Err(())`
+    #[inline]
+    pub fn try_wait(&self) -> Result<(), ()> {
+        // one ref owned by mysql
+        if self.inner.count(SeqCst) <= THRESHOLD {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    /// Block current coroutine until count drop below threshold.
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[inline]
+    pub unsafe fn wait_async<'a>(&'a self) -> WaitGroupFuture<'a, ()> {
+        WaitGroupFuture { inner: &self.inner, threshold: THRESHOLD, waker: None }
+    }
+
+    /// Block current coroutine until count drop below threshold, or until timeout happens
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+    #[inline]
+    pub unsafe fn wait_async_timeout<'a>(
+        &'a self, timeout: Duration,
+    ) -> WaitGroupTimeoutFuture<'a, (), tokio::time::Sleep, ()> {
+        let sleep = tokio::time::sleep(timeout);
+        self.wait_async_with_timer(sleep)
+    }
+
+    /// Block current coroutine until count drop below threshold, or until timeout happens
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[cfg(feature = "async_std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "async_std")))]
+    #[inline]
+    pub unsafe fn wait_async_timeout<'a>(
+        &'a self, timeout: Duration,
+    ) -> WaitGroupTimeoutFuture<'a, (), impl Future<Output = ()>, ()> {
+        let sleep = async_std::task::sleep(timeout);
+        self.wait_async_with_timer(sleep)
+    }
+
+    /// Block current coroutine until count drop below threshold, with a custom sleep / or cancel function
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[inline]
+    pub unsafe fn wait_async_with_timer<'a, FR, R>(
+        &'a self, fut: FR,
+    ) -> WaitGroupTimeoutFuture<'a, (), FR, R>
+    where
+        FR: Future<Output = R>,
+    {
+        WaitGroupTimeoutFuture { inner: &self.inner, threshold: THRESHOLD, sleep: fut, waker: None }
+    }
+
+    /// Blocking current thread and Wait until count drop below threshold.
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[inline]
+    pub unsafe fn wait(&self) {
+        let _ = self.inner.wait_blocking(None, THRESHOLD);
+    }
+
+    /// Blocking current thread and Wait until count drop below threshold, or until timeout
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[inline]
+    pub unsafe fn wait_timeout(&self, timeout: Duration) -> Result<(), ()> {
+        self.inner.wait_blocking(Some(Instant::now() + timeout), THRESHOLD)
+    }
+}
 
 /// A WaitGroup implementation allows custom threshold (>=0), works in blocking & async context.
 ///
@@ -167,7 +325,8 @@ unsafe impl<T: Send> Send for WaitGroup<T> {}
 impl<T> WaitGroup<T> {
     #[inline(always)]
     pub fn new(inner: T, threshold: usize) -> Self {
-        let inner = WaitGroupInner::new(inner);
+        // need one ref to represent ownership
+        let inner = Box::new(WaitGroupInner::new(inner, 1));
         Self {
             // one ref owned by myself
             threshold: threshold + 1,
@@ -209,7 +368,7 @@ impl<T> WaitGroup<T> {
     /// Add one ref count to the WaitGroup, return a guard to decrease the count on drop.
     #[inline(always)]
     pub fn add_guard(&self) -> WaitGroupGuard<T> {
-        self.get_inner().add();
+        self.get_inner().add(1);
         WaitGroupGuard { inner: self.inner, threshold: self.threshold }
     }
 
@@ -224,7 +383,11 @@ impl<T> WaitGroup<T> {
         }
     }
 
-    /// Wait until count drop below threshold.
+    /// Block current coroutine until count drop below threshold.
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
     #[inline]
     pub fn wait_async<'a>(&'a self) -> WaitGroupFuture<'a, T>
     where
@@ -234,6 +397,11 @@ impl<T> WaitGroup<T> {
         WaitGroupFuture { inner, threshold: self.threshold, waker: None }
     }
 
+    /// Block current coroutine until count drop below threshold, or until timeout happens
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
     #[cfg(feature = "tokio")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
     #[inline]
@@ -246,6 +414,12 @@ impl<T> WaitGroup<T> {
         let sleep = tokio::time::sleep(timeout);
         self.wait_async_with_timer(sleep)
     }
+
+    /// Block current coroutine until count drop below threshold, or until timeout happens
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
     #[cfg(feature = "async_std")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async_std")))]
     #[inline]
@@ -259,6 +433,11 @@ impl<T> WaitGroup<T> {
         self.wait_async_with_timer(sleep)
     }
 
+    /// Block current coroutine until count drop below threshold, with a custom sleep / or cancel function
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
     #[inline]
     pub fn wait_async_with_timer<'a, FR, R>(
         &'a self, fut: FR,
@@ -272,60 +451,32 @@ impl<T> WaitGroup<T> {
     }
 
     /// Blocking current thread and Wait until count drop below threshold.
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
     #[inline]
     pub fn wait(&self) {
-        let _ = self._wait_blocking(None);
+        let _ = self.get_inner().wait_blocking(None, self.threshold);
     }
 
+    /// Blocking current thread and Wait until count drop below threshold, or until timeout
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
     #[inline]
     pub fn wait_timeout(&self, timeout: Duration) -> Result<(), ()> {
-        self._wait_blocking(Some(Instant::now() + timeout))
-    }
-
-    #[inline]
-    fn _wait_blocking(&self, deadline: Option<Instant>) -> Result<(), ()> {
-        let inner = self.get_inner();
-        let threshold = self.threshold;
-        macro_rules! check {
-            ($order: expr) => {
-                let cur = inner.count($order);
-                if cur <= threshold {
-                    trace_log!("wg:({:?}) check {cur} <= {threshold}", tokio_task_id!());
-                    return Ok(());
-                }
-                trace_log!("wg:({:?}) check {cur} > {threshold}", tokio_task_id!());
-            };
-        }
-        check!(Acquire);
-        let mut backoff = Backoff::new();
-        let mut set_waker = false;
-        loop {
-            let r = backoff.snooze();
-            check!(Acquire);
-            if r {
-                let waker = ThinWaker::Blocking(thread::current());
-                if inner.try_set_waker(waker, threshold, set_waker).is_err() {
-                    return Ok(());
-                } else {
-                    set_waker = true;
-                }
-                match check_timeout(deadline) {
-                    Ok(None) => thread::park(),
-                    Ok(Some(dur)) => thread::park_timeout(dur),
-                    Err(_) => {
-                        return Err(());
-                    }
-                }
-                backoff.reset();
-            }
-        }
+        self.get_inner().wait_blocking(Some(Instant::now() + timeout), self.threshold)
     }
 }
 
 impl<T> Drop for WaitGroup<T> {
     #[inline]
     fn drop(&mut self) {
-        WaitGroupInner::destroy(self.inner);
+        unsafe {
+            WaitGroupInner::destroy(self.inner);
+        }
     }
 }
 
@@ -358,7 +509,9 @@ unsafe impl<T: Sync> Sync for WaitGroupGuard<T> {}
 impl<T> Drop for WaitGroupGuard<T> {
     #[inline(always)]
     fn drop(&mut self) {
-        WaitGroupInner::done(self.inner, 1, self.threshold);
+        unsafe {
+            WaitGroupInner::done_ptr(self.inner, 1, self.threshold);
+        }
     }
 }
 
@@ -366,7 +519,7 @@ impl<T> Clone for WaitGroupGuard<T> {
     #[inline]
     fn clone(&self) -> Self {
         let inner = unsafe { self.inner.as_ref() };
-        inner.add();
+        inner.add(1);
         Self { inner: self.inner, threshold: self.threshold }
     }
 }
@@ -390,8 +543,8 @@ unsafe impl<T: Sync> Sync for WaitGroupInner<T> {}
 
 impl<T> WaitGroupInner<T> {
     #[inline(always)]
-    fn new(inner: T) -> Box<Self> {
-        Box::new(Self { state: AtomicUsize::new(1), o_waker: UnsafeCell::new(None), inner })
+    fn new(inner: T, init_count: usize) -> Self {
+        Self { state: AtomicUsize::new(init_count), o_waker: UnsafeCell::new(None), inner }
     }
 
     #[inline]
@@ -405,15 +558,15 @@ impl<T> WaitGroupInner<T> {
     }
 
     #[inline]
-    fn add(&self) {
-        let old_state = self.state.fetch_add(1, Relaxed);
+    fn add(&self, count: usize) {
+        let old_state = self.state.fetch_add(count, Relaxed);
         if State::new(old_state).count() >= COUNT_MASK - 2 {
             panic!("WaitGroup count overflowed");
         }
     }
 
     #[inline]
-    fn destroy(p: NonNull<Self>) -> bool {
+    unsafe fn destroy(p: NonNull<Self>) -> bool {
         let this = unsafe { p.as_ref() };
         let mut state = this.state.load(SeqCst);
         loop {
@@ -436,49 +589,63 @@ impl<T> WaitGroupInner<T> {
         }
     }
 
-    #[inline]
-    fn done(p: NonNull<Self>, count: usize, threshold: usize) -> bool {
-        trace_log!("wg:({:?}) enter done {count} {threshold}", tokio_task_id!());
+    #[inline(always)]
+    unsafe fn done_ptr(p: NonNull<Self>, count: usize, threshold: usize) -> bool {
         let this = unsafe { p.as_ref() };
-        let mut state = this.state.load(Relaxed);
+        if this.done::<true>(count, threshold) {
+            let _ = unsafe { Box::from_raw(p.as_ptr()) };
+            return true;
+        } else {
+            false
+        }
+    }
+
+    /// return true to allow drop
+    #[inline]
+    fn done<const OWNER_SHIP: bool>(&self, count: usize, threshold: usize) -> bool {
+        trace_log!("wg:({:?}) enter done {count} {threshold}", tokio_task_id!());
+        let mut state = self.state.load(Relaxed);
         loop {
             let mut s = State::new(state);
-            // NOTE: When flag == WAKER_FLAG_LOCK, means one other thread is reading the waker,
-            // we just try to decrease the count, but we should not drop it even ref reach 0
-            let try_lock = match s.try_done(count, threshold) {
-                Some(false) => {
+            if OWNER_SHIP {
+                if s.is_last(count) {
                     // in case non SeqCst read old value, double check with SeqCst
-                    let _state = this.state.load(SeqCst);
+                    let _state = self.state.load(SeqCst);
                     if _state == state {
                         trace_log!("wg:({:?}) done drop {count} {threshold}", tokio_task_id!());
-                        let _ = unsafe { Box::from_raw(p.as_ptr()) };
                         return true;
                     }
                     state = _state;
                     continue;
                 }
-                Some(true) => {
-                    debug_assert!(s.is_locked());
-                    true
-                }
-                None => false,
-            };
-            match this.state.compare_exchange_weak(state, s.to_usize(), SeqCst, Acquire) {
+            }
+            // NOTE: When flag == WAKER_FLAG_LOCK, means one other thread is reading the waker,
+            // we just try to decrease the count, but we should not drop it even ref reach 0
+            let try_lock = s.try_done(count, threshold);
+            if try_lock {
+                debug_assert!(s.is_locked());
+            }
+            match self.state.compare_exchange_weak(state, s.to_usize(), SeqCst, Acquire) {
                 Ok(_) => {
                     if try_lock {
-                        let o_waker = this.get_waker().take();
+                        let o_waker = self.get_waker().take();
                         // Probably the last chance to check state, should use SeqCst to unlock.
                         // ref count may reach 0, means I'm the last one.
-                        let old = this.state.fetch_and(!WAKER_FLAG_MASK, SeqCst);
-                        if old & COUNT_MASK == 0 {
-                            trace_log!(
-                                "wg:({:?}) done locked drop cur {count} = 0",
-                                tokio_task_id!(),
-                            );
-                            // Safety: we had the lock, won't be others change the waker
-                            let _ = unsafe { Box::from_raw(p.as_ptr()) };
-                            return true;
-                        } else if let Some(waker) = o_waker {
+                        if OWNER_SHIP {
+                            let old = self.state.fetch_and(!WAKER_FLAG_MASK, SeqCst);
+                            if old & COUNT_MASK == 0 {
+                                trace_log!(
+                                    "wg:({:?}) done locked drop cur {count} = 0",
+                                    tokio_task_id!(),
+                                );
+                                // Safety: we had the lock, won't be others change the waker,
+                                // we are the last one, don't need to actually wake, just destroy.
+                                return true;
+                            }
+                        } else {
+                            self.state.fetch_and(!WAKER_FLAG_MASK, Release);
+                        }
+                        if let Some(waker) = o_waker {
                             trace_log!(
                                 "wg:({:?}) done waked {count} -> {} <= {threshold}",
                                 tokio_task_id!(),
@@ -539,6 +706,43 @@ impl<T> WaitGroupInner<T> {
                 return Err(());
             }
             return Ok(());
+        }
+    }
+
+    #[inline]
+    fn wait_blocking(&self, deadline: Option<Instant>, threshold: usize) -> Result<(), ()> {
+        macro_rules! check {
+            ($order: expr) => {
+                let cur = self.count($order);
+                if cur <= threshold {
+                    trace_log!("wg:({:?}) check {cur} <= {threshold}", tokio_task_id!());
+                    return Ok(());
+                }
+                trace_log!("wg:({:?}) check {cur} > {threshold}", tokio_task_id!());
+            };
+        }
+        check!(Acquire);
+        let mut backoff = Backoff::new();
+        let mut set_waker = false;
+        loop {
+            let r = backoff.snooze();
+            check!(Acquire);
+            if r {
+                let waker = ThinWaker::Blocking(thread::current());
+                if self.try_set_waker(waker, threshold, set_waker).is_err() {
+                    return Ok(());
+                } else {
+                    set_waker = true;
+                }
+                match check_timeout(deadline) {
+                    Ok(None) => thread::park(),
+                    Ok(Some(dur)) => thread::park_timeout(dur),
+                    Err(_) => {
+                        return Err(());
+                    }
+                }
+                backoff.reset();
+            }
         }
     }
 
@@ -690,26 +894,32 @@ impl State {
         self.count() | WAKER_FLAG_LOCK
     }
 
-    /// # Return value:
-    /// - return Some(false) when can drop directly, nothing changed.
-    /// - return Some(true) when reach threshold, should dec count and try_lock.
-    /// - None for just decrease count.
-    #[inline(always)]
-    fn try_done(&mut self, delta: usize, threshold: usize) -> Option<bool> {
-        let old_count = self.count();
+    /// When no one lock and I'm the last one, can drop directly, return true
+    #[inline]
+    fn is_last(&self, delta: usize) -> bool {
         let waker_flag = self.waker_flag();
-        if waker_flag != WAKER_FLAG_LOCK && old_count == delta {
-            // no one lock and I'm the last one, can drop
-            return Some(false);
-        }
-        let new_count = old_count - delta;
+        waker_flag != WAKER_FLAG_LOCK && self.count() == delta
+    }
+
+    /// # Return value:
+    /// - should_lock==true: when reach threshold, should dec count and try_lock.
+    /// - should_lock==false: just decrease count.
+    #[inline(always)]
+    fn try_done(&mut self, delta: usize, threshold: usize) -> bool {
+        let waker_flag = self.waker_flag();
+        let old_count = self.count();
+        let new_count = if old_count >= delta {
+            old_count - delta
+        } else {
+            panic!("underflow detected {} < {}", old_count, delta);
+        };
         let try_lock = new_count <= threshold && waker_flag == WAKER_FLAG_SET;
         if try_lock {
             self.0 = WAKER_FLAG_LOCK | new_count;
-            Some(true)
+            true
         } else {
             self.0 = waker_flag | new_count;
-            None
+            false
         }
     }
 
@@ -723,6 +933,9 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use captains_log::{recipe, ConsoleTarget, Level};
+    use std::sync::Arc;
+    use std::thread;
 
     #[test]
     fn test_waitgroup_inner_count() {
@@ -747,23 +960,24 @@ mod tests {
         assert!(State::new(2 | WAKER_FLAG_LOCK).is_locked());
         let mut s = State::new(2);
         // no waker
-        assert_eq!(s.try_done(1, 1), None);
+        assert_eq!(s.try_done(1, 1), false);
         assert!(!s.is_locked());
         assert_eq!(s.count(), 1);
         // threshold is ignore, just drop
-        assert_eq!(s.try_done(1, 1), Some(false));
+        assert!(s.is_last(1));
         // state don't need to change
         assert_eq!(s.count(), 1);
 
         // WAKER_FLAG_SET ( 3-1 <=2 )-> WAKER_FLAG_LOCK
         let mut s = State::new(3 | WAKER_FLAG_SET);
-        assert_eq!(s.try_done(1, 2), Some(true));
+        assert!(!s.is_last(1));
+        assert_eq!(s.try_done(1, 2), true);
         assert!(s.is_locked());
         assert!(!s.has_waker());
         assert_eq!(s.count(), 2);
 
         // WAKER_FLAG_LOCK -> dec
-        assert_eq!(s.try_done(1, 0), None);
+        assert_eq!(s.try_done(1, 0), false);
         assert!(s.is_locked());
         assert_eq!(s.count(), 1);
 
@@ -772,20 +986,21 @@ mod tests {
         assert_eq!(_s, 1);
 
         // WAKER_FLAG_LOCK exist, don't drop, just dec
-        assert_eq!(s.try_done(1, 0), None);
+        assert_eq!(s.try_done(1, 0), false);
         assert_eq!(s.count(), 0);
     }
 
     #[test]
-    fn test_waitgroup_inner() {
-        let inner = WaitGroupInner::new(());
+    fn test_waitgroup_ptr() {
+        recipe::console_logger(ConsoleTarget::Stdout, Level::Trace).test().build().expect("log");
+        let inner = Box::new(WaitGroupInner::new((), 1));
         assert_eq!(inner.count(SeqCst), 1);
         assert_eq!(State::new(inner.state.load(Ordering::SeqCst)).waker_flag(), 0);
 
         println!("test try_set_waker met threshold reach");
         assert_eq!(inner.try_set_waker(ThinWaker::Blocking(thread::current()), 1, false), Err(()));
 
-        inner.add();
+        inner.add(1);
         assert_eq!(inner.count(SeqCst), 2);
         println!("test try_set_waker ok");
         assert!(inner.try_set_waker(ThinWaker::Blocking(thread::current()), 1, false).is_ok());
@@ -805,14 +1020,56 @@ mod tests {
 
         let p = unsafe { NonNull::new_unchecked(Box::into_raw(inner)) };
         println!("test done triggering wakeup");
-        assert!(!WaitGroupInner::done(p, 1, 1));
+        unsafe {
+            assert!(!WaitGroupInner::done_ptr(p, 1, 1));
+            {
+                let inner = p.as_ref();
+                assert_eq!(inner.count(SeqCst), 1);
+                let s = State::new(inner.state.load(Ordering::SeqCst));
+                assert_eq!(s.waker_flag(), 0);
+            }
+            println!("test done triggering drop");
+            assert!(WaitGroupInner::done_ptr(p, 1, 0));
+        }
+    }
+
+    #[test]
+    fn test_waitgroup_inner() {
+        recipe::console_logger(ConsoleTarget::Stdout, Level::Trace).test().build().expect("log");
+        let inner = WaitGroupInner::new((), 1);
+        assert_eq!(inner.count(SeqCst), 1);
+        assert_eq!(State::new(inner.state.load(Ordering::SeqCst)).waker_flag(), 0);
+
+        println!("test try_set_waker met threshold reach");
+        assert_eq!(inner.try_set_waker(ThinWaker::Blocking(thread::current()), 1, false), Err(()));
+
+        inner.add(1);
+        assert_eq!(inner.count(SeqCst), 2);
+        println!("test try_set_waker ok");
+        assert!(inner.try_set_waker(ThinWaker::Blocking(thread::current()), 1, false).is_ok());
+        let s = State::new(inner.state.load(Ordering::SeqCst));
+        assert_eq!(s.waker_flag(), WAKER_FLAG_SET, "s {}, {}", s.is_locked(), s.has_waker());
+
+        println!("test try_set_waker again skip");
+        assert!(inner.try_set_waker(ThinWaker::Blocking(thread::current()), 1, true).is_ok());
+        let s = State::new(inner.state.load(Ordering::SeqCst));
+        assert_eq!(s.waker_flag(), WAKER_FLAG_SET);
+
+        println!("test try_set_waker again force");
+        assert!(inner.try_set_waker(ThinWaker::Blocking(thread::current()), 1, false).is_ok());
+        let s = State::new(inner.state.load(Ordering::SeqCst));
+        assert_eq!(s.waker_flag(), WAKER_FLAG_SET);
+        assert_eq!(inner.count(SeqCst), 2);
+
+        println!("test done triggering wakeup");
+        assert!(!inner.done::<false>(1, 1));
         {
-            let inner = unsafe { p.as_ref() };
             assert_eq!(inner.count(SeqCst), 1);
             let s = State::new(inner.state.load(Ordering::SeqCst));
             assert_eq!(s.waker_flag(), 0);
         }
-        println!("test done triggering drop");
-        assert!(WaitGroupInner::done(p, 1, 0));
+        println!("test done last");
+        inner.done::<false>(1, 0);
+        assert_eq!(inner.count(Ordering::SeqCst), 0)
     }
 }
