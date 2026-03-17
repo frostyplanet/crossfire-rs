@@ -15,11 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-## [3.1.4] - 2026-2-25
+## [3.1.6] - 2026-03-18
+
+### Added
+
+- waitgroup: Add WaitGroupInline (which does not allocate)
+
+## [3.1.4] - 2026-02-25
+
+### Changed
 
 - oneshot: Add Sync for TxOneshot
 
-## [3.1.2] - 2026-2-16
+## [3.1.2] - 2026-02-16
 
 ### Changed
 
