@@ -153,21 +153,20 @@ pub struct WaitGroupInline<const THRESHOLD: usize = 0> {
 
 impl<const THRESHOLD: usize> WaitGroupInline<THRESHOLD> {
     pub fn new() -> Self {
+        // the inline version don't need its ref to represent ownership
         Self { inner: WaitGroupInner::new((), 0) }
     }
 
     /// load total reference count of `WaitGroupGuard` with SeqCst
     #[inline(always)]
     pub fn get_left_seqcst(&self) -> usize {
-        // minus my own ref
-        self.inner.count(SeqCst) - 1
+        self.inner.count(SeqCst)
     }
 
     /// Return total reference count of `WaitGroupGuard` with Acquire
     #[inline(always)]
     pub fn get_left(&self) -> usize {
-        // minus my own ref
-        self.inner.count(Acquire) - 1
+        self.inner.count(Acquire)
     }
 
     /// Add one count to the WaitGroup
@@ -326,6 +325,7 @@ unsafe impl<T: Send> Send for WaitGroup<T> {}
 impl<T> WaitGroup<T> {
     #[inline(always)]
     pub fn new(inner: T, threshold: usize) -> Self {
+        // need one ref to represent ownership
         let inner = Box::new(WaitGroupInner::new(inner, 1));
         Self {
             // one ref owned by myself
