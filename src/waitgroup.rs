@@ -133,7 +133,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::atomic::{
     AtomicUsize,
-    Ordering::{self, Acquire, Relaxed, SeqCst},
+    Ordering::{self, Acquire, Relaxed, Release, SeqCst},
 };
 use std::task::{Context, Poll, Waker};
 use std::thread;
@@ -1063,8 +1063,9 @@ mod tests {
             let s = State::new(inner.state.load(Ordering::SeqCst));
             assert_eq!(s.waker_flag(), 0);
         }
-        println!("test done triggering drop");
-        assert!(inner.done::<false>(1, 0));
+        println!("test done last");
+        inner.done::<false>(1, 0);
+        assert_eq!(inner.count(Ordering::SeqCst), 0)
     }
 
     #[test]
