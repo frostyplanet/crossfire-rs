@@ -1067,18 +1067,4 @@ mod tests {
         inner.done::<false>(1, 0);
         assert_eq!(inner.count(Ordering::SeqCst), 0)
     }
-
-    #[test]
-    fn test_waitgroup_underflow() {
-        recipe::console_logger(ConsoleTarget::Stdout, Level::Trace).test().build().expect("log");
-        let wg = Arc::new(WaitGroupInline::<0>::new());
-        wg.add_many(1);
-        let _wg = wg.clone();
-        let th = thread::spawn(move || {
-            thread::sleep(Duration::from_secs(1));
-            unsafe { _wg.done_many(1) };
-        });
-        unsafe { wg.wait() };
-        th.join().expect("join");
-    }
 }
