@@ -631,15 +631,19 @@ impl<T> WaitGroupInner<T> {
                         let o_waker = self.get_waker().take();
                         // Probably the last chance to check state, should use SeqCst to unlock.
                         // ref count may reach 0, means I'm the last one.
-                        let old = self.state.fetch_and(!WAKER_FLAG_MASK, SeqCst);
-                        if OWNER_SHIP && old & COUNT_MASK == 0 {
-                            trace_log!(
-                                "wg:({:?}) done locked drop cur {count} = 0",
-                                tokio_task_id!(),
-                            );
-                            // Safety: we had the lock, won't be others change the waker,
-                            // we are the last one, don't need to actually wake, just destroy.
-                            return true;
+                        if OWNER_SHIP {
+                            let old = self.state.fetch_and(!WAKER_FLAG_MASK, SeqCst);
+                            if old & COUNT_MASK == 0 {
+                                trace_log!(
+                                    "wg:({:?}) done locked drop cur {count} = 0",
+                                    tokio_task_id!(),
+                                );
+                                // Safety: we had the lock, won't be others change the waker,
+                                // we are the last one, don't need to actually wake, just destroy.
+                                return true;
+                            }
+                        } else {
+                            self.state.fetch_and(!WAKER_FLAG_MASK, Release);
                         }
                         if let Some(waker) = o_waker {
                             trace_log!(
