@@ -158,7 +158,7 @@ test_leak: test_internal
 
 .PHONY: test_internal
 test_internal:
-	RUSTFLAGS="-Zsanitizer=leak" cargo +nightly test --lib -- --nocapture
+	RUSTFLAGS="-Zsanitizer=leak" cargo +nightly test -F trace_log --lib -- --nocapture ${ARGS}
 
 .PHONY: build
 build: init
