@@ -53,63 +53,63 @@ doc:
 .PHONY: test
 test: init
 	@echo "Run test"
-	@${RUN_TEST_CASE}; FEATURE_FLAG="-F tokio"; _run_test_case
+	@${RUN_TEST_CASE}; FEATURE_FLAG="-F tokio,time"; _run_test_case
 	@echo "Done"
 
 # test with ringfile for deadlog
 .PHONY: test_log
 test_log: init
 	@echo "Run test"
-	@${RUN_TEST_CASE}; FEATURE_FLAG="-F tokio,trace_log"; _run_test_case
+	@${RUN_TEST_CASE}; FEATURE_FLAG="-F tokio,time,trace_log"; _run_test_case
 	@echo "Done"
 
 .PHONY: test_async_std
 test_async_std: init
 	@echo "Run test"
-	@${RUN_TEST_CASE}; FEATURE_FLAG="-F async_std"; _run_test_case
+	@${RUN_TEST_CASE}; FEATURE_FLAG="-F async_std,time,"; _run_test_case
 	@echo "Done"
 
 .PHONY: test_log_async_std
 test_log_async_std: init
 	@echo "Run test"
-	@${RUN_TEST_CASE}; FEATURE_FLAG="-F async_std,trace_log"; _run_test_case
+	@${RUN_TEST_CASE}; FEATURE_FLAG="-F async_std,time,trace_log"; _run_test_case
 	@echo "Done"
 
 .PHONY: test_release
 test_release:
-	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F tokio"; _run_test_release_case
+	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F tokio,time"; _run_test_release_case
 
 # test with ringfile for deadlog
 .PHONY: test_log_release
 test_log_release:
-	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F tokio,trace_log"; _run_test_release_case
+	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F tokio,time,trace_log"; _run_test_release_case
 
 .PHONY: test_async_std_release
 test_async_std_release:
-	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F async_std"; _run_test_release_case
+	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F async_std,time"; _run_test_release_case
 
 # test with ringfile for deadlog
 .PHONY: test_log_async_std_release
 test_log_async_std_release:
-	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F async_std,trace_log"; _run_test_release_case
+	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F async_std,time,trace_log"; _run_test_release_case
 
 .PHONY: test_smol
 test_smol:
-	@${RUN_TEST_CASE}; FEATURE_FLAG="-F smol"; _run_test_case
+	@${RUN_TEST_CASE}; FEATURE_FLAG="-F smol,time"; _run_test_case
 
 # test with ringfile for deadlog
 .PHONY: test_log_smol
 test_log_smol:
-	@${RUN_TEST_CASE}; FEATURE_FLAG="-F smol,trace_log"; _run_test_case
+	@${RUN_TEST_CASE}; FEATURE_FLAG="-F smol,time,trace_log"; _run_test_case
 
 .PHONY: test_smol_release
 test_smol_release:
-	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F smol"; _run_test_release_case
+	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F smol,time"; _run_test_release_case
 
 # test with ringfile for deadlog
 .PHONY: test_log_smol_release
 test_log_smol_release:
-	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F smol,trace_log"; _run_test_release_case
+	@${RUN_RELEASE_CASE}; FEATURE_FLAG="-F smol,trace_log,time"; _run_test_release_case
 
 .PHONY: test_compio
 test_compio:
