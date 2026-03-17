@@ -152,6 +152,10 @@ pub struct WaitGroupInline<const THRESHOLD: usize = 0> {
 }
 
 impl<const THRESHOLD: usize> WaitGroupInline<THRESHOLD> {
+    pub fn new() -> Self {
+        Self { inner: WaitGroupInner::new((), 0) }
+    }
+
     /// load total reference count of `WaitGroupGuard` with SeqCst
     #[inline(always)]
     pub fn get_left_seqcst(&self) -> usize {
@@ -322,7 +326,7 @@ unsafe impl<T: Send> Send for WaitGroup<T> {}
 impl<T> WaitGroup<T> {
     #[inline(always)]
     pub fn new(inner: T, threshold: usize) -> Self {
-        let inner = WaitGroupInner::new(inner);
+        let inner = Box::new(WaitGroupInner::new(inner, 1));
         Self {
             // one ref owned by myself
             threshold: threshold + 1,
@@ -539,8 +543,8 @@ unsafe impl<T: Sync> Sync for WaitGroupInner<T> {}
 
 impl<T> WaitGroupInner<T> {
     #[inline(always)]
-    fn new(inner: T) -> Box<Self> {
-        Box::new(Self { state: AtomicUsize::new(1), o_waker: UnsafeCell::new(None), inner })
+    fn new(inner: T, init_count: usize) -> Self {
+        Self { state: AtomicUsize::new(init_count), o_waker: UnsafeCell::new(None), inner }
     }
 
     #[inline]
@@ -919,6 +923,8 @@ impl State {
 mod tests {
     use super::*;
     use captains_log::{recipe, ConsoleTarget, Level};
+    use std::sync::Arc;
+    use std::thread;
 
     #[test]
     fn test_waitgroup_inner_count() {
@@ -975,7 +981,7 @@ mod tests {
     #[test]
     fn test_waitgroup_ptr() {
         recipe::console_logger(ConsoleTarget::Stdout, Level::Trace).test().build().expect("log");
-        let inner = WaitGroupInner::new(());
+        let inner = Box::new(WaitGroupInner::new((), 1));
         assert_eq!(inner.count(SeqCst), 1);
         assert_eq!(State::new(inner.state.load(Ordering::SeqCst)).waker_flag(), 0);
 
@@ -1018,7 +1024,7 @@ mod tests {
     #[test]
     fn test_waitgroup_inner() {
         recipe::console_logger(ConsoleTarget::Stdout, Level::Trace).test().build().expect("log");
-        let inner = WaitGroupInner::new(());
+        let inner = WaitGroupInner::new((), 1);
         assert_eq!(inner.count(SeqCst), 1);
         assert_eq!(State::new(inner.state.load(Ordering::SeqCst)).waker_flag(), 0);
 
@@ -1052,5 +1058,19 @@ mod tests {
         }
         println!("test done triggering drop");
         assert!(inner.done(1, 0));
+    }
+
+    #[test]
+    fn test_waitgroup_underflow() {
+        recipe::console_logger(ConsoleTarget::Stdout, Level::Trace).test().build().expect("log");
+        let wg = Arc::new(WaitGroupInline::<0>::new());
+        wg.add_many(1);
+        let _wg = wg.clone();
+        let th = thread::spawn(move || {
+            thread::sleep(Duration::from_secs(1));
+            unsafe { _wg.done_many(1) };
+        });
+        unsafe { wg.wait() };
+        th.join().expect("join");
     }
 }
