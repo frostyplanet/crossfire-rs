@@ -191,7 +191,7 @@ impl<const THRESHOLD: usize> WaitGroupInline<THRESHOLD> {
     ///
     /// You have to be careful for underflow, which will panic
     pub unsafe fn done(&self) -> bool {
-        self.inner.done(1, THRESHOLD)
+        self.inner.done::<false>(1, THRESHOLD)
     }
 
     /// Decrease multiple count, if it reduced to zero, will waking the waiter thread.
@@ -203,7 +203,7 @@ impl<const THRESHOLD: usize> WaitGroupInline<THRESHOLD> {
     /// You have to be careful for underflow, which will panic
     pub unsafe fn done_many(&self, count: usize) -> bool {
         debug_assert!(count < COUNT_MASK - 2);
-        self.inner.done(count, THRESHOLD)
+        self.inner.done::<false>(count, THRESHOLD)
     }
 
     /// If the ref count reaches zero, return `Ok(())`, otherwise `Err(())`
@@ -592,7 +592,7 @@ impl<T> WaitGroupInner<T> {
     #[inline(always)]
     unsafe fn done_ptr(p: NonNull<Self>, count: usize, threshold: usize) -> bool {
         let this = unsafe { p.as_ref() };
-        if this.done(count, threshold) {
+        if this.done::<true>(count, threshold) {
             let _ = unsafe { Box::from_raw(p.as_ptr()) };
             return true;
         } else {
@@ -602,15 +602,13 @@ impl<T> WaitGroupInner<T> {
 
     /// return true to allow drop
     #[inline]
-    fn done(&self, count: usize, threshold: usize) -> bool {
+    fn done<const OWNER_SHIP: bool>(&self, count: usize, threshold: usize) -> bool {
         trace_log!("wg:({:?}) enter done {count} {threshold}", tokio_task_id!());
         let mut state = self.state.load(Relaxed);
         loop {
             let mut s = State::new(state);
-            // NOTE: When flag == WAKER_FLAG_LOCK, means one other thread is reading the waker,
-            // we just try to decrease the count, but we should not drop it even ref reach 0
-            let try_lock = match s.try_done(count, threshold) {
-                Some(false) => {
+            if OWNER_SHIP {
+                if s.is_last(count) {
                     // in case non SeqCst read old value, double check with SeqCst
                     let _state = self.state.load(SeqCst);
                     if _state == state {
@@ -620,12 +618,13 @@ impl<T> WaitGroupInner<T> {
                     state = _state;
                     continue;
                 }
-                Some(true) => {
-                    debug_assert!(s.is_locked());
-                    true
-                }
-                None => false,
-            };
+            }
+            // NOTE: When flag == WAKER_FLAG_LOCK, means one other thread is reading the waker,
+            // we just try to decrease the count, but we should not drop it even ref reach 0
+            let try_lock = s.try_done(count, threshold);
+            if try_lock {
+                debug_assert!(s.is_locked());
+            }
             match self.state.compare_exchange_weak(state, s.to_usize(), SeqCst, Acquire) {
                 Ok(_) => {
                     if try_lock {
@@ -633,14 +632,16 @@ impl<T> WaitGroupInner<T> {
                         // Probably the last chance to check state, should use SeqCst to unlock.
                         // ref count may reach 0, means I'm the last one.
                         let old = self.state.fetch_and(!WAKER_FLAG_MASK, SeqCst);
-                        if old & COUNT_MASK == 0 {
+                        if OWNER_SHIP && old & COUNT_MASK == 0 {
                             trace_log!(
                                 "wg:({:?}) done locked drop cur {count} = 0",
                                 tokio_task_id!(),
                             );
-                            // Safety: we had the lock, won't be others change the waker
+                            // Safety: we had the lock, won't be others change the waker,
+                            // we are the last one, don't need to actually wake, just destroy.
                             return true;
-                        } else if let Some(waker) = o_waker {
+                        }
+                        if let Some(waker) = o_waker {
                             trace_log!(
                                 "wg:({:?}) done waked {count} -> {} <= {threshold}",
                                 tokio_task_id!(),
@@ -889,26 +890,27 @@ impl State {
         self.count() | WAKER_FLAG_LOCK
     }
 
-    /// # Return value:
-    /// - return Some(false) when can drop directly, no other waiting or lock
-    /// - return Some(true) when reach threshold, should dec count and try_lock.
-    /// - None for just decrease count.
-    #[inline(always)]
-    fn try_done(&mut self, delta: usize, threshold: usize) -> Option<bool> {
-        let old_count = self.count();
+    /// When no one lock and I'm the last one, can drop directly, return true
+    #[inline]
+    fn is_last(&self, delta: usize) -> bool {
         let waker_flag = self.waker_flag();
-        if waker_flag != WAKER_FLAG_LOCK && old_count == delta {
-            // no one lock and I'm the last one, can drop
-            return Some(false);
-        }
-        let new_count = old_count - delta;
+        waker_flag != WAKER_FLAG_LOCK && self.count() == delta
+    }
+
+    /// # Return value:
+    /// - should_lock==true: when reach threshold, should dec count and try_lock.
+    /// - should_lock==false: just decrease count.
+    #[inline(always)]
+    fn try_done(&mut self, delta: usize, threshold: usize) -> bool {
+        let waker_flag = self.waker_flag();
+        let new_count = self.count() - delta;
         let try_lock = new_count <= threshold && waker_flag == WAKER_FLAG_SET;
         if try_lock {
             self.0 = WAKER_FLAG_LOCK | new_count;
-            Some(true)
+            true
         } else {
             self.0 = waker_flag | new_count;
-            None
+            false
         }
     }
 
@@ -949,23 +951,24 @@ mod tests {
         assert!(State::new(2 | WAKER_FLAG_LOCK).is_locked());
         let mut s = State::new(2);
         // no waker
-        assert_eq!(s.try_done(1, 1), None);
+        assert_eq!(s.try_done(1, 1), false);
         assert!(!s.is_locked());
         assert_eq!(s.count(), 1);
         // threshold is ignore, just drop
-        assert_eq!(s.try_done(1, 1), Some(false));
+        assert!(s.is_last(1));
         // state don't need to change
         assert_eq!(s.count(), 1);
 
         // WAKER_FLAG_SET ( 3-1 <=2 )-> WAKER_FLAG_LOCK
         let mut s = State::new(3 | WAKER_FLAG_SET);
-        assert_eq!(s.try_done(1, 2), Some(true));
+        assert!(!s.is_last(1));
+        assert_eq!(s.try_done(1, 2), true);
         assert!(s.is_locked());
         assert!(!s.has_waker());
         assert_eq!(s.count(), 2);
 
         // WAKER_FLAG_LOCK -> dec
-        assert_eq!(s.try_done(1, 0), None);
+        assert_eq!(s.try_done(1, 0), false);
         assert!(s.is_locked());
         assert_eq!(s.count(), 1);
 
@@ -974,7 +977,7 @@ mod tests {
         assert_eq!(_s, 1);
 
         // WAKER_FLAG_LOCK exist, don't drop, just dec
-        assert_eq!(s.try_done(1, 0), None);
+        assert_eq!(s.try_done(1, 0), false);
         assert_eq!(s.count(), 0);
     }
 
@@ -1050,14 +1053,14 @@ mod tests {
         assert_eq!(inner.count(SeqCst), 2);
 
         println!("test done triggering wakeup");
-        assert!(!inner.done(1, 1));
+        assert!(!inner.done::<false>(1, 1));
         {
             assert_eq!(inner.count(SeqCst), 1);
             let s = State::new(inner.state.load(Ordering::SeqCst));
             assert_eq!(s.waker_flag(), 0);
         }
         println!("test done triggering drop");
-        assert!(inner.done(1, 0));
+        assert!(inner.done::<false>(1, 0));
     }
 
     #[test]
