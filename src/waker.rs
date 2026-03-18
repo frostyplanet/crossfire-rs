@@ -1,4 +1,8 @@
 //use crate::collections::ArcCell;
+use embed_collections::{
+    dlist::{DLinkedList, DListItem, DListNode},
+    Pointer,
+};
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::ops::Deref;
@@ -36,7 +40,7 @@ impl WakeResult {
     }
 }
 
-pub struct ArcWaker(Arc<WakerInner>);
+pub struct ArcWaker(Arc<WakerItem>);
 
 impl fmt::Debug for ArcWaker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -44,14 +48,14 @@ impl fmt::Debug for ArcWaker {
     }
 }
 
-impl fmt::Debug for WakerInner {
+impl fmt::Debug for WakerItem {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "waker({})", self.get_seq())
     }
 }
 
 impl Deref for ArcWaker {
-    type Target = WakerInner;
+    type Target = WakerItem;
     #[inline]
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
@@ -61,7 +65,7 @@ impl Deref for ArcWaker {
 impl ArcWaker {
     #[inline(always)]
     pub fn new_async(ctx: &Context) -> Self {
-        Self(Arc::new(WakerInner {
+        Self(Arc::new(WakerItem {
             seq: AtomicU32::new(0),
             state: AtomicU8::new(WakerState::Init as u8),
             waker: UnsafeCell::new(ThinWaker::Async(ctx.waker().clone())),
@@ -70,7 +74,7 @@ impl ArcWaker {
 
     #[inline(always)]
     pub fn new_blocking() -> Self {
-        Self(Arc::new(WakerInner {
+        Self(Arc::new(WakerItem {
             seq: AtomicU32::new(0),
             state: AtomicU8::new(WakerState::Init as u8),
             waker: UnsafeCell::new(ThinWaker::Blocking(thread::current())),
@@ -80,18 +84,18 @@ impl ArcWaker {
 
 impl ArcWaker {
     #[inline(always)]
-    pub fn from_arc(inner: Arc<WakerInner>) -> Self {
+    pub fn from_arc(inner: Arc<WakerItem>) -> Self {
         Self(inner)
     }
 
     #[allow(clippy::wrong_self_convention)]
     #[inline(always)]
-    pub fn to_arc(self) -> Arc<WakerInner> {
+    pub fn to_arc(self) -> Arc<WakerItem> {
         self.0
     }
 
     #[inline(always)]
-    pub fn weak(&self) -> Weak<WakerInner> {
+    pub fn weak(&self) -> Weak<WakerItem> {
         Arc::downgrade(&self.0)
     }
 }
@@ -103,6 +107,16 @@ pub(crate) enum ThinWaker {
 }
 
 impl ThinWaker {
+    #[inline(always)]
+    pub fn new_async(ctx: &Context) -> Self {
+        Self::Async(ctx.waker().clone())
+    }
+
+    #[inline(always)]
+    pub fn new_blocking() -> Self {
+        Self::Blocking(thread::current())
+    }
+
     #[inline(always)]
     pub fn wake_by_ref(&self) {
         match self {
@@ -134,16 +148,129 @@ impl ThinWaker {
     }
 }
 
-pub struct WakerInner {
-    state: AtomicU8,
-    seq: AtomicU32,
+pub struct WakerList(DLinkedList<NonNull<WakerSeg>, ()>);
+
+impl WakerList {
+    fn push(&mut self, waker: ThinWaker) -> WakerSegRef {
+        if let Some(seg_p) = self.0.get_front() {
+            let seg = unsafe { seg_p.as_mut() };
+            if !seg.is_full() {
+                return seg.push(WakerItem::new(seq, waker));
+            }
+        }
+        let mut seg = WakerSeg::new();
+        let seg_ref = seg.push(WakerItem::new(seq, waker));
+        self.0.push_back(NonNull::from(seg_ref.as_ref()));
+        let _ = Box::leak(seg);
+        seg_ref
+    }
+
+    fn wake(&mut self) -> WakeResult {}
+
+    fn cancel(&mut self, waker_ref: WakerSegRef) -> Result<(), u8> {}
+}
+
+pub struct WakerSegRef {
+    seg: NonNull<WakerSeg>,
+    idx: usize,
+}
+
+impl Deref for WakerSegRef {
+    type Target = WakerItem;
+    fn deref(&self) -> &Self::Target {
+        let seg = unsafe { self.seg.as_ref() };
+        unsafe { seg.items[self.idx].assume_init_ref() }
+    }
+}
+
+pub struct WakerSeg {
+    start: u16,
+    end: u16,
+    ref_count: AtomicU64,
+    node: UnsafeCell<DListNode<NonNull<Self>, ()>>,
+    items: [MaybeUninit<WakerItem>; 4],
+}
+
+unsafe impl DListItem<()> for WakerSeg {
+    fn get_node(&self) -> &mut DListNode<Self, ()> {
+        unsafe { &mut *self.node.get() }
+    }
+}
+
+impl WakerSeg {
+    #[inline]
+    pub fn new() -> Box<Self> {
+        Box::new(WakerSeg {
+            start: 0,
+            end: 0,
+            ref_count: AtomicU64::new(1),
+            node: UnsafeCell::new(DListNode::default()),
+        })
+    }
+
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.end == 4
+    }
+
+    #[inline(always)]
+    pub fn push(&mut self, item: WakerItem) -> WakerSegRef {
+        let idx = self.end;
+        debug_assert!(idx != 4);
+        self.end = idx + 1;
+        self.ref_count.fetch_add(1, Ordering::SeqCst);
+        unsafe { self.items[idx].write(item) };
+        todo!();
+    }
+
+    #[inline(always)]
+    pub fn wake(&mut self) -> Result<WakeResult, ()> {
+        let idx = self.start;
+        if idx == 4 {
+            return Err(());
+        }
+        if idx == self.end {
+            return Ok(WakeResult::Skip);
+        }
+        let item = unsafe { self.items[idx].assume_init_ref() };
+        self.start = idx + 1;
+        Ok(item.wake());
+    }
+
+    pub fn cancel(&mut self, waker_ref: &WakerSegRef) -> Result<(), u8> {
+        let seg = unsafe { waker_ref.seg.as_mut() };
+        if let Err(state) = waker_ref.abandon() {
+            return Err(state);
+        }
+        if seg.end == waker_ref.idx + 1 {
+            seg.end -= 1;
+            return Ok(());
+        } else if seg.start == waker_ref.idx {
+            // advance
+            seg.start += 1;
+            if seg.start == 4 {
+                // remove node
+            }
+        }
+        return Ok(());
+    }
+}
+
+pub struct WakerItem {
+    state: AtomicU32,
+    seq: u32,
     waker: UnsafeCell<ThinWaker>,
 }
 
-unsafe impl Send for WakerInner {}
-unsafe impl Sync for WakerInner {}
+unsafe impl Send for WakerItem {}
+unsafe impl Sync for WakerItem {}
 
-impl WakerInner {
+impl WakerItem {
+    #[inline(always)]
+    pub fn new(seq: u32, waker: ThinWaker) -> Self {
+        Self { seq, state: AtomicU32::new(WakerState::Init as u32), waker }
+    }
+
     #[inline(always)]
     fn get_waker(&self) -> &ThinWaker {
         unsafe { &*self.waker.get() }
@@ -310,7 +437,7 @@ impl WakerInner {
 }
 
 /*
-impl<T> WakerInner<*const T> {
+impl<T> WakerItem<*const T> {
     #[inline(always)]
     fn get_payload(&self) -> *const T {
         *self.get_payload_mut()
@@ -363,7 +490,7 @@ impl<T> WakerInner<*const T> {
     }
 }
 
-pub struct WakerCache<P: Copy>(ArcCell<WakerInner<P>>);
+pub struct WakerCache<P: Copy>(ArcCell<WakerItem<P>>);
 
 impl<P: Copy> WakerCache<P> {
     #[inline(always)]
@@ -407,6 +534,6 @@ mod tests {
     fn test_waker_size() {
         use std::mem::size_of;
         println!("wakertype {}", size_of::<ThinWaker>());
-        println!("waker inner {}", size_of::<WakerInner>());
+        println!("waker inner {}", size_of::<WakerItem>());
     }
 }
