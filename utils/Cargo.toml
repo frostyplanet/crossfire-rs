@@ -1,0 +1,22 @@
+[package]
+name = "crossfire-utils"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+embed-collections = {version="0", features=["dlist"]}
+log = { version="0", optional=true}
+
+[features]
+trace_log = ["dep:log"]
+
+[lints.clippy]
+new_ret_no_self = "allow"
+needless_range_loop = "allow"
+type_complexity = "allow"
+needless_return = "allow"
+mut_from_ref = "allow"
+transmute_ptr_to_ref = "allow"
+len_without_is_empty = "allow"
+new_without_default = "allow"
+result_unit_err = "allow"
