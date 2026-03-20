@@ -607,17 +607,15 @@ impl<T> WaitGroupInner<T> {
         let mut state = self.state.load(Relaxed);
         loop {
             let mut s = State::new(state);
-            if OWNER_SHIP {
-                if s.is_last(count) {
-                    // in case non SeqCst read old value, double check with SeqCst
-                    let _state = self.state.load(SeqCst);
-                    if _state == state {
-                        trace_log!("wg:({:?}) done drop {count} {threshold}", tokio_task_id!());
-                        return true;
-                    }
-                    state = _state;
-                    continue;
+            if OWNER_SHIP && s.is_last(count) {
+                // in case non SeqCst read old value, double check with SeqCst
+                let _state = self.state.load(SeqCst);
+                if _state == state {
+                    trace_log!("wg:({:?}) done drop {count} {threshold}", tokio_task_id!());
+                    return true;
                 }
+                state = _state;
+                continue;
             }
             // NOTE: When flag == WAKER_FLAG_LOCK, means one other thread is reading the waker,
             // we just try to decrease the count, but we should not drop it even ref reach 0
