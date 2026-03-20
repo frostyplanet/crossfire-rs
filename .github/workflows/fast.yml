@@ -18,6 +18,9 @@ jobs:
     - name: Build with default
       run: cargo build --verbose
 
+    - name: Clippy with default
+      run: cargo clippy -- -D warnings
+
     - name: Build with tokio
       run: cargo build -F tokio --verbose
 
