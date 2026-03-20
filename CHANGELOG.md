@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.7] - 2026-03-19
+
+### Added
+
+- oneshot: Add TxOneshot::is_disconnected()
+
 ## [3.1.6] - 2026-03-18
 
 ### Added
