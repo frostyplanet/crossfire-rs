@@ -251,6 +251,16 @@ impl<T> TxOneshot<T> {
         }
         std::mem::forget(self);
     }
+
+    /// return true when RxOneshot is dropped
+    ///
+    /// # Safety
+    ///
+    /// This is not SeqCst, only Acquire, for sender we don't require to know immediately.
+    #[inline]
+    pub fn is_disconnected(&self) -> bool {
+        unsafe { self.0.as_ref() }.state.load(Acquire) & CLOSE_FLAG > 0
+    }
 }
 
 impl<T> Drop for TxOneshot<T> {

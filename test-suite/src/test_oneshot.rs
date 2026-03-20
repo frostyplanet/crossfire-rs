@@ -51,6 +51,7 @@ fn test_oneshot_blocking_drop_tx(setup_log: ()) {
 fn test_oneshot_blocking_drop_rx(setup_log: ()) {
     let (tx, rx) = oneshot::oneshot::<i32>();
     drop(rx);
+    assert!(tx.is_disconnected());
     // send consumes tx, returns ()
     tx.send(42);
 }
