@@ -30,6 +30,15 @@ jobs:
     - name: doc build
       run: cargo doc --all-features
 
+    - name: Clippy with default
+      run: cargo clippy
+
+    - name: Clippy with tokio
+      run: cargo clippy -F tokio
+
+    - name: Clippy with async_std
+      run: cargo clippy -F async_std
+
     - name: Run basic tests with tokio
       run: make test basic
 
