@@ -417,7 +417,7 @@ fn test_waitgroup_inline(setup_log: ()) {
     runtime_block_on!(async move {
         let _wg = wg.clone();
         wg.add();
-        async_spawn!(async move {
+        let th = async_spawn!(async move {
             #[cfg(feature = "time")]
             {
                 sleep(Duration::from_secs(1)).await;
@@ -425,6 +425,7 @@ fn test_waitgroup_inline(setup_log: ()) {
             unsafe { _wg.done() };
         });
         unsafe { wg.wait_async().await };
+        async_join_result!(th);
         assert_eq!(wg.get_left_seqcst(), 0);
     });
 }
