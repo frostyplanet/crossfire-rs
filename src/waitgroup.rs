@@ -3,20 +3,21 @@
 //! is (1 << (usize::BITS - 2) - 2)
 //!
 //! - [WaitGroupInline]: Which embedded inline with its parent structure (with no dereference cost)
-//!   - (Arc or other container should be used to share among threads).
+//!   - (It requires its parent can be accessed by multi thread, for deep embedded scenario)
 //!   - Threshold is const
-//!   - Requires manual ref count manager (add_many(), done_many()).
-//!   - only one waiter thread is allowed.
+//!   - Requires manual ref count manage, ([done()](WaitGroupInline::done) [done_many()](WaitGroupInline::done_many) is unsafe).
+//!   - only one waiter thread is allowed. ([wait()](WaitGroupInline::wait),
+//!     [wait_async()](WaitGroupInline::wait_async) is unsafe)
 //!
 //! - [WaitGroup]: which is a safe RAII guard API.
-//!   - Its a box container, optional state inside may be shared between the threads of WaitGroup and its guards.
-//!   - Only one waiter is allowed.
+//!   - Its a referenced counted container, optional state inside may be shared between the threads of WaitGroup and its guards.
+//!   - Only one waiter is allowed. (`WaitGroup` is `!Sync`)
 //!   - Use [WaitGroup::add_guard()] to get [WaitGroupGuard].
-//!   - `WaitGroupGuard` will increase ref, and drop will decrease ref and protentially wake the main thread.
+//!   - [WaitGroupGuard] has `Clone` (Although `WaitGroup` can not `Clone`)
+//!   - [WaitGroupGuard] drop will decrease ref and protentially wake the main thread.
 //!   - Can change threshold at any time.
-//!   - **NOTE**:
-//!     threshold is carried inside generated [WaitGroupGuard] to minimize the cost of atomic ops.
-//!     When changing threshold to larger value, wait() might not wake up as soon as new threshold reached.
+//!     - **NOTE**: threshold is carried inside generated [WaitGroupGuard] to minimize the cost of atomic ops.
+//!       When changing threshold to larger value, wait() might not wake up as soon as new threshold reached.
 //!
 //! # Safety
 //!
@@ -139,7 +140,7 @@ use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// An unsafe version WaitGroup which does not allocate, must embedded in a parent Arc structure.
+/// An unsafe version WaitGroup which does not allocate, and not dereference cost, must embedded in a shared parent structure.
 ///
 /// # Limitation
 ///
