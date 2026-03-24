@@ -2,8 +2,10 @@
 //!
 //! The optimization assumes a single consumer. The waker registration of the receiver is lossless compared to `mpmc`.
 //!
-//! **NOTE**: For the SC (single consumer) version, [AsyncRx] and [Rx] are not `Clone` and do not implement `Sync`.
-//! Although they can be moved to other threads, they are not allowed to be used with `send`/`recv` while in an `Arc`.
+//! **NOTE**:
+//! - [AsyncRx] and [Rx] are not `Clone` and do not implement `Sync`.
+//!   Although they can be moved to other threads, they are not allowed to be used with `send`/`recv` while in an `Arc`.
+//! - [MAsyncTx] and [MTx] are `Clone` and `Sync`
 //!
 //! The following code is OK:
 //!

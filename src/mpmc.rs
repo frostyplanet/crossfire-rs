@@ -2,7 +2,7 @@
 //!
 //! The optimization assumes multiple consumers. The waker registration of the receiver is less efficient compared to `mpsc`.
 //!
-//! **NOTE**: For the MC (multiple consumer) version, [AsyncRx] and [Rx] are `Clone` and implement `Sync`.
+//! **NOTE**: For the MC (multiple consumer) version, [MAsyncTx], [MAsyncRx], [MTx] and [MRx] are `Clone` and implement `Sync`.
 //! They can be safely used with `send`/`recv` while in an `Arc`.
 //!
 //! # Examples
