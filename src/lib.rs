@@ -96,7 +96,7 @@
 //! <table align="center" cellpadding="20">
 //! <tr> <th rowspan="2"> Context</th><th colspan="2" align="center">Sender (Producer)</th> <th colspan="2" align="center">Receiver (Consumer)</th> </tr>
 //! <tr> <td>Single</td> <td>Multiple</td><td>Single</td><td>Multiple</td></tr>
-//! <tr><td rowspan="2"><b>Blocking</b></td><td colspan="2" align="center"><a href="trait.BlockingTxTrait.html">BlockingTxTrait</a></td>
+//! <tr><td align="center" rowspan="2"><b>Blocking</b></td><td colspan="2" align="center"><a href="trait.BlockingTxTrait.html">BlockingTxTrait</a></td>
 //! <td colspan="2" align="center"><a href="trait.BlockingRxTrait.html">BlockingRxTrait</a></td></tr>
 //! <tr>
 //! <td align="center"><a href="struct.Tx.html">Tx</a></td>
@@ -104,13 +104,14 @@
 //! <td align="center"><a href="struct.Rx.html">Rx</a></td>
 //! <td align="center"><a href="struct.MRx.html">MRx</a></td> </tr>
 //!
-//! <tr><td rowspan="2"><b>Async</b></td>
+//! <tr><td><b>Weak reference</b></td><td></td><td><a href="struct.WeakTx.html">WeakTx</a></td></tr>
+//!
+//! <tr><td align="center" rowspan="2"><b>Async</b></td>
 //! <td colspan="2" align="center"><a href="trait.AsyncTxTrait.html">AsyncTxTrait</a></td>
 //! <td colspan="2" align="center"><a href="trait.AsyncRxTrait.html">AsyncRxTrait</a></td></tr>
 //! <tr><td><a href="struct.AsyncTx.html">AsyncTx</a></td>
 //! <td><a href="struct.MAsyncTx.html">MAsyncTx</a></td><td><a href="struct.AsyncRx.html">AsyncRx</a></td>
 //! <td><a href="struct.MAsyncRx.html">MAsyncRx</a></td></tr>
-//!
 //! </table>
 //!
 //! *Safety*: For the SP / SC version, [AsyncTx], [AsyncRx], [Tx], and [Rx] are not `Clone` and without `Sync`.

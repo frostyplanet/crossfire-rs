@@ -109,16 +109,19 @@ each module has [build()](https://docs.rs/crossfire/latest/crossfire/mpmc/fn.bui
 <table align="center" cellpadding="30">
 <tr> <th rowspan="2"> Context </th><th colspan="2" align="center"> Sender (Producer) </th> <th colspan="2" align="center"> Receiver (Consumer) </th> </tr>
 <tr> <td> Single </td> <td> Multiple </td><td> Single </td><td> Multiple </td></tr>
-<tr><td rowspan="2"> <b>Blocking</b> </td>
+<tr><td align="center" rowspan="2"> <b>Blocking</b> </td>
 <td colspan="2" align="center"> BlockingTxTrait </td>
 <td colspan="2" align="center"> BlockingRxTrait </td></tr>
 <tr>
 <td align="center">Tx </td>
 <td align="center">MTx</td>
 <td align="center">Rx</td>
-<td align="center">MRx</td> </tr>
+<td align="center">MRx</td>
+ </tr>
 
-<tr><td rowspan="2"><b>Async</b></td>
+<tr><td><b>Weak reference</b></td><td></td><td><a>WeakTx</a></td></tr>
+
+<tr><td align="center" rowspan="2"><b>Async</b></td>
 <td colspan="2" align="center">AsyncTxTrait</td>
 <td colspan="2" align="center">AsyncRxTrait</td></tr>
 <tr>
