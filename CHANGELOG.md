@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.8] - 2026-05-04
+
+- Add WeakTx. which can downgrade from or upgrade to MTx / MAsyncTx
+
 ## [3.1.7] - 2026-03-19
 
 ### Added
