@@ -287,6 +287,8 @@ pub use async_tx::*;
 #[allow(private_bounds)]
 mod async_rx;
 pub use async_rx::*;
+mod weak;
+pub use weak::WeakTx;
 
 #[cfg(feature = "compat")]
 pub mod compat;

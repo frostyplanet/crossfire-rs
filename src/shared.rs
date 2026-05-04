@@ -129,6 +129,31 @@ impl<F: Flavor> ChannelShared<F> {
         let _ = self.tx_count.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// for Upgrade of WeakTx
+    #[inline(always)]
+    pub(crate) fn try_add_tx(&self) -> bool {
+        let mut count = self.tx_count.load(Ordering::Relaxed);
+        loop {
+            if count == 0 {
+                return false;
+            }
+            match self.tx_count.compare_exchange(
+                count,
+                count + 1,
+                Ordering::SeqCst,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return true;
+                }
+                Err(_count) => {
+                    count = _count;
+                    std::hint::spin_loop();
+                }
+            }
+        }
+    }
+
     #[inline(always)]
     pub(crate) fn add_rx(&self) {
         // The drop will close_rx, which has release fence

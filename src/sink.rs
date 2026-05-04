@@ -1,6 +1,5 @@
 use crate::shared::*;
-use crate::TrySendError;
-use crate::{AsyncTx, MAsyncTx};
+use crate::{flavor::FlavorMP, AsyncTx, MAsyncTx, TrySendError};
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
@@ -47,7 +46,7 @@ impl<F: Flavor> From<AsyncTx<F>> for AsyncSink<F> {
     }
 }
 
-impl<F: Flavor> From<MAsyncTx<F>> for AsyncSink<F> {
+impl<F: Flavor + FlavorMP> From<MAsyncTx<F>> for AsyncSink<F> {
     #[inline]
     fn from(tx: MAsyncTx<F>) -> Self {
         tx.into_sink()

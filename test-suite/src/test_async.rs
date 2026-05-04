@@ -24,6 +24,24 @@ fn setup_log() {
 
 #[logfn]
 #[rstest]
+fn test_basic_weak(setup_log: ()) {
+    runtime_block_on!(async move {
+        let (tx, rx) = mpsc::bounded_async::<usize>(100);
+        assert_eq!(tx.get_tx_count(), 1);
+        let weak_tx = tx.downgrade();
+        let tx_clone = weak_tx.upgrade::<MAsyncTx<_>>().unwrap();
+        tx_clone.send(1).await.expect("ok");
+        assert_eq!(tx.get_tx_count(), 2);
+        drop(tx);
+        drop(tx_clone);
+        assert!(weak_tx.upgrade::<MAsyncTx<_>>().is_none());
+        assert_eq!(weak_tx.get_tx_count(), 0);
+        drop(rx);
+    });
+}
+
+#[logfn]
+#[rstest]
 #[case(spsc::bounded_async(1))]
 #[case(mpsc::bounded_async(1))]
 #[case(mpmc::bounded_async(1))]

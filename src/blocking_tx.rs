@@ -1,5 +1,6 @@
 use crate::backoff::*;
 use crate::flavor::FlavorMP;
+use crate::weak::WeakTx;
 use crate::{shared::*, trace_log, AsyncTx, MAsyncTx, NotCloneable, SenderType};
 use std::cell::Cell;
 use std::fmt;
@@ -345,6 +346,26 @@ impl<F: Flavor + FlavorMP> MTx<F> {
     #[inline]
     pub fn into_async(self) -> MAsyncTx<F> {
         self.into()
+    }
+
+    /// Get a weak reference of sender.
+    ///
+    /// # Example
+    /// ```
+    /// use crossfire::*;
+    /// let (tx, rx) = mpsc::bounded_blocking::<usize>(100);
+    /// let weak_tx = tx.downgrade();
+    /// assert_eq!(tx.get_tx_count(), 1);
+    /// let tx_clone = weak_tx.upgrade::<MTx<_>>().unwrap();
+    /// assert_eq!(tx.get_tx_count(), 2);
+    /// drop(tx);
+    /// drop(tx_clone);
+    /// assert!(weak_tx.upgrade::<MTx<_>>().is_none());
+    /// assert_eq!(weak_tx.get_tx_count(), 0);
+    /// ```
+    #[inline]
+    pub fn downgrade(&self) -> WeakTx<F> {
+        WeakTx(self.shared.clone())
     }
 }
 

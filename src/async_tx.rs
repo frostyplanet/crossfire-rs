@@ -2,6 +2,7 @@ use crate::flavor::FlavorMP;
 use crate::sink::AsyncSink;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
+use crate::weak::WeakTx;
 use crate::{shared::*, trace_log, MTx, NotCloneable, SenderType, Tx};
 use std::cell::Cell;
 use std::fmt;
@@ -642,14 +643,12 @@ impl<F: Flavor> From<MAsyncTx<F>> for AsyncTx<F> {
     }
 }
 
-impl<F: Flavor + FlavorMP> MAsyncTx<F> {
+impl<F: Flavor> MAsyncTx<F> {
     #[inline]
     pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
         Self(AsyncTx::new(shared))
     }
-}
 
-impl<F: Flavor> MAsyncTx<F> {
     #[inline]
     pub fn into_sink(self) -> AsyncSink<F> {
         AsyncSink::new(self.0)
@@ -658,6 +657,30 @@ impl<F: Flavor> MAsyncTx<F> {
     #[inline]
     pub fn into_blocking(self) -> MTx<F> {
         self.into()
+    }
+
+    /// Get a weak reference of sender.
+    ///
+    /// # Example
+    /// ```
+    /// use crossfire::*;
+    /// let (tx, rx) = mpsc::bounded_async::<usize>(100);
+    /// assert_eq!(tx.get_tx_count(), 1);
+    /// let weak_tx = tx.downgrade();
+    /// let tx_clone = weak_tx.upgrade::<MAsyncTx<_>>().unwrap();
+    /// assert_eq!(tx.get_tx_count(), 2);
+    /// drop(tx);
+    /// drop(tx_clone);
+    /// assert!(weak_tx.upgrade::<MAsyncTx<_>>().is_none());
+    /// assert_eq!(weak_tx.get_tx_count(), 0);
+    /// drop(rx);
+    /// ```
+    #[inline]
+    pub fn downgrade(&self) -> WeakTx<F>
+    where
+        F: FlavorMP,
+    {
+        WeakTx(self.shared.clone())
     }
 }
 
