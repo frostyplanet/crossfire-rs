@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.10] - 2026-05-05
+
+### Fix
+
+- waitgroup: Avoid miri report on stack borrow rule (issue #66)
+
 ## [3.1.9] - 2026-05-05
 
 ### Fix
