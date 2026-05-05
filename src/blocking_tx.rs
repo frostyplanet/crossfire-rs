@@ -97,10 +97,7 @@ impl<F: Flavor> Tx<F> {
     }
 }
 
-impl<F: Flavor> Tx<F>
-where
-    F::Item: Send + 'static,
-{
+impl<F: Flavor> Tx<F> {
     #[inline(always)]
     pub(crate) fn _send_bounded(
         &self, item: &MaybeUninit<F::Item>, deadline: Option<Instant>,
@@ -389,7 +386,7 @@ impl<F: Flavor> Deref for MTx<F> {
 }
 
 /// For writing generic code with MTx & Tx
-pub trait BlockingTxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt::Display {
+pub trait BlockingTxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
     /// Sends a message. This method will block until the message is sent or the channel is closed.
     ///
     /// Returns `Ok(())` on success.
@@ -444,10 +441,7 @@ pub trait BlockingTxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt:
     fn get_wakers_count(&self) -> (usize, usize);
 }
 
-impl<F: Flavor> BlockingTxTrait<F::Item> for Tx<F>
-where
-    F::Item: Send + 'static,
-{
+impl<F: Flavor> BlockingTxTrait<F::Item> for Tx<F> {
     #[inline(always)]
     fn clone_to_vec(self, _count: usize) -> Vec<Self> {
         assert_eq!(_count, 1);
@@ -516,10 +510,7 @@ where
     }
 }
 
-impl<F: Flavor + FlavorMP> BlockingTxTrait<F::Item> for MTx<F>
-where
-    F::Item: Send + 'static,
-{
+impl<F: Flavor + FlavorMP> BlockingTxTrait<F::Item> for MTx<F> {
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         let mut v = Vec::with_capacity(count);
@@ -614,7 +605,7 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MTx<F> {
     }
 }
 
-impl<T: Send + 'static, F: Flavor<Item = T>> SenderType for Tx<F> {
+impl<T, F: Flavor<Item = T>> SenderType for Tx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
@@ -624,7 +615,7 @@ impl<T: Send + 'static, F: Flavor<Item = T>> SenderType for Tx<F> {
 
 impl<F: Flavor> NotCloneable for Tx<F> {}
 
-impl<T: Send + 'static, F: Flavor<Item = T> + FlavorMP> SenderType for MTx<F> {
+impl<T, F: Flavor<Item = T> + FlavorMP> SenderType for MTx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {

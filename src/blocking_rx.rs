@@ -314,7 +314,7 @@ impl<F: Flavor> From<MAsyncRx<F>> for MRx<F> {
 }
 
 /// For writing generic code with MRx & Rx
-pub trait BlockingRxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt::Display {
+pub trait BlockingRxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
     /// Receives a message from the channel. This method will block until a message is received or the channel is closed.
     ///
     /// Returns `Ok(T)` on success.
@@ -369,11 +369,7 @@ pub trait BlockingRxTrait<T: Send + 'static>: Send + 'static + fmt::Debug + fmt:
     fn get_wakers_count(&self) -> (usize, usize);
 }
 
-impl<F> BlockingRxTrait<F::Item> for Rx<F>
-where
-    F: Flavor,
-    F::Item: Send + 'static,
-{
+impl<F: Flavor> BlockingRxTrait<F::Item> for Rx<F> {
     #[inline(always)]
     fn clone_to_vec(self, _count: usize) -> Vec<Self> {
         assert_eq!(_count, 1);
@@ -443,7 +439,6 @@ where
 impl<F> BlockingRxTrait<F::Item> for MRx<F>
 where
     F: Flavor + FlavorMC,
-    F::Item: Send + 'static,
 {
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
@@ -538,7 +533,7 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MRx<F> {
     }
 }
 
-impl<T: Send + 'static, F: Flavor<Item = T>> ReceiverType for Rx<F> {
+impl<T, F: Flavor<Item = T>> ReceiverType for Rx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
@@ -551,7 +546,6 @@ impl<F: Flavor> NotCloneable for Rx<F> {}
 impl<F> ReceiverType for MRx<F>
 where
     F: Flavor + FlavorMC,
-    F::Item: Send + 'static,
 {
     type Flavor = F;
 
