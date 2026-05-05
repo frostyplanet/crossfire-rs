@@ -55,7 +55,7 @@ impl<F: Flavor + FlavorMP> From<MAsyncTx<F>> for AsyncSink<F> {
 
 impl<F: Flavor> AsyncSink<F>
 where
-    F::Item: Send + 'static + Unpin,
+    F::Item: Unpin,
 {
     /// `poll_send()` will try to send a message.
     /// If the channel is full, it will register a notification for the next poll.

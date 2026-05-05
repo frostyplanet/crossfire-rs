@@ -111,10 +111,7 @@ impl<F: Flavor> AsyncTx<F> {
     }
 }
 
-impl<F: Flavor> AsyncTx<F>
-where
-    F::Item: Send + 'static + Unpin,
-{
+impl<F: Flavor> AsyncTx<F> {
     /// Sends a message. This method will await until the message is sent or the channel is closed.
     ///
     /// This function is cancellation-safe, so it's safe to use with `timeout()` and the `select!` macro.
@@ -305,7 +302,7 @@ pub struct SendFuture<'a, F: Flavor> {
     waker: Option<<F::Send as Registry>::Waker>,
 }
 
-unsafe impl<F: Flavor> Send for SendFuture<'_, F> {}
+unsafe impl<F: Flavor> Send for SendFuture<'_, F> where F::Item: Send {}
 
 impl<F: Flavor> Drop for SendFuture<'_, F> {
     #[inline]
@@ -321,7 +318,7 @@ impl<F: Flavor> Drop for SendFuture<'_, F> {
 
 impl<F: Flavor> Future for SendFuture<'_, F>
 where
-    F::Item: Send + 'static + Unpin,
+    F::Item: Unpin,
 {
     type Output = Result<(), SendError<F::Item>>;
 
@@ -421,9 +418,7 @@ where
 }
 
 /// For writing generic code with MAsyncTx & AsyncTx
-pub trait AsyncTxTrait<T: Send + 'static + Unpin>:
-    Send + 'static + fmt::Debug + fmt::Display
-{
+pub trait AsyncTxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
     /// Try to send message, non-blocking
     ///
     /// Returns `Ok(())` when successful.
@@ -511,10 +506,7 @@ pub trait AsyncTxTrait<T: Send + 'static + Unpin>:
         T: Send + 'static + Unpin;
 }
 
-impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F>
-where
-    F::Item: Send + 'static + Unpin,
-{
+impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F> {
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         assert_eq!(count, 1);
@@ -701,10 +693,7 @@ impl<F: Flavor> From<MTx<F>> for MAsyncTx<F> {
     }
 }
 
-impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F>
-where
-    F::Item: Send + 'static + Unpin,
-{
+impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F> {
     #[inline(always)]
     fn clone_to_vec(self, count: usize) -> Vec<Self> {
         let mut v = Vec::with_capacity(count);
@@ -818,7 +807,7 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MAsyncTx<F> {
     }
 }
 
-impl<T: Send + 'static, F: Flavor<Item = T>> SenderType for AsyncTx<F> {
+impl<T, F: Flavor<Item = T>> SenderType for AsyncTx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
@@ -828,7 +817,7 @@ impl<T: Send + 'static, F: Flavor<Item = T>> SenderType for AsyncTx<F> {
 
 impl<F: Flavor> NotCloneable for AsyncTx<F> {}
 
-impl<T: Send + 'static, F: Flavor<Item = T> + FlavorMP> SenderType for MAsyncTx<F> {
+impl<T, F: Flavor<Item = T> + FlavorMP> SenderType for MAsyncTx<F> {
     type Flavor = F;
     #[inline(always)]
     fn new(shared: Arc<ChannelShared<F>>) -> Self {
