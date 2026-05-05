@@ -191,7 +191,8 @@ impl<const THRESHOLD: usize> WaitGroupInline<THRESHOLD> {
     ///
     /// You have to be careful for underflow, which will panic
     pub unsafe fn done(&self) -> bool {
-        self.inner.done::<false>(1, THRESHOLD)
+        let p = &self.inner as *const WaitGroupInner<()>;
+        WaitGroupInner::<()>::done::<false>(p, 1, THRESHOLD)
     }
 
     /// Decrease multiple count, if it reduced to zero, will waking the waiter thread.
@@ -203,7 +204,8 @@ impl<const THRESHOLD: usize> WaitGroupInline<THRESHOLD> {
     /// You have to be careful for underflow, which will panic
     pub unsafe fn done_many(&self, count: usize) -> bool {
         debug_assert!(count < COUNT_MASK - 2);
-        self.inner.done::<false>(count, THRESHOLD)
+        let p = &self.inner as *const WaitGroupInner<()>;
+        WaitGroupInner::<()>::done::<false>(p, count, THRESHOLD)
     }
 
     /// If the ref count reaches zero, return `Ok(())`, otherwise `Err(())`
@@ -592,9 +594,9 @@ impl<T> WaitGroupInner<T> {
 
     #[inline(always)]
     unsafe fn done_ptr(p: NonNull<Self>, count: usize, threshold: usize) -> bool {
-        let this = unsafe { p.as_ref() };
-        if this.done::<true>(count, threshold) {
-            let _ = unsafe { Box::from_raw(p.as_ptr()) };
+        let _p = p.as_ptr();
+        if Self::done::<true>(_p, count, threshold) {
+            let _ = unsafe { Box::from_raw(_p) };
             return true;
         } else {
             false
@@ -603,62 +605,64 @@ impl<T> WaitGroupInner<T> {
 
     /// return true to allow drop
     #[inline]
-    fn done<const OWNER_SHIP: bool>(&self, count: usize, threshold: usize) -> bool {
+    fn done<const OWNER_SHIP: bool>(this: *const Self, count: usize, threshold: usize) -> bool {
         trace_log!("wg:({:?}) enter done {count} {threshold}", tokio_task_id!());
-        let mut state = self.state.load(Relaxed);
-        loop {
-            let mut s = State::new(state);
-            if OWNER_SHIP && s.is_last(count) {
-                // in case non SeqCst read old value, double check with SeqCst
-                let _state = self.state.load(SeqCst);
-                if _state == state {
-                    trace_log!("wg:({:?}) done drop {count} {threshold}", tokio_task_id!());
-                    return true;
+        unsafe {
+            let mut state = (*this).state.load(Relaxed);
+            loop {
+                let mut s = State::new(state);
+                if OWNER_SHIP && s.is_last(count) {
+                    // in case non SeqCst read old value, double check with SeqCst
+                    let _state = (*this).state.load(SeqCst);
+                    if _state == state {
+                        trace_log!("wg:({:?}) done drop {count} {threshold}", tokio_task_id!());
+                        return true;
+                    }
+                    state = _state;
+                    continue;
                 }
-                state = _state;
-                continue;
-            }
-            // NOTE: When flag == WAKER_FLAG_LOCK, means one other thread is reading the waker,
-            // we just try to decrease the count, but we should not drop it even ref reach 0
-            let try_lock = s.try_done(count, threshold);
-            if try_lock {
-                debug_assert!(s.is_locked());
-            }
-            match self.state.compare_exchange_weak(state, s.to_usize(), SeqCst, Acquire) {
-                Ok(_) => {
-                    if try_lock {
-                        let o_waker = self.get_waker().take();
-                        // Probably the last chance to check state, should use SeqCst to unlock.
-                        // ref count may reach 0, means I'm the last one.
-                        if OWNER_SHIP {
-                            let old = self.state.fetch_and(!WAKER_FLAG_MASK, SeqCst);
-                            if old & COUNT_MASK == 0 {
+                // NOTE: When flag == WAKER_FLAG_LOCK, means one other thread is reading the waker,
+                // we just try to decrease the count, but we should not drop it even ref reach 0
+                let try_lock = s.try_done(count, threshold);
+                if try_lock {
+                    debug_assert!(s.is_locked());
+                }
+                match (*this).state.compare_exchange_weak(state, s.to_usize(), SeqCst, Acquire) {
+                    Ok(_) => {
+                        if try_lock {
+                            let o_waker = (*this).get_waker().take();
+                            // Probably the last chance to check state, should use SeqCst to unlock.
+                            // ref count may reach 0, means I'm the last one.
+                            if OWNER_SHIP {
+                                let old = (*this).state.fetch_and(!WAKER_FLAG_MASK, SeqCst);
+                                if old & COUNT_MASK == 0 {
+                                    trace_log!(
+                                        "wg:({:?}) done locked drop cur {count} = 0",
+                                        tokio_task_id!(),
+                                    );
+                                    // Safety: we had the lock, won't be others change the waker,
+                                    // we are the last one, don't need to actually wake, just destroy.
+                                    return true;
+                                }
+                            } else {
+                                (*this).state.fetch_and(!WAKER_FLAG_MASK, Release);
+                            }
+                            if let Some(waker) = o_waker {
                                 trace_log!(
-                                    "wg:({:?}) done locked drop cur {count} = 0",
+                                    "wg:({:?}) done waked {count} -> {} <= {threshold}",
                                     tokio_task_id!(),
+                                    s.count()
                                 );
-                                // Safety: we had the lock, won't be others change the waker,
-                                // we are the last one, don't need to actually wake, just destroy.
-                                return true;
+                                waker.wake();
                             }
                         } else {
-                            self.state.fetch_and(!WAKER_FLAG_MASK, Release);
+                            trace_log!("wg:({:?}) done {count} -> {}", tokio_task_id!(), s.count());
                         }
-                        if let Some(waker) = o_waker {
-                            trace_log!(
-                                "wg:({:?}) done waked {count} -> {} <= {threshold}",
-                                tokio_task_id!(),
-                                s.count()
-                            );
-                            waker.wake();
-                        }
-                    } else {
-                        trace_log!("wg:({:?}) done {count} -> {}", tokio_task_id!(), s.count());
+                        return false;
                     }
-                    return false;
-                }
-                Err(cur) => {
-                    state = cur;
+                    Err(cur) => {
+                        state = cur;
+                    }
                 }
             }
         }
@@ -933,7 +937,6 @@ impl State {
 mod tests {
     use super::*;
     use captains_log::{recipe, ConsoleTarget, Level};
-    use std::sync::Arc;
     use std::thread;
 
     #[test]
@@ -1060,15 +1063,17 @@ mod tests {
         assert_eq!(s.waker_flag(), WAKER_FLAG_SET);
         assert_eq!(inner.count(SeqCst), 2);
 
+        let p = &inner as *const WaitGroupInner<()>;
+
         println!("test done triggering wakeup");
-        assert!(!inner.done::<false>(1, 1));
+        assert!(!WaitGroupInner::<()>::done::<false>(p, 1, 1));
         {
             assert_eq!(inner.count(SeqCst), 1);
             let s = State::new(inner.state.load(Ordering::SeqCst));
             assert_eq!(s.waker_flag(), 0);
         }
         println!("test done last");
-        inner.done::<false>(1, 0);
+        WaitGroupInner::<()>::done::<false>(p, 1, 0);
         assert_eq!(inner.count(Ordering::SeqCst), 0)
     }
 }
