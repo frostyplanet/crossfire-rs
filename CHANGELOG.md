@@ -15,7 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.9] - 2026-05-05
+
+### Fix
+
+- Reduce Send requirement in generic (issue #64), which makes the error prompt cleaner
+
 ## [3.1.8] - 2026-05-04
+
+### Added
 
 - Add WeakTx. which can downgrade from or upgrade to MTx / MAsyncTx
 
