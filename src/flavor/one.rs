@@ -23,25 +23,19 @@ pub struct One<T> {
     slots: [Slot<T>; 2],
 }
 
-unsafe impl<T: Send> Sync for One<T> {}
-unsafe impl<T: Send> Send for One<T> {}
+unsafe impl<T> Sync for One<T> {}
+unsafe impl<T> Send for One<T> {}
 
 impl<T> Queue for One<T> {
     type Item = T;
 
     #[inline(always)]
-    fn pop(&self) -> Option<T>
-    where
-        T: Send,
-    {
+    fn pop(&self) -> Option<T> {
         self._pop(Ordering::SeqCst)
     }
 
     #[inline(always)]
-    fn push(&self, item: T) -> Result<(), T>
-    where
-        T: Send,
-    {
+    fn push(&self, item: T) -> Result<(), T> {
         let _item = MaybeUninit::new(item);
         if unsafe { self._try_push(SeqCst, _item.as_ptr(), Acquire).is_ok() } {
             Ok(())

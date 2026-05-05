@@ -16,18 +16,12 @@ impl<T> Queue for List<T> {
     type Item = T;
 
     #[inline(always)]
-    fn pop(&self) -> Option<T>
-    where
-        T: Send,
-    {
+    fn pop(&self) -> Option<T> {
         self.0.pop::<false>()
     }
 
     #[inline(always)]
-    fn push(&self, item: T) -> Result<(), T>
-    where
-        T: Send,
-    {
+    fn push(&self, item: T) -> Result<(), T> {
         self.0.push(item);
         Ok(())
     }

@@ -23,18 +23,12 @@ impl<T> Queue for ArraySpsc<T> {
     type Item = T;
 
     #[inline(always)]
-    fn pop(&self) -> Option<T>
-    where
-        T: Send,
-    {
+    fn pop(&self) -> Option<T> {
         self.0.pop(true)
     }
 
     #[inline(always)]
-    fn push(&self, item: T) -> Result<(), T>
-    where
-        T: Send,
-    {
+    fn push(&self, item: T) -> Result<(), T> {
         let _item = MaybeUninit::new(item);
         if unsafe { self.0.push_with_ptr_final(_item.as_ptr()) } {
             Ok(())

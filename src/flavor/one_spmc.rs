@@ -309,18 +309,12 @@ impl<T> Queue for OneSpsc<T> {
     }
 
     #[inline(always)]
-    fn pop(&self) -> Option<T>
-    where
-        T: Send,
-    {
+    fn pop(&self) -> Option<T> {
         self._pop(Ordering::SeqCst)
     }
 
     #[inline]
-    fn push(&self, value: T) -> Result<(), T>
-    where
-        T: Send,
-    {
+    fn push(&self, value: T) -> Result<(), T> {
         let item = MaybeUninit::new(value);
         if self.try_push(item.as_ptr(), Ordering::SeqCst) {
             Ok(())

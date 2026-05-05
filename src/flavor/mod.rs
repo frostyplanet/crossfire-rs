@@ -43,13 +43,9 @@ impl Default for Token {
 pub trait Queue {
     type Item;
 
-    fn pop(&self) -> Option<Self::Item>
-    where
-        Self::Item: Send;
+    fn pop(&self) -> Option<Self::Item>;
 
-    fn push(&self, item: Self::Item) -> Result<(), Self::Item>
-    where
-        Self::Item: Send;
+    fn push(&self, item: Self::Item) -> Result<(), Self::Item>;
 
     fn len(&self) -> usize;
 
@@ -101,12 +97,12 @@ pub(crate) trait FlavorSelect: Queue {
 macro_rules! queue_dispatch {
     ($wrap_method: ident)=>{
         #[inline(always)]
-        fn pop(&self) -> Option<Self::Item> where Self::Item: Send {
+        fn pop(&self) -> Option<Self::Item> {
             $wrap_method!(self, pop)
         }
 
         #[inline(always)]
-        fn push(&self, item: Self::Item) -> Result<(), Self::Item> where Self::Item: Send {
+        fn push(&self, item: Self::Item) -> Result<(), Self::Item> {
             $wrap_method!(self, push item)
         }
 

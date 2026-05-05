@@ -17,25 +17,19 @@ pub struct OneMpsc<T> {
     slots: [Slot<T>; 2],
 }
 
-unsafe impl<T: Send> Sync for OneMpsc<T> {}
-unsafe impl<T: Send> Send for OneMpsc<T> {}
+unsafe impl<T> Sync for OneMpsc<T> {}
+unsafe impl<T> Send for OneMpsc<T> {}
 
 impl<T> Queue for OneMpsc<T> {
     type Item = T;
 
     #[inline(always)]
-    fn pop(&self) -> Option<T>
-    where
-        T: Send,
-    {
+    fn pop(&self) -> Option<T> {
         self._pop(Ordering::SeqCst)
     }
 
     #[inline(always)]
-    fn push(&self, item: T) -> Result<(), T>
-    where
-        T: Send,
-    {
+    fn push(&self, item: T) -> Result<(), T> {
         let _item = MaybeUninit::new(item);
         if unsafe { self._try_push(SeqCst, _item.as_ptr(), Acquire).is_ok() } {
             Ok(())
