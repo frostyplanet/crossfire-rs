@@ -418,7 +418,7 @@ where
 }
 
 /// For writing generic code with MAsyncTx & AsyncTx
-pub trait AsyncTxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
+pub trait AsyncTxTrait<T>: fmt::Debug + fmt::Display {
     /// Try to send message, non-blocking
     ///
     /// Returns `Ok(())` when successful.
@@ -503,6 +503,88 @@ pub trait AsyncTxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
 }
 
 impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F> {
+    #[inline(always)]
+    fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
+        AsyncTx::try_send(self, item)
+    }
+
+    #[inline(always)]
+    fn send(&self, item: F::Item) -> impl Future<Output = Result<(), SendError<F::Item>>> + Send
+    where
+        F::Item: Send + 'static + Unpin,
+    {
+        AsyncTx::send(self, item)
+    }
+
+    #[cfg(any(feature = "tokio", feature = "async_std"))]
+    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
+    #[inline(always)]
+    fn send_timeout<'a>(
+        &'a self, item: F::Item, duration: std::time::Duration,
+    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
+    where
+        F::Item: Send + 'static + Unpin,
+    {
+        AsyncTx::send_timeout(self, item, duration)
+    }
+
+    #[inline(always)]
+    fn send_with_timer<FR, R>(
+        &self, item: F::Item, fut: FR,
+    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
+    where
+        FR: Future<Output = R>,
+        F::Item: Send + 'static + Unpin,
+    {
+        AsyncTx::send_with_timer(self, item, fut)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    /// The capacity of the channel, return None for unbounded channel.
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        self.as_ref().capacity()
+    }
+
+    /// Whether channel is empty at the moment
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
+    /// Whether the channel is full at the moment
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.as_ref().get_rx_count() == 0
+    }
+
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.as_ref().get_tx_count()
+    }
+
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        self.as_ref().get_rx_count()
+    }
+
+    fn get_wakers_count(&self) -> (usize, usize) {
+        self.as_ref().get_wakers_count()
+    }
+}
+
+impl<F: Flavor> AsyncTxTrait<F::Item> for &AsyncTx<F> {
     #[inline(always)]
     fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
         AsyncTx::try_send(self, item)
@@ -684,6 +766,88 @@ impl<F: Flavor> From<MTx<F>> for MAsyncTx<F> {
 }
 
 impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F> {
+    #[inline(always)]
+    fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
+        self.0.try_send(item)
+    }
+
+    #[inline(always)]
+    fn send(&self, item: F::Item) -> impl Future<Output = Result<(), SendError<F::Item>>> + Send
+    where
+        F::Item: Send + 'static + Unpin,
+    {
+        self.0.send(item)
+    }
+
+    #[cfg(any(feature = "tokio", feature = "async_std"))]
+    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
+    #[inline(always)]
+    fn send_timeout<'a>(
+        &'a self, item: F::Item, duration: std::time::Duration,
+    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
+    where
+        F::Item: Send + 'static + Unpin,
+    {
+        self.0.send_timeout(item, duration)
+    }
+
+    #[inline(always)]
+    fn send_with_timer<FR, R>(
+        &self, item: F::Item, fut: FR,
+    ) -> impl Future<Output = Result<(), SendTimeoutError<F::Item>>> + Send
+    where
+        FR: Future<Output = R>,
+        F::Item: Send + 'static + Unpin,
+    {
+        self.0.send_with_timer::<FR, R>(item, fut)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    /// The capacity of the channel, return None for unbounded channel.
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        self.as_ref().capacity()
+    }
+
+    /// Whether channel is empty at the moment
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
+    /// Whether the channel is full at the moment
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.as_ref().get_rx_count() == 0
+    }
+
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.as_ref().get_tx_count()
+    }
+
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        self.as_ref().get_rx_count()
+    }
+
+    fn get_wakers_count(&self) -> (usize, usize) {
+        self.as_ref().get_wakers_count()
+    }
+}
+
+impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for &MAsyncTx<F> {
     #[inline(always)]
     fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
         self.0.try_send(item)

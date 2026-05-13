@@ -424,23 +424,88 @@ impl<F: Flavor> fmt::Display for Multiplex<F> {
     }
 }
 
-impl<F: Flavor> BlockingRxTrait<F::Item> for Multiplex<F>
-where
-    F::Item: Send + 'static,
-{
+impl<F: Flavor> BlockingRxTrait<F::Item> for Multiplex<F> {
     #[inline(always)]
     fn recv(&self) -> Result<F::Item, RecvError> {
-        Self::recv(self)
+        Multiplex::recv(self)
     }
 
     #[inline(always)]
     fn try_recv(&self) -> Result<F::Item, TryRecvError> {
-        Self::try_recv(self)
+        Multiplex::try_recv(self)
     }
 
     #[inline(always)]
     fn recv_timeout(&self, timeout: Duration) -> Result<F::Item, RecvTimeoutError> {
-        Self::recv_timeout(self, timeout)
+        Multiplex::recv_timeout(self, timeout)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        0
+    }
+
+    /// always return None
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        None
+    }
+
+    /// Returns true when all the channel's empty
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        for handle in &self.handlers {
+            if !handle.shared.is_empty() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Not practical to impl
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        false
+    }
+
+    /// Return true if all sender has been close
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.get_tx_count() == 0
+    }
+
+    /// NOTE: it does not count all the clones to the senders
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.waker.get_opened_count()
+    }
+
+    /// This is single consumer
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        1
+    }
+
+    fn get_wakers_count(&self) -> (usize, usize) {
+        (0, 0)
+    }
+}
+
+impl<F: Flavor> BlockingRxTrait<F::Item> for &Multiplex<F> {
+    #[inline(always)]
+    fn recv(&self) -> Result<F::Item, RecvError> {
+        Multiplex::recv(self)
+    }
+
+    #[inline(always)]
+    fn try_recv(&self) -> Result<F::Item, TryRecvError> {
+        Multiplex::try_recv(self)
+    }
+
+    #[inline(always)]
+    fn recv_timeout(&self, timeout: Duration) -> Result<F::Item, RecvTimeoutError> {
+        Multiplex::recv_timeout(self, timeout)
     }
 
     /// The number of messages in the channel at the moment

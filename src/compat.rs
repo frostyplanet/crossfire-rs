@@ -14,13 +14,13 @@
 //!
 //! - In the legacy API, the sender/receiver types had erased the signature between bounded or unbounded channels
 //! - The low level queue implement is for MPMC regardless of MPSC/SPSC model (which is exactly the
-//! same with V2.1)
+//!   same with V2.1)
 //! - The module structure in `crossfire::compat::*`, is exactly the same as v2.x `crossfire::*`.
 //!
 //! # Incompatible notes
 //!
 //! - keeping Into<AsyncStream<T, F>> for `AsyncRxTrait<T>` is not possible, due to `AsyncRxTrait<T>`
-//! is erased out Flavor parameter, so we add `AsyncRxTrait::to_stream()` which returns `Pin<Box<dyn futures_core::stream::Stream<Item = T>>>`.
+//!   is erased out Flavor parameter, so we remove this method.
 //!
 //! # The reason of complete API refactor
 //!
@@ -35,28 +35,28 @@
 //!
 //! From the aspect of compiler:
 //! - In blocking context, the compiler can eliminate the unused branch according to the context,
-//! and keeping the function calls inline, unless you put multiple variant of enum together into a
-//! collection.
+//!   and keeping the function calls inline, unless you put multiple variant of enum together into a
+//!   collection.
 //! - In async context, the compiler is ignorance, since most of the async code is indirect calls.
-//! We can see in generated asm from cargo-show-asm, even you initialize the channel with ArrayQueue, there's still
-//! SeqQueue match branch inside the `RecvFuture::poll()`. What's worse when we have 4 types
-//! variant in the flavor enum, the compiler think the internal queue ops function no longer worth
-//! to inline (because overall flatten code will be too big), and the match branch might fallen
-//! back to a big match table instead of simple comparison. This is the reason of performance regression.
+//!   We can see in generated asm from cargo-show-asm, even you initialize the channel with ArrayQueue, there's still
+//!   SeqQueue match branch inside the `RecvFuture::poll()`. What's worse when we have 4 types
+//!   variant in the flavor enum, the compiler think the internal queue ops function no longer worth
+//!   to inline (because overall flatten code will be too big), and the match branch might fallen
+//!   back to a big match table instead of simple comparison. This is the reason of performance regression.
 //!
 //! From the aspect of CPU:
 //! - I had tried a manual Vtable by putting method ptr inside AsyncTx/AsyncRx, which is ok on X86,
-//! but Arm will have -50% penalty. It looks like Arm is poor on loading / caching function ptr.
+//!   but Arm will have -50% penalty. It looks like Arm is poor on loading / caching function ptr.
 //! - Generic Arm CPU has overall poor performance (1/3 ~ 1/2) compared to mainstream x86_64, and
-//! bad at atomic CAS, a big match branch might be not so obvious than the positive effect from
-//! changing some CAS to direct load/store in the lockless algorithm.
+//!   bad at atomic CAS, a big match branch might be not so obvious than the positive effect from
+//!   changing some CAS to direct load/store in the lockless algorithm.
 //!
 //! From the aspect of API usage:
 //! - There're already nice native select mechanisms on async ecology, we don't have to worry about the
-//! difference of receiver types, for flexibility.
+//!   difference of receiver types, for flexibility.
 //! - For blocking context, it might be more common scenario to select from the same type of channels for efficiency.
 //! - The crossbeam implementation of select is decouple from channel types and message type, which
-//! means the API is possible for crossfire too.
+//!   means the API is possible for crossfire too.
 
 use crate::flavor::{
     flavor_dispatch, flavor_select_dispatch, queue_dispatch, Flavor, FlavorImpl, FlavorMC,

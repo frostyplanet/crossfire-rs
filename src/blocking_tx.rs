@@ -386,7 +386,7 @@ impl<F: Flavor> Deref for MTx<F> {
 }
 
 /// For writing generic code with MTx & Tx
-pub trait BlockingTxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
+pub trait BlockingTxTrait<T>: fmt::Debug + fmt::Display {
     /// Sends a message. This method will block until the message is sent or the channel is closed.
     ///
     /// Returns `Ok(())` on success.
@@ -500,7 +500,133 @@ impl<F: Flavor> BlockingTxTrait<F::Item> for Tx<F> {
     }
 }
 
+impl<F: Flavor> BlockingTxTrait<F::Item> for &Tx<F> {
+    #[inline(always)]
+    fn send(&self, item: F::Item) -> Result<(), SendError<F::Item>> {
+        Tx::send(self, item)
+    }
+
+    #[inline(always)]
+    fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
+        Tx::try_send(self, item)
+    }
+
+    #[inline(always)]
+    fn send_timeout(
+        &self, item: F::Item, timeout: Duration,
+    ) -> Result<(), SendTimeoutError<F::Item>> {
+        Tx::send_timeout(self, item, timeout)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    /// The capacity of the channel, return None for unbounded channel.
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        self.as_ref().capacity()
+    }
+
+    /// Whether channel is empty at the moment
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
+    /// Whether the channel is full at the moment
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.as_ref().get_rx_count() == 0
+    }
+
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.as_ref().get_tx_count()
+    }
+
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        self.as_ref().get_rx_count()
+    }
+
+    fn get_wakers_count(&self) -> (usize, usize) {
+        self.as_ref().get_wakers_count()
+    }
+}
+
 impl<F: Flavor + FlavorMP> BlockingTxTrait<F::Item> for MTx<F> {
+    #[inline(always)]
+    fn send(&self, item: F::Item) -> Result<(), SendError<F::Item>> {
+        self.0.send(item)
+    }
+
+    #[inline(always)]
+    fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
+        self.0.try_send(item)
+    }
+
+    #[inline(always)]
+    fn send_timeout(
+        &self, item: F::Item, timeout: Duration,
+    ) -> Result<(), SendTimeoutError<F::Item>> {
+        self.0.send_timeout(item, timeout)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    /// The capacity of the channel, return None for unbounded channel.
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        self.as_ref().capacity()
+    }
+
+    /// Whether channel is empty at the moment
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
+    /// Whether the channel is full at the moment
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.as_ref().get_rx_count() == 0
+    }
+
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.as_ref().get_tx_count()
+    }
+
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        self.as_ref().get_rx_count()
+    }
+
+    fn get_wakers_count(&self) -> (usize, usize) {
+        self.as_ref().get_wakers_count()
+    }
+}
+
+impl<F: Flavor + FlavorMP> BlockingTxTrait<F::Item> for &MTx<F> {
     #[inline(always)]
     fn send(&self, item: F::Item) -> Result<(), SendError<F::Item>> {
         self.0.send(item)

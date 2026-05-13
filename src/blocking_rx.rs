@@ -314,7 +314,7 @@ impl<F: Flavor> From<MAsyncRx<F>> for MRx<F> {
 }
 
 /// For writing generic code with MRx & Rx
-pub trait BlockingRxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
+pub trait BlockingRxTrait<T>: fmt::Debug + fmt::Display {
     /// Receives a message from the channel. This method will block until a message is received or the channel is closed.
     ///
     /// Returns `Ok(T)` on success.
@@ -426,7 +426,132 @@ impl<F: Flavor> BlockingRxTrait<F::Item> for Rx<F> {
     }
 }
 
+impl<F: Flavor> BlockingRxTrait<F::Item> for &Rx<F> {
+    #[inline(always)]
+    fn recv(&self) -> Result<F::Item, RecvError> {
+        Rx::recv(self)
+    }
+
+    #[inline(always)]
+    fn try_recv(&self) -> Result<F::Item, TryRecvError> {
+        Rx::try_recv(self)
+    }
+
+    #[inline(always)]
+    fn recv_timeout(&self, timeout: Duration) -> Result<F::Item, RecvTimeoutError> {
+        Rx::recv_timeout(self, timeout)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    /// The capacity of the channel, return None for unbounded channel.
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        self.as_ref().capacity()
+    }
+
+    /// Whether channel is empty at the moment
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
+    /// Whether the channel is full at the moment
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.as_ref().is_tx_closed()
+    }
+
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.as_ref().get_tx_count()
+    }
+
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        self.as_ref().get_rx_count()
+    }
+
+    fn get_wakers_count(&self) -> (usize, usize) {
+        self.as_ref().get_wakers_count()
+    }
+}
+
 impl<F> BlockingRxTrait<F::Item> for MRx<F>
+where
+    F: Flavor + FlavorMC,
+{
+    #[inline(always)]
+    fn recv(&self) -> Result<F::Item, RecvError> {
+        self.0.recv()
+    }
+
+    #[inline(always)]
+    fn try_recv(&self) -> Result<F::Item, TryRecvError> {
+        self.0.try_recv()
+    }
+
+    #[inline(always)]
+    fn recv_timeout(&self, timeout: Duration) -> Result<F::Item, RecvTimeoutError> {
+        self.0.recv_timeout(timeout)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    /// The capacity of the channel, return None for unbounded channel.
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        self.as_ref().capacity()
+    }
+
+    /// Whether channel is empty at the moment
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
+    /// Whether the channel is full at the moment
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.as_ref().is_tx_closed()
+    }
+
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.as_ref().get_tx_count()
+    }
+
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        self.as_ref().get_rx_count()
+    }
+
+    fn get_wakers_count(&self) -> (usize, usize) {
+        self.as_ref().get_wakers_count()
+    }
+}
+
+impl<F> BlockingRxTrait<F::Item> for &MRx<F>
 where
     F: Flavor + FlavorMC,
 {

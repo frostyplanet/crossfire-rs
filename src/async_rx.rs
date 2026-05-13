@@ -4,6 +4,7 @@ use crate::stream::AsyncStream;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
 use crate::{shared::*, trace_log, MRx, NotCloneable, ReceiverType, Rx};
+use futures_core::Stream;
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -108,6 +109,13 @@ impl<F: Flavor> AsyncRx<F> {
     #[inline]
     pub fn into_blocking(self) -> Rx<F> {
         self.into()
+    }
+}
+
+impl<F: Flavor> From<AsyncRx<F>> for Pin<Box<dyn Stream<Item = F::Item>>> {
+    #[inline]
+    fn from(val: AsyncRx<F>) -> Self {
+        Box::pin(val.into_stream())
     }
 }
 
@@ -409,7 +417,7 @@ where
 }
 
 /// For writing generic code with MAsyncRx & AsyncRx
-pub trait AsyncRxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
+pub trait AsyncRxTrait<T>: fmt::Debug + fmt::Display {
     /// Receive message, will await when channel is empty.
     ///
     /// Returns `Ok(T)` when successful.
@@ -485,8 +493,6 @@ pub trait AsyncRxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
     /// Return the number of receivers
     fn get_rx_count(&self) -> usize;
 
-    fn to_stream(self) -> Pin<Box<dyn futures_core::stream::Stream<Item = T>>>;
-
     fn get_wakers_count(&self) -> (usize, usize);
 }
 
@@ -560,9 +566,79 @@ impl<F: Flavor> AsyncRxTrait<F::Item> for AsyncRx<F> {
         self.as_ref().get_rx_count()
     }
 
+    fn get_wakers_count(&self) -> (usize, usize) {
+        self.as_ref().get_wakers_count()
+    }
+}
+
+impl<F: Flavor> AsyncRxTrait<F::Item> for &AsyncRx<F> {
     #[inline(always)]
-    fn to_stream(self) -> Pin<Box<dyn futures_core::stream::Stream<Item = F::Item>>> {
-        Box::pin(self.into_stream())
+    fn recv(&self) -> impl Future<Output = Result<F::Item, RecvError>> + Send {
+        AsyncRx::recv(self)
+    }
+
+    #[cfg(any(feature = "tokio", feature = "async_std"))]
+    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
+    #[inline(always)]
+    fn recv_timeout(
+        &self, duration: std::time::Duration,
+    ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send {
+        AsyncRx::recv_timeout(self, duration)
+    }
+
+    #[inline(always)]
+    fn recv_with_timer<FR, R>(
+        &self, sleep: FR,
+    ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send
+    where
+        FR: Future<Output = R>,
+    {
+        AsyncRx::recv_with_timer(self, sleep)
+    }
+
+    #[inline(always)]
+    fn try_recv(&self) -> Result<F::Item, TryRecvError> {
+        AsyncRx::<F>::try_recv(self)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    /// The capacity of the channel, return None for unbounded channel.
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        self.as_ref().capacity()
+    }
+
+    /// Whether channel is empty at the moment
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
+    /// Whether the channel is full at the moment
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.as_ref().get_tx_count() == 0
+    }
+
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.as_ref().get_tx_count()
+    }
+
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        self.as_ref().get_rx_count()
     }
 
     fn get_wakers_count(&self) -> (usize, usize) {
@@ -627,6 +703,13 @@ impl<F: Flavor> MAsyncRx<F> {
     #[inline]
     pub fn into_blocking(self) -> MRx<F> {
         self.into()
+    }
+}
+
+impl<F: Flavor> From<MAsyncRx<F>> for Pin<Box<dyn Stream<Item = F::Item>>> {
+    #[inline]
+    fn from(val: MAsyncRx<F>) -> Self {
+        Box::pin(val.into_stream())
     }
 }
 
@@ -717,11 +800,6 @@ impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for MAsyncRx<F> {
         self.as_ref().get_rx_count()
     }
 
-    #[inline(always)]
-    fn to_stream(self) -> Pin<Box<dyn futures_core::stream::Stream<Item = F::Item>>> {
-        Box::pin(self.into_stream())
-    }
-
     fn get_wakers_count(&self) -> (usize, usize) {
         self.as_ref().get_wakers_count()
     }
@@ -732,6 +810,81 @@ impl<F: Flavor> Deref for AsyncRx<F> {
     #[inline(always)]
     fn deref(&self) -> &ChannelShared<F> {
         &self.shared
+    }
+}
+
+impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for &MAsyncRx<F> {
+    #[inline(always)]
+    fn try_recv(&self) -> Result<F::Item, TryRecvError> {
+        self.0.try_recv()
+    }
+
+    #[inline(always)]
+    fn recv(&self) -> impl Future<Output = Result<F::Item, RecvError>> + Send {
+        self.0.recv()
+    }
+
+    #[cfg(any(feature = "tokio", feature = "async_std"))]
+    #[cfg_attr(docsrs, doc(cfg(any(feature = "tokio", feature = "async_std"))))]
+    #[inline(always)]
+    fn recv_timeout(
+        &self, duration: std::time::Duration,
+    ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>> + Send {
+        self.0.recv_timeout(duration)
+    }
+
+    #[inline(always)]
+    fn recv_with_timer<FR, R>(
+        &self, fut: FR,
+    ) -> impl Future<Output = Result<F::Item, RecvTimeoutError>>
+    where
+        FR: Future<Output = R>,
+    {
+        self.0.recv_with_timer(fut)
+    }
+
+    /// The number of messages in the channel at the moment
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    /// The capacity of the channel, return None for unbounded channel.
+    #[inline(always)]
+    fn capacity(&self) -> Option<usize> {
+        self.as_ref().capacity()
+    }
+
+    /// Whether channel is empty at the moment
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
+    /// Whether the channel is full at the moment
+    #[inline(always)]
+    fn is_full(&self) -> bool {
+        self.as_ref().is_full()
+    }
+
+    /// Return true if the other side has closed
+    #[inline(always)]
+    fn is_disconnected(&self) -> bool {
+        self.as_ref().get_tx_count() == 0
+    }
+
+    #[inline(always)]
+    fn get_tx_count(&self) -> usize {
+        self.as_ref().get_tx_count()
+    }
+
+    #[inline(always)]
+    fn get_rx_count(&self) -> usize {
+        self.as_ref().get_rx_count()
+    }
+
+    fn get_wakers_count(&self) -> (usize, usize) {
+        self.as_ref().get_wakers_count()
     }
 }
 
