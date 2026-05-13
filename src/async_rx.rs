@@ -485,22 +485,12 @@ pub trait AsyncRxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
     /// Return the number of receivers
     fn get_rx_count(&self) -> usize;
 
-    fn clone_to_vec(self, count: usize) -> Vec<Self>
-    where
-        Self: Sized;
-
     fn to_stream(self) -> Pin<Box<dyn futures_core::stream::Stream<Item = T>>>;
 
     fn get_wakers_count(&self) -> (usize, usize);
 }
 
 impl<F: Flavor> AsyncRxTrait<F::Item> for AsyncRx<F> {
-    #[inline(always)]
-    fn clone_to_vec(self, _count: usize) -> Vec<Self> {
-        assert_eq!(_count, 1);
-        vec![self]
-    }
-
     #[inline(always)]
     fn recv(&self) -> impl Future<Output = Result<F::Item, RecvError>> + Send {
         AsyncRx::recv(self)
@@ -658,16 +648,6 @@ impl<F: Flavor> From<MRx<F>> for MAsyncRx<F> {
 }
 
 impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for MAsyncRx<F> {
-    #[inline(always)]
-    fn clone_to_vec(self, count: usize) -> Vec<Self> {
-        let mut v = Vec::with_capacity(count);
-        for _ in 0..count - 1 {
-            v.push(self.clone());
-        }
-        v.push(self);
-        v
-    }
-
     #[inline(always)]
     fn try_recv(&self) -> Result<F::Item, TryRecvError> {
         self.0.try_recv()

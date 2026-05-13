@@ -493,8 +493,4 @@ where
     fn get_wakers_count(&self) -> (usize, usize) {
         (0, 0)
     }
-
-    fn clone_to_vec(self, _count: usize) -> Vec<Self> {
-        unimplemented!();
-    }
 }

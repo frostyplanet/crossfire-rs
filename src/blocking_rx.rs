@@ -362,20 +362,10 @@ pub trait BlockingRxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
     /// Return the number of receivers
     fn get_rx_count(&self) -> usize;
 
-    fn clone_to_vec(self, count: usize) -> Vec<Self>
-    where
-        Self: Sized;
-
     fn get_wakers_count(&self) -> (usize, usize);
 }
 
 impl<F: Flavor> BlockingRxTrait<F::Item> for Rx<F> {
-    #[inline(always)]
-    fn clone_to_vec(self, _count: usize) -> Vec<Self> {
-        assert_eq!(_count, 1);
-        vec![self]
-    }
-
     #[inline(always)]
     fn recv(&self) -> Result<F::Item, RecvError> {
         Rx::recv(self)
@@ -440,16 +430,6 @@ impl<F> BlockingRxTrait<F::Item> for MRx<F>
 where
     F: Flavor + FlavorMC,
 {
-    #[inline(always)]
-    fn clone_to_vec(self, count: usize) -> Vec<Self> {
-        let mut v = Vec::with_capacity(count);
-        for _ in 0..count - 1 {
-            v.push(self.clone());
-        }
-        v.push(self);
-        v
-    }
-
     #[inline(always)]
     fn recv(&self) -> Result<F::Item, RecvError> {
         self.0.recv()

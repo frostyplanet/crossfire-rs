@@ -1,4 +1,5 @@
 use criterion::*;
+use crossfire::flavor::Flavor;
 use crossfire::waitgroup::{WaitGroup, WaitGroupGuard};
 use crossfire::*;
 use std::thread;
@@ -38,6 +39,45 @@ fn init_logger() {
         });
     }
 }
+
+trait ToVec: Sized {
+    fn clone_to_vec(self, count: usize) -> Vec<Self>;
+}
+
+macro_rules! impl_cloneable {
+    ($cls: tt) => {
+        impl<F: Flavor> ToVec for $cls<F> {
+            fn clone_to_vec(self, count: usize) -> Vec<Self> {
+                let mut v = Vec::with_capacity(count);
+                for _ in 0..count - 1 {
+                    v.push(self.clone());
+                }
+                v.push(self);
+                v
+            }
+        }
+    };
+}
+
+macro_rules! impl_not_cloneable {
+    ($cls: tt) => {
+        impl<F: Flavor> ToVec for $cls<F> {
+            fn clone_to_vec(self, count: usize) -> Vec<Self> {
+                assert_eq!(count, 1);
+                vec![self]
+            }
+        }
+    };
+}
+
+impl_cloneable!(MTx);
+impl_cloneable!(MAsyncTx);
+impl_cloneable!(MRx);
+impl_cloneable!(MAsyncRx);
+impl_not_cloneable!(Tx);
+impl_not_cloneable!(Rx);
+impl_not_cloneable!(AsyncTx);
+impl_not_cloneable!(AsyncRx);
 
 macro_rules! bench_bounded_blocking {
     ($group: expr, $name: expr, $tx: expr, $rx: expr, $new: expr, $size: expr, $count: expr) => {

@@ -449,10 +449,6 @@ pub trait AsyncTxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
     /// Return the number of receivers
     fn get_rx_count(&self) -> usize;
 
-    fn clone_to_vec(self, count: usize) -> Vec<Self>
-    where
-        Self: Sized;
-
     fn get_wakers_count(&self) -> (usize, usize);
 
     /// Send message. Will await when channel is full.
@@ -507,12 +503,6 @@ pub trait AsyncTxTrait<T>: Send + 'static + fmt::Debug + fmt::Display {
 }
 
 impl<F: Flavor> AsyncTxTrait<F::Item> for AsyncTx<F> {
-    #[inline(always)]
-    fn clone_to_vec(self, count: usize) -> Vec<Self> {
-        assert_eq!(count, 1);
-        vec![self]
-    }
-
     #[inline(always)]
     fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
         AsyncTx::try_send(self, item)
@@ -694,16 +684,6 @@ impl<F: Flavor> From<MTx<F>> for MAsyncTx<F> {
 }
 
 impl<F: Flavor + FlavorMP> AsyncTxTrait<F::Item> for MAsyncTx<F> {
-    #[inline(always)]
-    fn clone_to_vec(self, count: usize) -> Vec<Self> {
-        let mut v = Vec::with_capacity(count);
-        for _ in 0..count - 1 {
-            v.push(self.clone());
-        }
-        v.push(self);
-        v
-    }
-
     #[inline(always)]
     fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
         self.0.try_send(item)
