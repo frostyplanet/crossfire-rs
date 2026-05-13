@@ -1,5 +1,6 @@
 use crate::flavor::FlavorMP;
 use crate::{shared::*, SenderType};
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 /// A weak reference of SenderType
@@ -10,6 +11,12 @@ pub struct WeakTx<F: Flavor + FlavorMP>(pub(crate) Arc<ChannelShared<F>>);
 
 impl<F: Flavor + FlavorMP> WeakTx<F> {
     /// Upgrade to MTx or MAsyncTx (Only allow for mpsc or mpmc)
+    ///
+    /// # Safety
+    ///
+    /// Warning: You should **be careful using this on a bounded channel receiver-side**
+    /// (Because when the channel is full and `send()` blocks while no one is receiving,
+    /// will result in **dead-lock**)
     ///
     /// # Example
     ///
@@ -41,5 +48,28 @@ impl<F: Flavor + FlavorMP> WeakTx<F> {
     #[inline(always)]
     pub fn get_rx_count(&self) -> usize {
         self.0.get_rx_count()
+    }
+}
+
+impl<F: Flavor<Send = RegistryDummy> + FlavorMP> WeakTx<F> {
+    /// Sends a message without checking channel closed first (Only available for **unbounded** channel)
+    ///
+    /// It's for scenario that receiver-side never exit early,
+    /// but they holds a WeakTx to re-submit message.
+    /// NOTE that it will not faster than `send()`,
+    /// just useful save the operation of `upgrade()` if you don't care about the error.
+    ///
+    /// Always success, never blocked, no return type.
+    ///
+    /// # Safety
+    ///
+    /// It may result in message send successfully without anyone to receive them.
+    /// You have to rely on the Drop trait of the message to cleanup.
+    #[inline]
+    pub unsafe fn send_unchecked(&self, item: F::Item) {
+        let shared = &self.0;
+        let _item = MaybeUninit::new(item);
+        shared.inner.try_send(&_item);
+        shared.on_send();
     }
 }
