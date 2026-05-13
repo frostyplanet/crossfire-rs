@@ -221,6 +221,12 @@ impl<F: Flavor> Tx<F> {
     ///
     /// Returns `Err(SendError)` if the receiver has been dropped.
     ///
+    /// # Safety
+    ///
+    /// Due to the nature of buffered channel, it's possible that
+    /// message being send concurrently while receiver dropping concurrently,
+    /// still result in message send successfully without any one to receive them.
+    /// You should rely on the Drop trait of the message to cleanup.
     #[inline]
     pub fn send(&self, item: F::Item) -> Result<(), SendError<F::Item>> {
         let shared = &self.shared;
@@ -246,6 +252,13 @@ impl<F: Flavor> Tx<F> {
     /// Returns Err([TrySendError::Full]) if the channel is full.
     ///
     /// Returns Err([TrySendError::Disconnected]) if the receiver has been dropped.
+    ///
+    /// # Safety
+    ///
+    /// Due to the nature of buffered channel, it's possible that
+    /// message being send concurrently while receiver dropping concurrently,
+    /// still result in message send successfully without any one to receive them.
+    /// You should rely on the Drop trait of the message to cleanup.
     #[inline]
     pub fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
         let shared = &self.shared;

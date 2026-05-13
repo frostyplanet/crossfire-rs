@@ -122,6 +122,13 @@ impl<F: Flavor> AsyncTx<F> {
     /// Returns `Ok(())` on success.
     ///
     /// Returns Err([SendError]) if the receiver has been dropped.
+    ///
+    /// # Safety
+    ///
+    /// Due to the nature of buffered channel, it's possible that
+    /// message being send concurrently while receiver dropping concurrently,
+    /// still result in message send successfully without any one to receive them.
+    /// You should rely on the Drop trait of the message to cleanup.
     #[inline(always)]
     pub fn send<'a>(&'a self, item: F::Item) -> SendFuture<'a, F> {
         SendFuture { tx: self, item: MaybeUninit::new(item), waker: None }
@@ -134,6 +141,13 @@ impl<F: Flavor> AsyncTx<F> {
     /// Returns Err([TrySendError::Full]) if the channel is full.
     ///
     /// Returns Err([TrySendError::Disconnected]) if the receiver has been dropped.
+    ///
+    /// # Safety
+    ///
+    /// Due to the nature of buffered channel, it's possible that
+    /// message being send concurrently while receiver dropping concurrently,
+    /// still result in message send successfully without any one to receive them.
+    /// You should rely on the Drop trait of the message to cleanup.
     #[inline]
     pub fn try_send(&self, item: F::Item) -> Result<(), TrySendError<F::Item>> {
         if self.shared.is_rx_closed() {
@@ -167,6 +181,7 @@ impl<F: Flavor> AsyncTx<F> {
         let sleep = tokio::time::sleep(duration);
         self.send_with_timer(item, sleep)
     }
+
     #[cfg(feature = "async_std")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async_std")))]
     #[inline]
