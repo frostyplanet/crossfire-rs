@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.12] - 2026-05-14
+
+### Added
+
+- WeakTx: Add `send_unchecked()` for unbounded channel
+
+### Fixed
+
+- doc: Add notice about buffer channel message dangling
+
+- doc: Add safety notice for deadlock scenario with `WeakTx::upgrade()`
+
 ## [3.1.11] - 2026-05-13
 
 ### Added
@@ -34,13 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.1.10] - 2026-05-05
 
-### Fix
+### Fixed
 
 - waitgroup: Avoid miri report on stack borrow rule (issue #66)
 
 ## [3.1.9] - 2026-05-05
 
-### Fix
+### Fixed
 
 - Reduce Send requirement in generic (issue #64), which makes the error prompt cleaner
 
