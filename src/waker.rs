@@ -1,5 +1,4 @@
-use crate::collections::ArcCell;
-use crate::flavor::FlavorImpl;
+//use crate::collections::ArcCell;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::ops::Deref;
@@ -37,66 +36,62 @@ impl WakeResult {
     }
 }
 
-/// Although removing direct copy feature of the payload pointer is not used,
-/// leave it to unbuffer channel in the future
-pub struct ArcWaker<P>(Arc<WakerInner<P>>);
+pub struct ArcWaker(Arc<WakerInner>);
 
-impl<P> fmt::Debug for ArcWaker<P> {
+impl fmt::Debug for ArcWaker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<P> fmt::Debug for WakerInner<P> {
+impl fmt::Debug for WakerInner {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "waker({})", self.get_seq())
     }
 }
 
-impl<P> Deref for ArcWaker<P> {
-    type Target = WakerInner<P>;
+impl Deref for ArcWaker {
+    type Target = WakerInner;
     #[inline]
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
 
-impl<P> ArcWaker<P> {
+impl ArcWaker {
     #[inline(always)]
-    pub fn new_async(ctx: &Context, payload: P) -> Self {
+    pub fn new_async(ctx: &Context) -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicU32::new(0),
             state: AtomicU8::new(WakerState::Init as u8),
             waker: UnsafeCell::new(ThinWaker::Async(ctx.waker().clone())),
-            payload: UnsafeCell::new(payload),
         }))
     }
 
     #[inline(always)]
-    pub fn new_blocking(payload: P) -> Self {
+    pub fn new_blocking() -> Self {
         Self(Arc::new(WakerInner {
             seq: AtomicU32::new(0),
             state: AtomicU8::new(WakerState::Init as u8),
             waker: UnsafeCell::new(ThinWaker::Blocking(thread::current())),
-            payload: UnsafeCell::new(payload),
         }))
     }
 }
 
-impl<P> ArcWaker<P> {
+impl ArcWaker {
     #[inline(always)]
-    pub fn from_arc(inner: Arc<WakerInner<P>>) -> Self {
+    pub fn from_arc(inner: Arc<WakerInner>) -> Self {
         Self(inner)
     }
 
     #[allow(clippy::wrong_self_convention)]
     #[inline(always)]
-    pub fn to_arc(self) -> Arc<WakerInner<P>> {
+    pub fn to_arc(self) -> Arc<WakerInner> {
         self.0
     }
 
     #[inline(always)]
-    pub fn weak(&self) -> Weak<WakerInner<P>> {
+    pub fn weak(&self) -> Weak<WakerInner> {
         Arc::downgrade(&self.0)
     }
 }
@@ -139,18 +134,16 @@ impl ThinWaker {
     }
 }
 
-pub struct WakerInner<P> {
+pub struct WakerInner {
     state: AtomicU8,
     seq: AtomicU32,
     waker: UnsafeCell<ThinWaker>,
-    #[allow(dead_code)]
-    payload: UnsafeCell<P>,
 }
 
-unsafe impl<P> Send for WakerInner<P> {}
-unsafe impl<P> Sync for WakerInner<P> {}
+unsafe impl Send for WakerInner {}
+unsafe impl Sync for WakerInner {}
 
-impl<P> WakerInner<P> {
+impl WakerInner {
     #[inline(always)]
     fn get_waker(&self) -> &ThinWaker {
         unsafe { &*self.waker.get() }
@@ -162,15 +155,9 @@ impl<P> WakerInner<P> {
     }
 
     #[inline(always)]
-    fn get_payload_mut(&self) -> &mut P {
-        unsafe { &mut *self.payload.get() }
-    }
-
-    #[inline(always)]
-    pub fn reset(&self, payload: P) {
+    pub fn reset(&self) {
         // From the object pool to reset value,
         // we should use SeqCst fence to clear the cache of other cores
-        *self.get_payload_mut() = payload;
         self.reset_init();
     }
 
@@ -322,6 +309,7 @@ impl<P> WakerInner<P> {
     }
 }
 
+/*
 impl<T> WakerInner<*const T> {
     #[inline(always)]
     fn get_payload(&self) -> *const T {
@@ -408,6 +396,7 @@ impl<P: Copy> WakerCache<P> {
         !self.0.exists()
     }
 }
+*/
 
 #[cfg(test)]
 mod tests {
@@ -418,6 +407,6 @@ mod tests {
     fn test_waker_size() {
         use std::mem::size_of;
         println!("wakertype {}", size_of::<ThinWaker>());
-        println!("waker inner {}", size_of::<WakerInner<()>>());
+        println!("waker inner {}", size_of::<WakerInner>());
     }
 }
