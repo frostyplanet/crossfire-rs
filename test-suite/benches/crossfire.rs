@@ -708,9 +708,9 @@ fn bench_crossfire_wait_group(c: &mut Criterion) {
     let count = TEN_THOUSAND; // Or some appropriate number for throughput
     group.throughput(Throughput::Elements(count as u64));
     group.bench_function("add_guard", |b| {
-        let wg = WaitGroup::new(0);
+        let wg = WaitGroup::new((), 0);
         b.iter(|| {
-            let mut guards: Vec<WaitGroupGuard> = Vec::with_capacity(count);
+            let mut guards: Vec<WaitGroupGuard<()>> = Vec::with_capacity(count);
             for _i in 0..count {
                 guards.push(wg.add_guard());
             }
