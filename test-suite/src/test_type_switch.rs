@@ -27,8 +27,8 @@ macro_rules! runtime_block_on_with_timeout {
 #[case(spsc::bounded_async(5))] // Small buffer to create backpressure
 #[case(mpsc::bounded_async(5))]
 fn test_bounded_async_with_sync_receiver_switch_buffered<
-    F: Flavor<Item = usize> + 'static,
-    T: AsyncTxTrait<usize>,
+    F: Flavor<Item = usize> + 'static + Send,
+    T: AsyncTxTrait<usize> + 'static + Send,
 >(
     setup_log: (), #[case] channel: (T, AsyncRx<F>),
 ) {
@@ -111,7 +111,9 @@ fn test_bounded_async_with_sync_receiver_switch_buffered<
 #[logfn]
 #[rstest]
 #[case(mpmc::bounded_async(5))] // Small buffer to create backpressure
-fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered<F: Flavor<Item = usize> + 'static>(
+fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered<
+    F: Flavor<Item = usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (MAsyncTx<F>, MAsyncRx<F>),
 ) {
     let (tx, rx) = channel;
@@ -190,7 +192,7 @@ fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered<F: Flavor<Item = u
 #[logfn]
 #[rstest]
 #[case(spsc::bounded_blocking(5))] // Small buffer for backpressure
-fn test_spsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> + 'static>(
+fn test_spsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] channel: (Tx<F>, Rx<F>),
 ) {
     let (tx, rx) = channel;
@@ -253,7 +255,7 @@ fn test_spsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> +
 #[logfn]
 #[rstest]
 #[case(mpsc::bounded_blocking(5))] // Buffer < 12 total messages
-fn test_mpsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> + 'static>(
+fn test_mpsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] channel: (MTx<F>, Rx<F>),
 ) {
     let (tx, rx) = channel;
@@ -314,7 +316,7 @@ fn test_mpsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> +
 #[logfn]
 #[rstest]
 #[case(mpmc::bounded_blocking(5))] // Buffer < 12 total messages
-fn test_mpmc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> + 'static>(
+fn test_mpmc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] channel: (MTx<F>, MRx<F>),
 ) {
     let (tx, rx) = channel;
@@ -374,7 +376,9 @@ fn test_mpmc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> +
 #[logfn]
 #[rstest]
 #[case(spsc::bounded_blocking(5))] // Buffer < 12 total messages
-fn test_spsc_bounded_blocking_with_async_receiver_switch<F: Flavor<Item = usize> + 'static>(
+fn test_spsc_bounded_blocking_with_async_receiver_switch<
+    F: Flavor<Item = usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (Tx<F>, Rx<F>),
 ) {
     let (tx, rx) = channel;
@@ -446,7 +450,9 @@ fn test_spsc_bounded_blocking_with_async_receiver_switch<F: Flavor<Item = usize>
 #[logfn]
 #[rstest]
 #[case(mpsc::bounded_blocking(5))] // Buffer < 12 total messages
-fn test_mpsc_bounded_blocking_with_async_receiver_switch<F: Flavor<Item = usize> + 'static>(
+fn test_mpsc_bounded_blocking_with_async_receiver_switch<
+    F: Flavor<Item = usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (MTx<F>, Rx<F>),
 ) {
     let (tx, rx) = channel;
@@ -518,7 +524,9 @@ fn test_mpsc_bounded_blocking_with_async_receiver_switch<F: Flavor<Item = usize>
 #[logfn]
 #[rstest]
 #[case(mpmc::bounded_blocking(5))] // Buffer < 12 total messages
-fn test_mpmc_bounded_blocking_with_async_receiver_switch<F: Flavor<Item = usize> + 'static>(
+fn test_mpmc_bounded_blocking_with_async_receiver_switch<
+    F: Flavor<Item = usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (MTx<F>, MRx<F>),
 ) {
     let (tx, rx) = channel;
@@ -586,8 +594,8 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch<F: Flavor<Item = usize>
 #[case(mpsc::bounded_blocking(5))] // Buffer < 20 total messages
 #[case(mpmc::bounded_blocking(5))]
 fn test_multi_producer_sender_switch<
-    F: Flavor<Item = usize> + 'static,
-    R: BlockingRxTrait<usize>,
+    F: Flavor<Item = usize> + 'static + Send,
+    R: BlockingRxTrait<usize> + 'static + Send,
 >(
     setup_log: (), #[case] channel: (MTx<F>, R),
 ) {
@@ -644,7 +652,7 @@ fn test_multi_producer_sender_switch<
 #[logfn]
 #[rstest]
 #[case(spsc::bounded_async(5))] // Small buffer for backpressure
-fn test_spsc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> + 'static>(
+fn test_spsc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] channel: (AsyncTx<F>, AsyncRx<F>),
 ) {
     let (tx, rx) = channel;
@@ -701,7 +709,7 @@ fn test_spsc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> +
 #[logfn]
 #[rstest]
 #[case(mpsc::bounded_async(5))] // Small buffer for backpressure
-fn test_mpsc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> + 'static>(
+fn test_mpsc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] channel: (MAsyncTx<F>, AsyncRx<F>),
 ) {
     let (tx, rx) = channel;
@@ -758,7 +766,7 @@ fn test_mpsc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> +
 #[logfn]
 #[rstest]
 #[case(mpmc::bounded_async(5))] // Small buffer for backpressure
-fn test_mpmc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> + 'static>(
+fn test_mpmc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] channel: (MAsyncTx<F>, MAsyncRx<F>),
 ) {
     let (tx, rx) = channel;

@@ -17,7 +17,10 @@ fn setup_log() {
 #[case(spsc::bounded_blocking(1))]
 #[case(mpsc::bounded_blocking(1))]
 #[case(mpmc::bounded_blocking(1))]
-fn test_basic_bounded_empty_full_drop_rx<T: BlockingTxTrait<usize>, R: BlockingRxTrait<usize>>(
+fn test_basic_bounded_empty_full_drop_rx<
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: BlockingRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] _channel: (T, R),
 ) {
     // Just don't want to run duplicately in the workflow
@@ -54,7 +57,10 @@ fn test_basic_bounded_empty_full_drop_rx<T: BlockingTxTrait<usize>, R: BlockingR
 #[case(spsc::bounded_blocking(1))]
 #[case(mpsc::bounded_blocking(1))]
 #[case(mpmc::bounded_blocking(1))]
-fn test_basic_bounded_empty_full_drop_tx<T: BlockingTxTrait<usize>, R: BlockingRxTrait<usize>>(
+fn test_basic_bounded_empty_full_drop_tx<
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: BlockingRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] _channel: (T, R),
 ) {
     #[cfg(not(feature = "async_std"))]
@@ -91,7 +97,10 @@ fn test_basic_bounded_empty_full_drop_tx<T: BlockingTxTrait<usize>, R: BlockingR
 #[case(spsc::unbounded_blocking())]
 #[case(mpsc::unbounded_blocking())]
 #[case(mpmc::unbounded_blocking())]
-fn test_basic_unbounded_empty_drop_rx<T: BlockingTxTrait<usize>, R: BlockingRxTrait<usize>>(
+fn test_basic_unbounded_empty_drop_rx<
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: BlockingRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] _channel: (T, R),
 ) {
     #[cfg(not(feature = "async_std"))]
@@ -125,7 +134,10 @@ fn test_basic_unbounded_empty_drop_rx<T: BlockingTxTrait<usize>, R: BlockingRxTr
 #[case(spsc::unbounded_blocking())]
 #[case(mpsc::unbounded_blocking())]
 #[case(mpmc::unbounded_blocking())]
-fn test_basic_unbounded_empty_drop_tx<T: BlockingTxTrait<usize>, R: BlockingRxTrait<usize>>(
+fn test_basic_unbounded_empty_drop_tx<
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: BlockingRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] _channel: (T, R),
 ) {
     #[cfg(not(feature = "async_std"))]
@@ -158,7 +170,10 @@ fn test_basic_unbounded_empty_drop_tx<T: BlockingTxTrait<usize>, R: BlockingRxTr
 #[case(spsc::bounded_blocking(10))]
 #[case(mpsc::bounded_blocking(10))]
 #[case(mpmc::bounded_blocking(10))]
-fn test_basic_bounded_1_thread<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32>>(
+fn test_basic_bounded_1_thread<
+    T: BlockingTxTrait<i32> + 'static + Send,
+    R: BlockingRxTrait<i32> + 'static + Send,
+>(
     setup_log: (), #[case] _channel: (T, R),
 ) {
     #[cfg(not(feature = "async_std"))]
@@ -204,7 +219,10 @@ fn test_basic_bounded_1_thread<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32>>
 #[case(spsc::unbounded_blocking())]
 #[case(mpsc::unbounded_blocking())]
 #[case(mpmc::unbounded_blocking())]
-fn test_basic_unbounded_1_thread<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32>>(
+fn test_basic_unbounded_1_thread<
+    T: BlockingTxTrait<i32> + 'static + Send,
+    R: BlockingRxTrait<i32> + 'static + Send,
+>(
     setup_log: (), #[case] _channel: (T, R),
 ) {
     #[cfg(not(feature = "async_std"))]
@@ -250,7 +268,10 @@ fn test_basic_unbounded_1_thread<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32
 #[case(spsc::unbounded_blocking())]
 #[case(mpsc::unbounded_blocking())]
 #[case(mpmc::unbounded_blocking())]
-fn test_basic_recv_after_sender_close<T: BlockingTxTrait<i32>, R: BlockingRxTrait<i32>>(
+fn test_basic_recv_after_sender_close<
+    T: BlockingTxTrait<i32> + 'static + Send,
+    R: BlockingRxTrait<i32> + 'static + Send,
+>(
     setup_log: (), #[case] _channel: (T, R),
 ) {
     #[cfg(not(feature = "async_std"))]
@@ -292,7 +313,10 @@ fn test_basic_recv_after_sender_close<T: BlockingTxTrait<i32>, R: BlockingRxTrai
 #[case(mpmc::bounded_blocking(10))]
 #[case(mpmc::bounded_blocking(100))]
 #[case(mpmc::bounded_blocking(300))]
-fn test_pressure_bounded_blocking_1_1<T: BlockingTxTrait<usize>, R: BlockingRxTrait<usize>>(
+fn test_pressure_bounded_blocking_1_1<
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: BlockingRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] _channel: (T, R),
 ) {
     #[cfg(not(feature = "async_std"))]
@@ -354,8 +378,8 @@ fn test_pressure_bounded_blocking_1_1<T: BlockingTxTrait<usize>, R: BlockingRxTr
 #[case(mpmc::bounded_blocking(100), 8)]
 #[case(mpmc::bounded_blocking(100), 16)]
 fn test_pressure_bounded_blocking_multi_1<
-    F: Flavor<Item = usize> + 'static,
-    R: BlockingRxTrait<usize>,
+    F: Flavor<Item = usize> + 'static + Send,
+    R: BlockingRxTrait<usize> + 'static + Send,
 >(
     setup_log: (), #[case] _channel: (MTx<F>, R), #[case] tx_count: usize,
 ) {
@@ -415,7 +439,7 @@ fn test_pressure_bounded_blocking_multi_1<
 #[case(mpmc::bounded_blocking(100), 8, 3)]
 #[case(mpmc::bounded_blocking(100), 3, 8)]
 #[case(mpmc::bounded_blocking(100), 5, 5)]
-fn test_pressure_bounded_blocking_multi<F: Flavor<Item = usize> + 'static>(
+fn test_pressure_bounded_blocking_multi<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] _channel: (MTx<F>, MRx<F>), #[case] tx_count: usize,
     #[case] rx_count: usize,
 ) {
@@ -483,7 +507,7 @@ fn test_pressure_bounded_blocking_multi<F: Flavor<Item = usize> + 'static>(
 #[rstest]
 #[case(mpmc::bounded_blocking(1))]
 #[case(mpmc::bounded_blocking(10))]
-fn test_pressure_bounded_timeout_blocking<F: Flavor<Item = usize> + 'static>(
+fn test_pressure_bounded_timeout_blocking<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] _channel: (MTx<F>, MRx<F>),
 ) {
     #[cfg(not(feature = "async_std"))]
@@ -610,7 +634,10 @@ fn test_conversion() {
 #[case(mpsc::bounded_blocking(10))]
 #[case(mpmc::bounded_blocking(1))]
 #[case(mpmc::bounded_blocking(10))]
-fn test_drop_small_msg<T: BlockingTxTrait<SmallMsg>, R: BlockingRxTrait<SmallMsg>>(
+fn test_drop_small_msg<
+    T: BlockingTxTrait<SmallMsg> + 'static + Send,
+    R: BlockingRxTrait<SmallMsg> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     println!("needs_drop {}", std::mem::needs_drop::<SmallMsg>());
@@ -626,14 +653,23 @@ fn test_drop_small_msg<T: BlockingTxTrait<SmallMsg>, R: BlockingRxTrait<SmallMsg
 #[case(mpsc::bounded_blocking(10))]
 #[case(mpmc::bounded_blocking(1))]
 #[case(mpmc::bounded_blocking(10))]
-fn test_drop_large_msg<T: BlockingTxTrait<LargeMsg>, R: BlockingRxTrait<LargeMsg>>(
+fn test_drop_large_msg<
+    T: BlockingTxTrait<LargeMsg> + 'static + Send,
+    R: BlockingRxTrait<LargeMsg> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     println!("needs_drop {}", std::mem::needs_drop::<LargeMsg>());
     _test_drop_msg(channel);
 }
 
-fn _test_drop_msg<M: TestDropMsg, T: BlockingTxTrait<M>, R: BlockingRxTrait<M>>(channel: (T, R)) {
+fn _test_drop_msg<
+    M: TestDropMsg,
+    T: BlockingTxTrait<M> + 'static + Send,
+    R: BlockingRxTrait<M> + 'static + Send,
+>(
+    channel: (T, R),
+) {
     let (tx, rx) = channel;
     reset_drop_counter();
     let cap = tx.capacity().unwrap();

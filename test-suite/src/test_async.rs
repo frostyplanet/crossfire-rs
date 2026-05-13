@@ -45,7 +45,10 @@ fn test_basic_weak(setup_log: ()) {
 #[case(spsc::bounded_async(1))]
 #[case(mpsc::bounded_async(1))]
 #[case(mpmc::bounded_async(1))]
-fn test_basic_bounded_empty_full_drop_rx<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_bounded_empty_full_drop_rx<
+    T: AsyncTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     let (tx, rx) = channel;
@@ -70,7 +73,10 @@ fn test_basic_bounded_empty_full_drop_rx<T: AsyncTxTrait<usize>, R: AsyncRxTrait
 #[case(spsc::bounded_async(1))]
 #[case(mpsc::bounded_async(1))]
 #[case(mpmc::bounded_async(1))]
-fn test_basic_bounded_empty_full_drop_tx<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_bounded_empty_full_drop_tx<
+    T: AsyncTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     let (tx, rx) = channel;
@@ -197,7 +203,10 @@ fn test_sync() {
 #[case(spsc::bounded_async(100))]
 #[case(mpsc::bounded_async(100))]
 #[case(mpmc::bounded_async(100))]
-fn test_basic_bounded_rx_drop<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_bounded_rx_drop<
+    T: AsyncTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     runtime_block_on!(async move {
@@ -222,7 +231,10 @@ fn test_basic_bounded_rx_drop<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
 #[case(spsc::unbounded_async())]
 #[case(mpsc::unbounded_async())]
 #[case(mpmc::unbounded_async())]
-fn test_basic_unbounded_rx_drop<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_unbounded_rx_drop<
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     runtime_block_on!(async move {
@@ -248,7 +260,10 @@ fn test_basic_unbounded_rx_drop<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize
 #[case(spsc::bounded_async(10))]
 #[case(mpsc::bounded_async(10))]
 #[case(mpmc::bounded_async(10))]
-fn test_basic_bounded_1_thread<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_bounded_1_thread<
+    T: AsyncTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     let (tx, rx) = channel;
@@ -294,7 +309,10 @@ fn test_basic_bounded_1_thread<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
 #[case(spsc::unbounded_async())]
 #[case(mpsc::unbounded_async())]
 #[case(mpmc::unbounded_async())]
-fn test_basic_unbounded_1_thread<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_unbounded_1_thread<
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     let (tx, rx) = channel;
@@ -339,7 +357,10 @@ fn test_basic_unbounded_1_thread<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usiz
 #[case(spsc::unbounded_async())]
 #[case(mpsc::unbounded_async())]
 #[case(mpmc::unbounded_async())]
-fn test_basic_unbounded_idle_select<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_unbounded_idle_select<
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     let (_tx, rx) = channel;
@@ -383,7 +404,10 @@ fn test_basic_unbounded_idle_select<T: BlockingTxTrait<usize>, R: AsyncRxTrait<u
 #[case(spsc::bounded_async(10))]
 #[case(mpsc::bounded_async(10))]
 #[case(mpmc::bounded_async(10))]
-fn test_basic_bounded_recv_after_sender_close<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_bounded_recv_after_sender_close<
+    T: AsyncTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     let (tx, rx) = channel;
@@ -416,8 +440,8 @@ fn test_basic_bounded_recv_after_sender_close<T: AsyncTxTrait<usize>, R: AsyncRx
 #[case(mpsc::unbounded_async())]
 #[case(mpmc::unbounded_async())]
 fn test_basic_unbounded_recv_after_sender_close<
-    T: BlockingTxTrait<usize>,
-    R: AsyncRxTrait<usize>,
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
 >(
     setup_log: (), #[case] channel: (T, R),
 ) {
@@ -449,7 +473,10 @@ fn test_basic_unbounded_recv_after_sender_close<
 #[case(spsc::bounded_async(100))]
 #[case(mpsc::bounded_async(100))]
 #[case(mpmc::bounded_async(100))]
-fn test_basic_timeout_recv_async_waker<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_timeout_recv_async_waker<
+    T: AsyncTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     let (tx, rx) = channel;
@@ -487,7 +514,10 @@ fn test_basic_timeout_recv_async_waker<T: AsyncTxTrait<usize>, R: AsyncRxTrait<u
 #[case(spsc::unbounded_async())]
 #[case(mpsc::unbounded_async())]
 #[case(mpmc::unbounded_async())]
-fn test_basic_unbounded_recv_timeout_async<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_unbounded_recv_timeout_async<
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] _channel: (T, R),
 ) {
     let (tx, rx) = _channel;
@@ -520,7 +550,10 @@ fn test_basic_unbounded_recv_timeout_async<T: BlockingTxTrait<usize>, R: AsyncRx
 #[case(spsc::bounded_async(10))]
 #[case(mpsc::bounded_async(10))]
 #[case(mpmc::bounded_async(10))]
-fn test_basic_send_timeout_async<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_send_timeout_async<
+    T: AsyncTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] _channel: (T, R),
 ) {
     let (tx, rx) = _channel;
@@ -572,7 +605,7 @@ fn test_basic_send_timeout_async<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>
 #[logfn]
 #[rstest]
 #[case(mpmc::bounded_async(1))]
-fn test_pressure_bounded_timeout_async<F: Flavor<Item = usize> + 'static>(
+fn test_pressure_bounded_timeout_async<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] _channel: (MAsyncTx<F>, MAsyncRx<F>),
 ) {
     use std::collections::HashMap;
@@ -699,7 +732,10 @@ fn test_pressure_bounded_timeout_async<F: Flavor<Item = usize> + 'static>(
 #[case(mpmc::bounded_async(10))]
 #[case(mpmc::bounded_async(100))]
 #[case(mpmc::bounded_async(300))]
-fn test_pressure_bounded_async_1_1<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_pressure_bounded_async_1_1<
+    T: AsyncTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     let (tx, rx) = channel;
@@ -751,8 +787,8 @@ fn test_pressure_bounded_async_1_1<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize
 #[case(mpmc::bounded_async(100), 100)]
 #[case(mpmc::bounded_async(100), 300)]
 fn test_pressure_bounded_async_multi_1<
-    F: Flavor<Item = usize> + 'static,
-    R: AsyncRxTrait<usize>,
+    F: Flavor<Item = usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
 >(
     setup_log: (), #[case] channel: (MAsyncTx<F>, R), #[case] tx_count: usize,
 ) {
@@ -812,7 +848,7 @@ fn test_pressure_bounded_async_multi_1<
 #[case(mpmc::bounded_async(100), 100, 10)]
 #[case(mpmc::bounded_async(100), 10, 100)]
 #[case(mpmc::bounded_async(100), 300, 300)]
-fn test_pressure_bounded_async_multi<F: Flavor<Item = usize> + 'static>(
+fn test_pressure_bounded_async_multi<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] channel: (MAsyncTx<F>, MAsyncRx<F>), #[case] tx_count: usize,
     #[case] rx_count: usize,
 ) {
@@ -876,7 +912,9 @@ fn test_pressure_bounded_async_multi<F: Flavor<Item = usize> + 'static>(
 #[case(mpmc::bounded_async(1))]
 #[case(mpmc::bounded_async(10))]
 #[case(mpmc::bounded_async(100))]
-fn test_pressure_bounded_mixed_async_blocking_conversion<F: Flavor<Item = usize> + 'static>(
+fn test_pressure_bounded_mixed_async_blocking_conversion<
+    F: Flavor<Item = usize> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (MAsyncTx<F>, MAsyncRx<F>),
 ) {
     let (tx, rx) = channel;
@@ -1033,7 +1071,7 @@ fn test_spurious_sink(setup_log: ()) {
     {
         let (tx, rx) = mpmc::bounded_async(1);
 
-        async fn spawn_tx<F: Flavor<Item = usize> + Unpin + 'static>(
+        async fn spawn_tx<F: Flavor<Item = usize> + Unpin + 'static + Send>(
             tx: MAsyncTx<F>, normal: bool,
         ) {
             let sink = tx.into_sink();
@@ -1083,7 +1121,7 @@ fn test_spurious_stream(setup_log: ()) {
     {
         let (tx, rx) = mpmc::bounded_async(1);
 
-        async fn spawn_rx<F: Flavor<Item = usize> + Unpin + 'static>(
+        async fn spawn_rx<F: Flavor<Item = usize> + Unpin + 'static + Send>(
             rx: MAsyncRx<F>, normal: bool,
         ) {
             let stream = rx.into_stream();
@@ -1127,7 +1165,10 @@ fn test_spurious_stream(setup_log: ()) {
 #[case(mpsc::bounded_async(2))]
 #[case(mpmc::bounded_async(1))]
 #[case(mpmc::bounded_async(2))]
-fn test_basic_into_stream_1_1<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
+fn test_basic_into_stream_1_1<
+    T: AsyncTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send + Into<Pin<Box<dyn Stream<Item = usize>>>>,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     runtime_block_on!(async move {
@@ -1141,7 +1182,7 @@ fn test_basic_into_stream_1_1<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
             }
             println!("sender thread send {} message end", total_message);
         });
-        let mut s: Pin<Box<dyn Stream<Item = usize>>> = rx.to_stream();
+        let mut s: Pin<Box<dyn Stream<Item = usize>>> = rx.into();
 
         for _i in 0..total_message {
             assert_eq!(s.next().await, Some(_i));
@@ -1162,7 +1203,7 @@ fn test_basic_into_stream_1_1<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
 #[case(mpmc::bounded_async(100), 2)]
 #[case(mpmc::bounded_async(100), 4)]
 #[case(mpmc::bounded_async(100), 50)]
-fn test_pressure_stream_multi<F: Flavor<Item = usize> + 'static>(
+fn test_pressure_stream_multi<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] channel: (MAsyncTx<F>, MAsyncRx<F>), #[case] rx_count: usize,
 ) {
     #[cfg(miri)]
@@ -1211,7 +1252,7 @@ fn test_pressure_stream_multi<F: Flavor<Item = usize> + 'static>(
 #[case(mpmc::bounded_async(100), 2)]
 #[case(mpmc::bounded_async(100), 4)]
 #[case(mpmc::bounded_async(100), 50)]
-fn test_pressure_stream_multi_idle<F: Flavor<Item = usize> + 'static>(
+fn test_pressure_stream_multi_idle<F: Flavor<Item = usize> + 'static + Send>(
     setup_log: (), #[case] channel: (MAsyncTx<F>, MAsyncRx<F>), #[case] rx_count: usize,
 ) {
     #[cfg(miri)]
@@ -1262,7 +1303,10 @@ fn test_pressure_stream_multi_idle<F: Flavor<Item = usize> + 'static>(
 #[case(mpsc::bounded_async(10))]
 #[case(mpmc::bounded_async(1))]
 #[case(mpmc::bounded_async(10))]
-fn test_async_drop_small_msg<T: AsyncTxTrait<SmallMsg>, R: AsyncRxTrait<SmallMsg>>(
+fn test_async_drop_small_msg<
+    T: AsyncTxTrait<SmallMsg> + 'static + Send,
+    R: AsyncRxTrait<SmallMsg> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     println!("needs_drop {}", std::mem::needs_drop::<SmallMsg>());
@@ -1278,14 +1322,23 @@ fn test_async_drop_small_msg<T: AsyncTxTrait<SmallMsg>, R: AsyncRxTrait<SmallMsg
 #[case(mpsc::bounded_async(10))]
 #[case(mpmc::bounded_async(1))]
 #[case(mpmc::bounded_async(10))]
-fn test_async_drop_large_msg<T: AsyncTxTrait<LargeMsg>, R: AsyncRxTrait<LargeMsg>>(
+fn test_async_drop_large_msg<
+    T: AsyncTxTrait<LargeMsg> + 'static + Send,
+    R: AsyncRxTrait<LargeMsg> + 'static + Send,
+>(
     setup_log: (), #[case] channel: (T, R),
 ) {
     println!("needs_drop {}", std::mem::needs_drop::<LargeMsg>());
     _test_async_drop_msg(channel);
 }
 
-fn _test_async_drop_msg<M: TestDropMsg, T: AsyncTxTrait<M>, R: AsyncRxTrait<M>>(channel: (T, R)) {
+fn _test_async_drop_msg<
+    M: TestDropMsg,
+    T: AsyncTxTrait<M> + 'static + Send,
+    R: AsyncRxTrait<M> + 'static + Send,
+>(
+    channel: (T, R),
+) {
     let (tx, rx) = channel;
     reset_drop_counter();
     runtime_block_on!(async move {
