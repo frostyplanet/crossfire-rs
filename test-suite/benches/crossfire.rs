@@ -185,7 +185,10 @@ macro_rules! bench_unbounded_async {
     };
 }
 
-fn _crossfire_blocking<T: BlockingTxTrait<usize>, R: BlockingRxTrait<usize>>(
+fn _crossfire_blocking<
+    T: BlockingTxTrait<usize> + Send + 'static,
+    R: BlockingRxTrait<usize> + Send + 'static,
+>(
     txs: Vec<T>, mut rxs: Vec<R>, msg_count: usize,
 ) {
     let mut th_tx = Vec::new();
@@ -251,7 +254,10 @@ fn _crossfire_blocking<T: BlockingTxTrait<usize>, R: BlockingRxTrait<usize>>(
     crossfire::trace_log!("---");
 }
 
-async fn _crossfire_blocking_async<T: BlockingTxTrait<usize>, R: AsyncRxTrait<usize>>(
+async fn _crossfire_blocking_async<
+    T: BlockingTxTrait<usize> + Send + 'static,
+    R: AsyncRxTrait<usize> + Send + 'static,
+>(
     txs: Vec<T>, mut rxs: Vec<R>, msg_count: usize,
 ) {
     let mut send_counter: usize = 0;
@@ -308,7 +314,10 @@ async fn _crossfire_blocking_async<T: BlockingTxTrait<usize>, R: AsyncRxTrait<us
     assert_eq!(send_counter, recv_counter);
 }
 
-async fn _crossfire_bounded_async<T: AsyncTxTrait<usize>, R: AsyncRxTrait<usize>>(
+async fn _crossfire_bounded_async<
+    T: AsyncTxTrait<usize> + Send + 'static,
+    R: AsyncRxTrait<usize> + Send + 'static,
+>(
     txs: Vec<T>, mut rxs: Vec<R>, msg_count: usize,
 ) {
     let mut send_counter: usize = 0;
