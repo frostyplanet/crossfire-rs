@@ -15,6 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.11] - 2026-05-13
+
+### Added
+
+- Implement Async/Blocking Tx/Rx traits for &AsyncTx, &AsyncRx, &MAsyncTx, &MAsyncRx, &Tx,
+ &Rx, &MTx, &MRx.
+
+### Removed
+
+- breaking change of Async/Blocking Tx/Rx Trait:
+
+  - Remove Send and 'static (because &AsyncTx, &AsyncRx does not have Send + 'static)
+
+  - Remove `to_stream()` from trait method, use `Into<Pin<Box<dyn Stream>>>` instead.
+
+  - Remove `clone_to_vec()` (which only used by benchmarks)
+
 ## [3.1.10] - 2026-05-05
 
 ### Fix
