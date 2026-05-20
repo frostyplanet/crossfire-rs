@@ -9,21 +9,29 @@
 //!   - only one waiter thread is allowed. ([wait()](WaitGroupInline::wait),
 //!     [wait_async()](WaitGroupInline::wait_async) is unsafe)
 //!
-//! - [WaitGroup]: which is a safe RAII guard API.
+//! - [WaitGroupZero]: which is a safe RAII guard API.
 //!   - Its a referenced counted container, optional state inside may be shared between the threads of WaitGroup and its guards.
 //!   - Only one waiter is allowed. (`WaitGroup` is `!Sync`)
-//!   - Use [WaitGroup::add_guard()] to get [WaitGroupGuard].
-//!   - [WaitGroupGuard] has `Clone` (Although `WaitGroup` can not `Clone`)
-//!   - [WaitGroupGuard] drop will decrease ref and protentially wake the main thread.
-//!   - Can change threshold at any time.
+//!   - Use [WaitGroupZero::add_guard()] to get [WaitGroupZeroGuard].
+//!   - [WaitGroupZeroGuard] has `Clone` (Although `WaitGroup` can not `Clone`)
+//!   - [WaitGroupZeroGuard] drop will decrease ref and protentially wake the main thread.
+//!   - [WaitGroupZeroGuard] has `from_raw` and `into_raw`.
+//!
+//! - [WaitGroup]: A superset of [WaitGroupZero], with additional feature:
+//!   - It has custom threshold.
+//!   - can change threshold at any time.
 //!     - **NOTE**: threshold is carried inside generated [WaitGroupGuard] to minimize the cost of atomic ops.
 //!       When changing threshold to larger value, wait() might not wake up as soon as new threshold reached.
+//!   - [WaitGroupGuard] cannot convert from raw pointer.
+//!
 //!
 //! # Safety
 //!
-//! [WaitGroup] does not have `Sync` marker, because it's not safe to concurrently wait, due to only one slot reserved for waker.
-//! If you know what you are doing when put it inside other struct, use unsafe impl on its parent
-//! struct.
+//! [WaitGroup]/[WaitGroupZero] does not have `Sync` marker, because it's not safe to concurrently wait, due to only one slot reserved for waker.
+//!
+//! If you want to put inside other struct:
+//! - Use [WaitGroupInline] instead.
+//! - Use `unsafe impl Sync` on [WaitGroup]'s parent struct.
 //!
 //! ```
 //! use crossfire::waitgroup::WaitGroup;
@@ -126,8 +134,10 @@ use crate::backoff::Backoff;
 use crate::shared::{check_timeout, ThinWaker};
 #[allow(unused_imports)]
 use crate::{tokio_task_id, trace_log};
+pub use embed_collections::Pointer;
 use std::cell::UnsafeCell;
 use std::future::Future;
+use std::mem::offset_of;
 use std::mem::transmute;
 use std::ops::Deref;
 use std::pin::Pin;
@@ -491,7 +501,191 @@ impl<T> Deref for WaitGroup<T> {
     }
 }
 
-/// An RAII implementation got represent ref count in WaitGroup.
+/// A WaitGroup implementation with fixed threshold=0.
+///
+/// It's just a subset of [WaitGroup]
+///
+/// [WaitGroupZeroGuard] has impl [Pointer](https://docs.rs/embed-collections/latest/embed_collections/trait.Pointer.html),
+/// which supports casting from or to raw pointer.
+///
+/// Features:
+/// - Only one waiter, concurrent ref count.
+/// - Carry optional state inside, shared between the main thread and WaitGroupGuard, just like Arc.
+/// - Low-cost create and drop, because reference count and waker state is packed inside one atomic.
+/// - WaitGroupZeroGuard dropping is wait-free, which decrease ref count with SeqCst CAS.
+/// - Max reference count to (1 << (usize::BITS - 2) - 2)
+///
+/// You don't need to put WaitGroup into Arc, use [WaitGroupZero::add_guard()] to get `WaitGroupZeroGuard`.
+/// It's ok to clone [WaitGroupZeroGuard], which will increase internal ref count.
+///
+/// # Safety
+///
+/// It's not safe to concurrently wait, so it does not have `Sync` marker.
+/// If you know what you are doing when put it inside other struct, use unsafe impl.
+///
+/// See module level [doc](crate::waitgroup) for example.
+pub struct WaitGroupZero<T> {
+    inner: NonNull<WaitGroupInner<T>>,
+    // Remove the Sync marker to prevent concurrent waiting
+}
+
+unsafe impl<T: Send> Send for WaitGroupZero<T> {}
+
+impl<T> WaitGroupZero<T> {
+    #[inline(always)]
+    pub fn new(inner: T) -> Self {
+        // need one ref to represent ownership
+        let inner = Box::new(WaitGroupInner::new(inner, 1));
+        Self { inner: unsafe { NonNull::new_unchecked(Box::into_raw(inner)) } }
+    }
+
+    #[inline(always)]
+    fn get_inner(&self) -> &WaitGroupInner<T> {
+        unsafe { self.inner.as_ref() }
+    }
+
+    /// load total reference count of `WaitGroupGuard` with SeqCst
+    #[inline(always)]
+    pub fn get_left_seqcst(&self) -> usize {
+        // minus my own ref
+        self.get_inner().count(SeqCst) - 1
+    }
+
+    /// Return total reference count of `WaitGroupGuard` with Acquire
+    #[inline(always)]
+    pub fn get_left(&self) -> usize {
+        // minus my own ref
+        self.get_inner().count(Acquire) - 1
+    }
+
+    /// Add one ref count to the WaitGroup, return a guard to decrease the count on drop.
+    #[inline(always)]
+    pub fn add_guard(&self) -> WaitGroupZeroGuard<T> {
+        self.get_inner().add(1);
+        WaitGroupZeroGuard { inner: self.inner }
+    }
+
+    /// If the ref count is equals 0, return `Ok(())`, otherwise `Err(())`
+    #[inline]
+    pub fn try_wait(&self) -> Result<(), ()> {
+        // one ref owned by mysql
+        if self.get_inner().count(SeqCst) <= 1 {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    /// Block current coroutine until count drop to 0
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[inline]
+    pub fn wait_async<'a>(&'a self) -> WaitGroupFuture<'a, T>
+    where
+        T: Send + Unpin,
+    {
+        let inner = self.get_inner();
+        // one ref for myself
+        WaitGroupFuture { inner, threshold: 1, waker: None }
+    }
+
+    /// Block current coroutine until count drop to 0, or until timeout happens
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+    #[inline]
+    pub fn wait_async_timeout<'a>(
+        &'a self, timeout: Duration,
+    ) -> WaitGroupTimeoutFuture<'a, T, tokio::time::Sleep, ()>
+    where
+        T: Send + Unpin,
+    {
+        let sleep = tokio::time::sleep(timeout);
+        self.wait_async_with_timer(sleep)
+    }
+
+    /// Block current coroutine until count drop to 0, or until timeout happens
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[cfg(feature = "async_std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "async_std")))]
+    #[inline]
+    pub fn wait_async_timeout<'a>(
+        &'a self, timeout: Duration,
+    ) -> WaitGroupTimeoutFuture<'a, T, impl Future<Output = ()>, ()>
+    where
+        T: Send + Unpin,
+    {
+        let sleep = async_std::task::sleep(timeout);
+        self.wait_async_with_timer(sleep)
+    }
+
+    /// Block current coroutine until count drop to 0, with a custom sleep / or cancel function
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[inline]
+    pub fn wait_async_with_timer<'a, FR, R>(
+        &'a self, fut: FR,
+    ) -> WaitGroupTimeoutFuture<'a, T, FR, R>
+    where
+        FR: Future<Output = R>,
+        T: Send + Unpin,
+    {
+        let inner = self.get_inner();
+        // one ref for myself
+        WaitGroupTimeoutFuture { inner, threshold: 1, sleep: fut, waker: None }
+    }
+
+    /// Blocking current thread and Wait until count drop to 0.
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[inline]
+    pub fn wait(&self) {
+        // one ref for myself
+        let _ = self.get_inner().wait_blocking(None, 1);
+    }
+
+    /// Blocking current thread and Wait until count drop to 0, or until timeout
+    ///
+    /// # Safety
+    ///
+    /// Only one thread is allow to wait
+    #[inline]
+    pub fn wait_timeout(&self, timeout: Duration) -> Result<(), ()> {
+        // one ref for myself
+        self.get_inner().wait_blocking(Some(Instant::now() + timeout), 1)
+    }
+}
+
+impl<T> Drop for WaitGroupZero<T> {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe {
+            WaitGroupInner::destroy(self.inner);
+        }
+    }
+}
+
+impl<T> Deref for WaitGroupZero<T> {
+    type Target = T;
+    #[inline]
+    fn deref(&self) -> &T {
+        &unsafe { self.inner.as_ref() }.inner
+    }
+}
+
+/// An RAII implementation got represent ref count for [WaitGroup].
 ///
 /// When cloning WaitGroupGuard, which will increase the ref count in WaitGroup.
 ///
@@ -532,6 +726,78 @@ impl<T> Deref for WaitGroupGuard<T> {
     #[inline]
     fn deref(&self) -> &T {
         &unsafe { self.inner.as_ref() }.inner
+    }
+}
+
+/// An RAII implementation got represent ref count for [WaitGroupZero].
+///
+/// It has implemented [Pointer](https://docs.rs/embed-collections/latest/embed_collections/trait.Pointer.html) trait
+///
+/// When cloning WaitGroupZeroGuard, which will increase the ref count.
+///
+/// WaitGroupZeroGuard dropping is wait-free, which decrease ref count with SeqCst CAS.
+/// will wake up the waiter once ref count decrease below threshold.
+pub struct WaitGroupZeroGuard<T> {
+    inner: NonNull<WaitGroupInner<T>>,
+}
+
+unsafe impl<T: Send> Send for WaitGroupZeroGuard<T> {}
+unsafe impl<T: Sync> Sync for WaitGroupZeroGuard<T> {}
+
+impl<T> Drop for WaitGroupZeroGuard<T> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe {
+            WaitGroupInner::done_ptr(self.inner, 1, 1);
+        }
+    }
+}
+
+impl<T> Clone for WaitGroupZeroGuard<T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        let inner = unsafe { self.inner.as_ref() };
+        inner.add(1);
+        Self { inner: self.inner }
+    }
+}
+
+impl<T> Deref for WaitGroupZeroGuard<T> {
+    type Target = T;
+    #[inline]
+    fn deref(&self) -> &T {
+        &unsafe { self.inner.as_ref() }.inner
+    }
+}
+
+impl<T> Pointer for WaitGroupZeroGuard<T> {
+    type Target = T;
+
+    #[inline]
+    fn as_ref(&self) -> &Self::Target {
+        &unsafe { self.inner.as_ref() }.inner
+    }
+
+    /// # Safety
+    ///
+    /// You should make sure the pointer originate from [WaitGroupZeroGuard::into_raw()].
+    /// In order for max efficiency, we don't check the pointer is null.
+    #[inline]
+    unsafe fn from_raw(p: *const Self::Target) -> Self {
+        debug_assert!(!p.is_null());
+        let offset = offset_of!(WaitGroupInner<T>, inner);
+        unsafe {
+            let rc_ptr = p.byte_sub(offset) as *mut WaitGroupInner<T>;
+            Self { inner: NonNull::new_unchecked(rc_ptr) }
+        }
+    }
+
+    #[inline]
+    fn into_raw(self) -> *const Self::Target {
+        let offset = offset_of!(WaitGroupInner<T>, inner);
+        let p = unsafe { self.inner.as_ptr().byte_add(offset) } as *const Self::Target;
+        std::mem::forget(self);
+        p
     }
 }
 
