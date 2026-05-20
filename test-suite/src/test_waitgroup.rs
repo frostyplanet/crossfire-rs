@@ -1,8 +1,11 @@
 use crate::*;
-use crossfire::waitgroup::{WaitGroup, WaitGroupInline};
+use crossfire::waitgroup::{
+    Pointer, WaitGroup, WaitGroupInline, WaitGroupZero, WaitGroupZeroGuard,
+};
 use crossfire::*;
 use fastrand;
 use rstest::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,50 +21,69 @@ fn setup_log() {
 #[logfn]
 #[rstest]
 fn test_basic_wg_try_wait(setup_log: ()) {
-    let mut wg = WaitGroup::new((), 0);
-    assert_eq!(wg.get_left(), 0);
-    wg.wait(); // should return immediately
-    assert_eq!(wg.try_wait(), Ok(()));
-    // change threshold
-    wg.set_threshold(1);
-    assert_eq!(wg.try_wait(), Ok(()));
-    let guard1 = wg.add_guard();
-    assert_eq!(wg.try_wait(), Ok(()));
-    let guard2 = wg.add_guard();
-    assert_eq!(wg.try_wait(), Err(()));
-    drop(guard2);
-    assert_eq!(wg.try_wait(), Ok(()));
-    // change threshold
-    wg.set_threshold(0);
-    assert_eq!(wg.try_wait(), Err(()));
-    drop(guard1);
-    assert_eq!(wg.try_wait(), Ok(()));
-    assert_eq!(wg.try_wait(), Ok(()));
+    {
+        let mut wg = WaitGroup::new((), 0);
+        assert_eq!(wg.get_left(), 0);
+        wg.wait(); // should return immediately
+        assert_eq!(wg.try_wait(), Ok(()));
+        // change threshold
+        wg.set_threshold(1);
+        assert_eq!(wg.try_wait(), Ok(()));
+        let guard1 = wg.add_guard();
+        assert_eq!(wg.try_wait(), Ok(()));
+        let guard2 = wg.add_guard();
+        assert_eq!(wg.try_wait(), Err(()));
+        drop(guard2);
+        assert_eq!(wg.try_wait(), Ok(()));
+        // change threshold
+        wg.set_threshold(0);
+        assert_eq!(wg.try_wait(), Err(()));
+        drop(guard1);
+        assert_eq!(wg.try_wait(), Ok(()));
+        assert_eq!(wg.try_wait(), Ok(()));
+    }
+    {
+        let wg = WaitGroupZero::new(());
+        assert_eq!(wg.get_left(), 0);
+        wg.wait(); // should return immediately
+        assert_eq!(wg.try_wait(), Ok(()));
+        let _guard = wg.add_guard();
+        assert_eq!(wg.try_wait(), Err(()));
+        drop(_guard);
+        assert_eq!(wg.try_wait(), Ok(()));
+    }
 }
 
 #[logfn]
 #[rstest]
 fn test_waitgroup_with_state(setup_log: ()) {
-    use std::sync::atomic::{AtomicBool, Ordering};
     let wg = WaitGroup::new(AtomicBool::new(true), 0);
-    for i in 0..10 {
-        let guard = wg.add_guard();
-        std::thread::spawn(move || {
-            if i == 5 {
-                guard.store(false, Ordering::SeqCst);
+    macro_rules! test {
+        ($wg: expr) => {{
+            for i in 0..10 {
+                let guard = $wg.add_guard();
+                std::thread::spawn(move || {
+                    if i == 5 {
+                        guard.store(false, Ordering::SeqCst);
+                    }
+                    drop(guard);
+                });
             }
-            drop(guard);
-        });
+            $wg.wait();
+            assert_eq!($wg.load(Ordering::SeqCst), false);
+        }};
     }
-    wg.wait();
-    assert_eq!(wg.load(Ordering::SeqCst), false);
+    test!(wg);
+
+    let wg = WaitGroupZero::new(AtomicBool::new(true));
+    test!(wg);
 }
 
 #[logfn]
 #[rstest]
 fn test_basic_wg_timeout_blocking(setup_log: ()) {
-    // Test timeout case
     let wg = WaitGroup::new((), 0);
+    // Test timeout case
     let _guard = wg.add_guard();
     assert_eq!(wg.wait_timeout(Duration::from_millis(100)), Err(()));
     let _wg = WaitGroup::new((), 0);
@@ -83,33 +105,74 @@ fn test_basic_wg_timeout_blocking(setup_log: ()) {
 
 #[logfn]
 #[rstest]
-fn test_basic_no_wait_async(setup_log: ()) {
-    runtime_block_on!(async move {
-        let wg = WaitGroup::new((), 0);
-        assert_eq!(wg.get_left(), 0);
-        wg.wait_async().await; // should return immediately
-        assert_eq!(wg.try_wait(), Ok(()));
+fn test_basic_wg_zero_timeout_blocking_raw_pointer(setup_log: ()) {
+    let wg = WaitGroupZero::new(AtomicBool::new(false));
+    // Test timeout case
+    let _guard_raw = wg.add_guard().into_raw() as usize;
+    assert_eq!(wg.wait_timeout(Duration::from_millis(100)), Err(()));
+    let _wg = WaitGroupZero::new(());
+    let _guard_parent_raw = _wg.add_guard().into_raw();
+    // Test drop while guard not finish
+    let th = std::thread::spawn(move || {
+        _wg.wait();
+        std::thread::sleep(Duration::from_secs(1));
+        let _guard =
+            unsafe { WaitGroupZeroGuard::<AtomicBool>::from_raw(_guard_raw as *const AtomicBool) };
+        drop(_guard);
     });
+    assert!(wg.wait_timeout(Duration::from_millis(10)).is_err());
+    let _guard_parent = unsafe { WaitGroupZeroGuard::<()>::from_raw(_guard_parent_raw) };
+    drop(_guard_parent);
+    if wg.get_left() > 0 {
+        println!("drop early");
+        drop(wg);
+    }
+    th.join().expect("join");
+}
+
+#[logfn]
+#[rstest]
+fn test_basic_no_wait_async(setup_log: ()) {
+    macro_rules! test {
+        ($wg: expr) => {{
+            runtime_block_on!(async move {
+                assert_eq!($wg.get_left(), 0);
+                $wg.wait_async().await; // should return immediately
+                assert_eq!($wg.try_wait(), Ok(()));
+            });
+        }};
+    }
+    let wg = WaitGroup::new((), 0);
+    test!(wg);
+    let wg = WaitGroupZero::new(());
+    test!(wg);
 }
 
 #[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_basic_wg_one_guard_async(setup_log: ()) {
-    runtime_block_on!(async move {
-        let wg = WaitGroup::new((), 0);
-        let guard = wg.add_guard();
-        assert_eq!(wg.get_left(), 1);
-        assert_eq!(wg.try_wait(), Err(()));
+    macro_rules! test {
+        ($wg: expr) => {{
+            runtime_block_on!(async move {
+                let guard = $wg.add_guard();
+                assert_eq!($wg.get_left(), 1);
+                assert_eq!($wg.try_wait(), Err(()));
 
-        let _ = async_spawn!(async move {
-            sleep(Duration::from_millis(100)).await;
-            drop(guard);
-        });
+                let _ = async_spawn!(async move {
+                    sleep(Duration::from_millis(100)).await;
+                    drop(guard);
+                });
 
-        wg.wait_async().await;
-        assert_eq!(wg.get_left_seqcst(), 0);
-    });
+                $wg.wait_async().await;
+                assert_eq!($wg.get_left_seqcst(), 0);
+            });
+        }};
+    }
+    let wg = WaitGroup::new((), 0);
+    test!(wg);
+    let wg = WaitGroupZero::new(());
+    test!(wg);
 }
 
 #[cfg(feature = "time")]
@@ -149,8 +212,9 @@ fn test_basic_wg_multi_guards_async(setup_log: ()) {
 #[logfn]
 #[rstest]
 fn test_basic_wg_timeout_async(setup_log: ()) {
+    let wg = WaitGroup::new((), 0);
+
     runtime_block_on!(async move {
-        let wg = WaitGroup::new((), 0);
         let guard = wg.add_guard();
         let th = async_spawn!(async move {
             sleep(Duration::from_millis(50)).await;
