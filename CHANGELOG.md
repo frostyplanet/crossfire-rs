@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.13] - 2026-05-21
+
+### Adde
+
+- waitgroup: Add WaitGroupZero, and WaitGroupZeroGuard can convert between raw pointer
+
 ## [3.1.12] - 2026-05-14
 
 ### Added
