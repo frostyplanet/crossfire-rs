@@ -15,9 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.14] - 2026-05-21
+
+### Added
+
+- waitgroup: Add Debug & Display deref for all types
+
 ## [3.1.13] - 2026-05-21
 
-### Adde
+### Added
 
 - waitgroup: Add WaitGroupZero, and WaitGroupZeroGuard can convert between raw pointer
 
