@@ -134,7 +134,7 @@ use crate::backoff::Backoff;
 use crate::shared::{check_timeout, ThinWaker};
 #[allow(unused_imports)]
 use crate::{tokio_task_id, trace_log};
-pub use embed_collections::Pointer;
+pub use embed_collections::{Pointer, SmartPointer};
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::future::Future;
@@ -707,6 +707,44 @@ impl<T: fmt::Debug> fmt::Debug for WaitGroupZero<T> {
 impl<T: fmt::Display> fmt::Display for WaitGroupZero<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.deref().fmt(f)
+    }
+}
+
+impl<T> Pointer for WaitGroupZero<T> {
+    type Target = T;
+
+    #[inline]
+    fn as_ref(&self) -> &Self::Target {
+        &unsafe { self.inner.as_ref() }.inner
+    }
+
+    /// # Safety
+    ///
+    /// You should make sure the pointer originate from [WaitGroupZeroGuard::into_raw()].
+    /// In order for max efficiency, we don't check the pointer is null.
+    #[inline]
+    unsafe fn from_raw(p: *const Self::Target) -> Self {
+        debug_assert!(!p.is_null());
+        let offset = offset_of!(WaitGroupInner<T>, inner);
+        unsafe {
+            let rc_ptr = p.byte_sub(offset) as *mut WaitGroupInner<T>;
+            Self { inner: NonNull::new_unchecked(rc_ptr) }
+        }
+    }
+
+    #[inline]
+    fn into_raw(self) -> *const Self::Target {
+        let offset = offset_of!(WaitGroupInner<T>, inner);
+        let p = unsafe { self.inner.as_ptr().byte_add(offset) } as *const Self::Target;
+        std::mem::forget(self);
+        p
+    }
+}
+
+impl<T> SmartPointer for WaitGroupZero<T> {
+    #[inline]
+    fn new(inner: T) -> Self {
+        WaitGroupZero::new(inner)
     }
 }
 
