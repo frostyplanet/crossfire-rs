@@ -136,6 +136,7 @@ use crate::shared::{check_timeout, ThinWaker};
 use crate::{tokio_task_id, trace_log};
 pub use embed_collections::Pointer;
 use std::cell::UnsafeCell;
+use std::fmt;
 use std::future::Future;
 use std::mem::offset_of;
 use std::mem::transmute;
@@ -501,6 +502,18 @@ impl<T> Deref for WaitGroup<T> {
     }
 }
 
+impl<T: fmt::Debug> fmt::Debug for WaitGroup<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for WaitGroup<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
 /// A WaitGroup implementation with fixed threshold=0.
 ///
 /// It's just a subset of [WaitGroup]
@@ -685,6 +698,18 @@ impl<T> Deref for WaitGroupZero<T> {
     }
 }
 
+impl<T: fmt::Debug> fmt::Debug for WaitGroupZero<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for WaitGroupZero<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
 /// An RAII implementation got represent ref count for [WaitGroup].
 ///
 /// When cloning WaitGroupGuard, which will increase the ref count in WaitGroup.
@@ -726,6 +751,18 @@ impl<T> Deref for WaitGroupGuard<T> {
     #[inline]
     fn deref(&self) -> &T {
         &unsafe { self.inner.as_ref() }.inner
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for WaitGroupGuard<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for WaitGroupGuard<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.deref().fmt(f)
     }
 }
 
@@ -798,6 +835,18 @@ impl<T> Pointer for WaitGroupZeroGuard<T> {
         let p = unsafe { self.inner.as_ptr().byte_add(offset) } as *const Self::Target;
         std::mem::forget(self);
         p
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for WaitGroupZeroGuard<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for WaitGroupZeroGuard<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.deref().fmt(f)
     }
 }
 
