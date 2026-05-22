@@ -5,6 +5,7 @@ use crate::trace_log;
 pub(crate) use crate::waker::*;
 pub(crate) use crate::waker_registry::*;
 use std::mem::MaybeUninit;
+use std::ptr::NonNull;
 use std::sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -13,6 +14,8 @@ pub struct ChannelShared<F: Flavor> {
     pub(crate) inner: F,
     tx_count: AtomicUsize,
     rx_count: AtomicUsize,
+    // initially contains two (1 for tx and 1 for rx)
+    weak_count: AtomicUsize,
     pub(crate) senders: F::Send,
     pub(crate) recvs: F::Recv,
     pub(crate) backoff_limit: u16,
@@ -20,22 +23,25 @@ pub struct ChannelShared<F: Flavor> {
 }
 
 impl<F: Flavor> ChannelShared<F> {
-    pub(crate) fn new(inner: F, senders: F::Send, recvs: F::Recv) -> Arc<Self> {
+    pub(crate) fn new(inner: F, senders: F::Send, recvs: F::Recv) -> NonNull<Self> {
         let mut large = false;
         if let Some(bound) = inner.capacity() {
             if bound >= 10 {
                 large = true;
             }
         }
-        Arc::new(Self {
-            tx_count: AtomicUsize::new(1),
-            rx_count: AtomicUsize::new(1),
-            senders,
-            recvs,
-            backoff_limit: inner.backoff_limit(),
-            large,
-            inner,
-        })
+        unsafe {
+            NonNull::new_unchecked(Box::into_raw(Box::new(Self {
+                tx_count: AtomicUsize::new(1),
+                rx_count: AtomicUsize::new(1),
+                weak_count: AtomicUsize::new(2),
+                senders,
+                recvs,
+                backoff_limit: inner.backoff_limit(),
+                large,
+                inner,
+            })))
+        }
     }
 
     #[inline(always)]
@@ -95,13 +101,13 @@ impl<F: Flavor> ChannelShared<F> {
     /// Returns the number of senders for the channel.
     #[inline(always)]
     pub fn get_tx_count(&self) -> usize {
-        self.tx_count.load(Ordering::SeqCst)
+        self.tx_count.load(Ordering::Acquire)
     }
 
     /// Returns the number of receivers for the channel.
     #[inline(always)]
     pub fn get_rx_count(&self) -> usize {
-        self.rx_count.load(Ordering::SeqCst)
+        self.rx_count.load(Ordering::Acquire)
     }
 
     #[inline(always)]
@@ -128,6 +134,10 @@ impl<F: Flavor> ChannelShared<F> {
     pub(crate) fn add_tx(&self) {
         // The drop will close_tx, which has release fence
         let _ = self.tx_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_tx_weak(&self) {
+        let _ = self.weak_count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// for Upgrade of WeakTx
@@ -161,30 +171,48 @@ impl<F: Flavor> ChannelShared<F> {
         let _ = self.rx_count.fetch_add(1, Ordering::Relaxed);
     }
 
+    #[inline(always)]
+    pub(crate) fn dec_ref(this: *mut Self) {
+        unsafe {
+            if 1 == (*this).weak_count.fetch_sub(1, Ordering::Release) {
+                fence(Ordering::Acquire);
+                // drop the ChannelShared
+                let _ = Box::from_raw(this);
+            }
+        }
+    }
+
     /// This method is called when a sender is dropped.
     #[inline(always)]
-    pub(crate) fn close_tx(&self) {
-        let old = self.tx_count.fetch_sub(1, Ordering::Release);
-        if old <= 1 {
-            trace_log!("closing from tx");
-            fence(Ordering::SeqCst);
-            self.recvs.close();
-        } else {
-            trace_log!("drop tx {}", old - 1);
+    pub(crate) fn close_tx(this: *mut Self) {
+        unsafe {
+            let old = (*this).tx_count.fetch_sub(1, Ordering::Release);
+            if old <= 1 {
+                trace_log!("closing from tx");
+                // Safety NOTE it has SeqCst fence for is_tx_closed/is_rx_closed
+                fence(Ordering::SeqCst);
+                (*this).recvs.close();
+                Self::dec_ref(this);
+            } else {
+                trace_log!("drop tx {}", old - 1);
+            }
         }
     }
 
     /// This method is called when a receiver is dropped.
     #[inline(always)]
-    pub(crate) fn close_rx(&self) {
-        let old = self.rx_count.fetch_sub(1, Ordering::Release);
-        if old <= 1 {
-            trace_log!("closing from rx");
-            fence(Ordering::SeqCst);
-            // There's SeqCst fence inside RegistrySender::close
-            self.senders.close();
-        } else {
-            trace_log!("drop rx {}", old - 1);
+    pub(crate) fn close_rx(this: *mut Self) {
+        unsafe {
+            let old = (*this).rx_count.fetch_sub(1, Ordering::Release);
+            if old <= 1 {
+                trace_log!("closing from rx");
+                // Safety NOTE it has SeqCst fence for is_tx_closed/is_rx_closed
+                fence(Ordering::SeqCst);
+                (*this).senders.close();
+                Self::dec_ref(this);
+            } else {
+                trace_log!("drop rx {}", old - 1);
+            }
         }
     }
 

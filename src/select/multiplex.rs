@@ -8,6 +8,7 @@ use crate::SenderType;
 use crate::{RecvError, RecvTimeoutError, TryRecvError};
 use std::cell::Cell;
 use std::fmt;
+use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
@@ -86,8 +87,15 @@ pub struct Multiplex<F: Flavor> {
 unsafe impl<F: Flavor> Send for Multiplex<F> {}
 
 struct MultiplexHandle<F: Flavor> {
-    shared: Arc<ChannelShared<Mux<F>>>,
+    _shared: NonNull<ChannelShared<Mux<F>>>,
     weight: u32,
+}
+
+impl<F: Flavor> MultiplexHandle<F> {
+    #[inline(always)]
+    fn shared(&self) -> &ChannelShared<Mux<F>> {
+        unsafe { self._shared.as_ref() }
+    }
 }
 
 impl<F: Flavor> Multiplex<F> {
@@ -102,11 +110,11 @@ impl<F: Flavor> Multiplex<F> {
     }
 
     #[inline]
-    fn _add_item(&mut self, flavor: F, weight: u32) -> Arc<ChannelShared<Mux<F>>> {
+    fn _add_item(&mut self, flavor: F, weight: u32) -> NonNull<ChannelShared<Mux<F>>> {
         self.waker.add_opened();
         let recvs = self.waker.clone().to_wrapper(self.handlers.len());
         let shared = ChannelShared::new(Mux::<F>::from_inner(flavor), F::Send::new(), recvs);
-        self.handlers.push(MultiplexHandle { shared: shared.clone(), weight: weight - 1 });
+        self.handlers.push(MultiplexHandle { _shared: shared, weight: weight - 1 });
         self.last_idx.set(self.handlers.len() - 1);
         shared
     }
@@ -309,8 +317,8 @@ impl<F: Flavor> Multiplex<F> {
         let handle = unsafe { self.handlers.get_unchecked(last_idx) };
         let count = self.count.get();
         let loop_count = if count > 0 {
-            if let Some(msg) = handle.shared.inner.try_recv_cached() {
-                handle.shared.on_recv();
+            if let Some(msg) = handle.shared().inner.try_recv_cached() {
+                handle.shared().on_recv();
                 self.count.set(count - 1);
                 return Ok(msg);
             }
@@ -333,11 +341,11 @@ impl<F: Flavor> Multiplex<F> {
             idx = if idx + 1 >= len { 0 } else { idx + 1 };
             let handle = unsafe { self.handlers.get_unchecked(idx) };
             if let Some(msg) = if FINAL {
-                handle.shared.inner.try_recv_final()
+                handle.shared().inner.try_recv_final()
             } else {
-                handle.shared.inner.try_recv()
+                handle.shared().inner.try_recv()
             } {
-                handle.shared.on_recv();
+                handle.shared().on_recv();
                 self.count.set(handle.weight);
                 self.last_idx.set(idx);
                 return Some(msg);
@@ -422,7 +430,7 @@ impl<F: Flavor> Drop for Multiplex<F> {
     #[inline]
     fn drop(&mut self) {
         for handle in &self.handlers {
-            handle.shared.close_rx();
+            ChannelShared::close_rx(handle._shared.as_ptr());
         }
     }
 }
@@ -473,7 +481,7 @@ impl<F: Flavor> BlockingRxTrait<F::Item> for Multiplex<F> {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         for handle in &self.handlers {
-            if !handle.shared.is_empty() {
+            if !handle.shared().is_empty() {
                 return false;
             }
         }
@@ -541,7 +549,7 @@ impl<F: Flavor> BlockingRxTrait<F::Item> for &Multiplex<F> {
     #[inline(always)]
     fn is_empty(&self) -> bool {
         for handle in &self.handlers {
-            if !handle.shared.is_empty() {
+            if !handle.shared().is_empty() {
                 return false;
             }
         }
