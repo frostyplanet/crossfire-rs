@@ -112,7 +112,7 @@ impl<F: Flavor> stream::FusedStream for AsyncStream<F> {
 impl<F: Flavor> Drop for AsyncStream<F> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.as_ref() {
-            self.rx.shared.abandon_recv_waker(waker);
+            self.rx.shared().abandon_recv_waker(waker);
         }
     }
 }

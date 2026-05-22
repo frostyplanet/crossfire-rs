@@ -62,7 +62,7 @@ use crate::flavor::{
 use crate::shared::ChannelShared;
 use crate::SenderType;
 use core::mem::MaybeUninit;
-use std::sync::Arc;
+use core::ptr::NonNull;
 
 /// an flavor type can never receive any message
 pub struct Null();
@@ -155,20 +155,23 @@ impl FlavorMP for Null {}
 impl FlavorMC for Null {}
 
 /// The CloseHandle is a special type for flavor [Null], only impl `Clone` and `Drop`
-pub struct CloseHandle<F: Flavor>(Arc<ChannelShared<F>>);
+pub struct CloseHandle<F: Flavor>(NonNull<ChannelShared<F>>);
+
+unsafe impl<F: Flavor> Send for CloseHandle<F> {}
+unsafe impl<F: Flavor> Sync for CloseHandle<F> {}
 
 impl<F: Flavor> Clone for CloseHandle<F> {
     #[inline(always)]
     fn clone(&self) -> Self {
-        self.0.add_tx();
-        Self(self.0.clone())
+        unsafe { self.0.as_ref().add_tx() };
+        Self(self.0)
     }
 }
 
 impl<F: Flavor> Drop for CloseHandle<F> {
     #[inline(always)]
     fn drop(&mut self) {
-        self.0.close_tx();
+        ChannelShared::<F>::close_tx(self.0.as_ptr());
     }
 }
 
@@ -179,7 +182,7 @@ where
     type Flavor = F;
 
     #[inline(always)]
-    fn new(shared: Arc<ChannelShared<Self::Flavor>>) -> Self {
+    fn new(shared: NonNull<ChannelShared<Self::Flavor>>) -> Self {
         CloseHandle(shared)
     }
 }

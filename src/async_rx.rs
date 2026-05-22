@@ -11,7 +11,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::ptr::NonNull;
 use std::task::{Context, Poll};
 
 /// A single consumer (receiver) that works in an async context.
@@ -56,7 +56,7 @@ use std::task::{Context, Poll};
 /// }
 /// ```
 pub struct AsyncRx<F: Flavor> {
-    pub(crate) shared: Arc<ChannelShared<F>>,
+    pub(crate) _shared: NonNull<ChannelShared<F>>,
     // Remove the Sync marker to prevent being put in Arc
     _phan: PhantomData<Cell<()>>,
 }
@@ -78,27 +78,32 @@ impl<F: Flavor> fmt::Display for AsyncRx<F> {
 impl<F: Flavor> Drop for AsyncRx<F> {
     #[inline(always)]
     fn drop(&mut self) {
-        self.shared.close_rx();
+        ChannelShared::close_rx(self._shared.as_ptr());
     }
 }
 
 impl<F: Flavor> From<Rx<F>> for AsyncRx<F> {
     fn from(value: Rx<F>) -> Self {
         value.add_rx();
-        Self::new(value.shared.clone())
+        Self::new(value._shared)
     }
 }
 
 impl<F: Flavor> AsyncRx<F> {
     #[inline]
-    pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
-        Self { shared, _phan: Default::default() }
+    pub(crate) fn new(shared: NonNull<ChannelShared<F>>) -> Self {
+        Self { _shared: shared, _phan: Default::default() }
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared(&self) -> &ChannelShared<F> {
+        unsafe { self._shared.as_ref() }
     }
 
     /// Return true if the other side has closed
     #[inline(always)]
     pub fn is_disconnected(&self) -> bool {
-        self.shared.is_tx_closed()
+        self.shared().is_tx_closed()
     }
 
     #[inline]
@@ -220,7 +225,7 @@ impl<F: Flavor> AsyncRx<F> {
     /// Returns Err([TryRecvError::Disconnected]) if the sender has been dropped and the channel is empty.
     #[inline(always)]
     pub fn try_recv(&self) -> Result<F::Item, TryRecvError> {
-        self.shared.try_recv()
+        self.shared().try_recv()
     }
 
     /// This method use with [select](crate::select::Select), guarantee non-blocking
@@ -251,7 +256,7 @@ impl<F: Flavor> AsyncRx<F> {
     pub(crate) fn poll_item<const STREAM: bool>(
         &self, ctx: &mut Context, o_waker: &mut Option<<F::Recv as Registry>::Waker>,
     ) -> Result<F::Item, TryRecvError> {
-        let shared = &self.shared;
+        let shared = self.shared();
         // When the result is not TryRecvError::Empty,
         // make sure always take the o_waker out and abandon,
         // to skip the timeout cleaning logic in Drop.
@@ -331,7 +336,7 @@ impl<F: Flavor> Drop for RecvFuture<'_, F> {
     #[inline]
     fn drop(&mut self) {
         if let Some(waker) = self.waker.as_ref() {
-            self.rx.shared.abandon_recv_waker(waker);
+            self.rx.shared().abandon_recv_waker(waker);
         }
     }
 }
@@ -386,7 +391,7 @@ where
     #[inline]
     fn drop(&mut self) {
         if let Some(waker) = self.waker.as_ref() {
-            self.rx.shared.abandon_recv_waker(waker);
+            self.rx.shared().abandon_recv_waker(waker);
         }
     }
 }
@@ -676,8 +681,8 @@ impl<F: Flavor> Clone for MAsyncRx<F> {
     #[inline]
     fn clone(&self) -> Self {
         let inner = &self.0;
-        inner.shared.add_rx();
-        Self(AsyncRx::new(inner.shared.clone()))
+        inner.add_rx();
+        Self(AsyncRx::new(inner._shared))
     }
 }
 
@@ -689,7 +694,7 @@ impl<F: Flavor> From<MAsyncRx<F>> for AsyncRx<F> {
 
 impl<F: Flavor + FlavorMC> MAsyncRx<F> {
     #[inline]
-    pub(crate) fn new(shared: Arc<ChannelShared<F>>) -> Self {
+    pub(crate) fn new(shared: NonNull<ChannelShared<F>>) -> Self {
         Self(AsyncRx::new(shared))
     }
 }
@@ -726,7 +731,7 @@ impl<F: Flavor> Deref for MAsyncRx<F> {
 impl<F: Flavor> From<MRx<F>> for MAsyncRx<F> {
     fn from(value: MRx<F>) -> Self {
         value.add_rx();
-        Self(AsyncRx::new(value.shared.clone()))
+        Self(AsyncRx::new(value._shared))
     }
 }
 
@@ -809,7 +814,7 @@ impl<F: Flavor> Deref for AsyncRx<F> {
     type Target = ChannelShared<F>;
     #[inline(always)]
     fn deref(&self) -> &ChannelShared<F> {
-        &self.shared
+        self.shared()
     }
 }
 
@@ -891,21 +896,21 @@ impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for &MAsyncRx<F> {
 impl<F: Flavor> AsRef<ChannelShared<F>> for AsyncRx<F> {
     #[inline(always)]
     fn as_ref(&self) -> &ChannelShared<F> {
-        &self.shared
+        self.shared()
     }
 }
 
 impl<F: Flavor> AsRef<ChannelShared<F>> for MAsyncRx<F> {
     #[inline(always)]
     fn as_ref(&self) -> &ChannelShared<F> {
-        &self.0.shared
+        self.0.shared()
     }
 }
 
 impl<T, F: Flavor<Item = T>> ReceiverType for AsyncRx<F> {
     type Flavor = F;
     #[inline(always)]
-    fn new(shared: Arc<ChannelShared<F>>) -> Self {
+    fn new(shared: NonNull<ChannelShared<F>>) -> Self {
         AsyncRx::new(shared)
     }
 }
@@ -915,7 +920,7 @@ impl<F: Flavor> NotCloneable for AsyncRx<F> {}
 impl<T, F: Flavor<Item = T> + FlavorMC> ReceiverType for MAsyncRx<F> {
     type Flavor = F;
     #[inline(always)]
-    fn new(shared: Arc<ChannelShared<F>>) -> Self {
+    fn new(shared: NonNull<ChannelShared<F>>) -> Self {
         MAsyncRx::new(shared)
     }
 }
