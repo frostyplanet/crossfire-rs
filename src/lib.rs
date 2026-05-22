@@ -329,19 +329,19 @@ macro_rules! tokio_task_id {
 }
 
 use flavor::Flavor;
-use std::sync::Arc;
+use std::ptr::NonNull;
 
 /// type limiter for channel builder
 pub trait SenderType {
     type Flavor: Flavor;
-    fn new(shared: Arc<ChannelShared<Self::Flavor>>) -> Self;
+    fn new(shared: NonNull<ChannelShared<Self::Flavor>>) -> Self;
 }
 
 /// type limiter for channel builder
 pub trait ReceiverType: AsRef<ChannelShared<Self::Flavor>> {
     type Flavor: Flavor;
 
-    fn new(shared: Arc<ChannelShared<Self::Flavor>>) -> Self;
+    fn new(shared: NonNull<ChannelShared<Self::Flavor>>) -> Self;
 }
 
 pub trait NotCloneable {}

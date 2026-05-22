@@ -86,7 +86,7 @@ where
         &mut self, ctx: &mut Context, item: F::Item,
     ) -> Result<(), TrySendError<F::Item>> {
         let _item = MaybeUninit::new(item);
-        let shared = &self.tx.shared;
+        let shared = self.tx.shared();
         if shared.inner.try_send(&_item) {
             shared.on_send();
             return Ok(());
@@ -102,7 +102,7 @@ where
 impl<F: Flavor> Drop for AsyncSink<F> {
     fn drop(&mut self) {
         if let Some(waker) = self.waker.as_ref() {
-            self.tx.shared.abandon_send_waker(waker);
+            self.tx.shared().abandon_send_waker(waker);
         }
     }
 }

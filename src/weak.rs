@@ -1,13 +1,13 @@
 use crate::flavor::{FlavorMP, FlavorUnbounded};
 use crate::{shared::*, SenderType};
-use std::mem::MaybeUninit;
-use std::sync::Arc;
+use core::mem::MaybeUninit;
+use core::ptr::NonNull;
 
 /// A weak reference of SenderType
 ///
 /// Can be obtain from [MTx::downgrade](crate::MTx::downgrade) or [MAsyncTx::downgrade](crate::MAsyncTx::downgrade).
 /// When the number of valid sender is non-zero, can try [upgrade](WeakTx::upgrade) to a [MTx](crate::MTx) or [MAsyncTx](crate::MAsyncTx).
-pub struct WeakTx<F: Flavor + FlavorMP>(pub(crate) Arc<ChannelShared<F>>);
+pub struct WeakTx<F: Flavor + FlavorMP>(pub(crate) NonNull<ChannelShared<F>>);
 
 unsafe impl<F: Flavor + FlavorMP> Send for WeakTx<F> {}
 unsafe impl<F: Flavor + FlavorMP> Sync for WeakTx<F> {}
@@ -36,8 +36,8 @@ impl<F: Flavor + FlavorMP> WeakTx<F> {
     /// ```
     #[inline]
     pub fn upgrade<S: SenderType<Flavor = F>>(&self) -> Option<S> {
-        if self.0.try_add_tx() {
-            Some(S::new(self.0.clone()))
+        if self.shared().try_add_tx() {
+            Some(S::new(self.0))
         } else {
             None
         }
@@ -45,12 +45,24 @@ impl<F: Flavor + FlavorMP> WeakTx<F> {
 
     #[inline(always)]
     pub fn get_tx_count(&self) -> usize {
-        self.0.get_tx_count()
+        self.shared().get_tx_count()
     }
 
     #[inline(always)]
     pub fn get_rx_count(&self) -> usize {
-        self.0.get_rx_count()
+        self.shared().get_rx_count()
+    }
+
+    #[inline(always)]
+    fn shared(&self) -> &ChannelShared<F> {
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl<F: Flavor + FlavorMP> Drop for WeakTx<F> {
+    #[inline]
+    fn drop(&mut self) {
+        ChannelShared::<F>::dec_ref(self.0.as_ptr());
     }
 }
 
@@ -73,7 +85,7 @@ where
     /// You have to rely on the Drop trait of the message to cleanup.
     #[inline]
     pub unsafe fn send_unchecked(&self, item: F::Item) {
-        let shared = &self.0;
+        let shared = self.shared();
         let _item = MaybeUninit::new(item);
         shared.inner.try_send(&_item);
         shared.on_send();
