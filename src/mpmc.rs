@@ -97,6 +97,8 @@ impl<T> Queue for Array<T> {
 }
 
 impl<T> FlavorImpl for Array<T> {
+    const IS_BOUNDED: bool = true;
+
     flavor_dispatch!(wrap_array);
 }
 

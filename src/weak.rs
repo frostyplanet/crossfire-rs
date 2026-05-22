@@ -1,4 +1,4 @@
-use crate::flavor::FlavorMP;
+use crate::flavor::{FlavorMP, FlavorUnbounded};
 use crate::{shared::*, SenderType};
 use std::mem::MaybeUninit;
 use std::sync::Arc;
@@ -54,7 +54,10 @@ impl<F: Flavor + FlavorMP> WeakTx<F> {
     }
 }
 
-impl<F: Flavor<Send = RegistryDummy> + FlavorMP> WeakTx<F> {
+impl<F> WeakTx<F>
+where
+    F: Flavor + FlavorMP + FlavorUnbounded,
+{
     /// Sends a message without checking channel closed first (Only available for **unbounded** channel)
     ///
     /// It's for scenario that receiver-side never exit early,

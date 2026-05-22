@@ -101,6 +101,8 @@ impl Queue for Null {
 }
 
 impl FlavorImpl for Null {
+    const IS_BOUNDED: bool = false;
+
     #[inline(always)]
     fn try_send(&self, _item: &MaybeUninit<()>) -> bool {
         // work as an /dev/null, although normally init with CloseHandle which don't have send() method

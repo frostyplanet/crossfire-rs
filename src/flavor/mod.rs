@@ -158,11 +158,6 @@ macro_rules! flavor_dispatch {
         fn backoff_limit(&self) -> u16 {
             $wrap_method!(self, backoff_limit)
         }
-
-        #[inline(always)]
-        fn may_direct_copy(&self) -> bool {
-            $wrap_method!(self, may_direct_copy)
-        }
     };
 }
 pub(super) use flavor_dispatch;
@@ -192,6 +187,10 @@ pub trait Flavor: Send + 'static + FlavorImpl {
 
 pub trait FlavorMP {}
 pub trait FlavorMC {}
+
+// because rust does not support const equal IS_BOUNDED=false
+// https://github.com/rust-lang/rust/issues/92827
+pub trait FlavorUnbounded {}
 
 pub trait FlavorNew {
     fn new() -> Self;
@@ -228,6 +227,14 @@ where
     pub(crate) fn from_inner(f: F) -> Self {
         Self { inner: f, _phan: Default::default() }
     }
+}
+
+impl<F, S, R> FlavorUnbounded for FlavorWrap<F, S, R>
+where
+    F: FlavorImpl + FlavorUnbounded,
+    S: RegistrySend,
+    R: RegistryRecv,
+{
 }
 
 impl<F, S, R> FlavorNew for FlavorWrap<F, S, R>
@@ -315,6 +322,8 @@ where
     S: RegistrySend,
     R: RegistryRecv,
 {
+    const IS_BOUNDED: bool = F::IS_BOUNDED;
+
     flavor_dispatch!(wrap_new_type);
 }
 

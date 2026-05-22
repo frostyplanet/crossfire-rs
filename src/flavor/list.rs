@@ -1,4 +1,4 @@
-use super::{FlavorImpl, FlavorNew, FlavorSelect, Queue, Token};
+use super::{FlavorImpl, FlavorNew, FlavorSelect, FlavorUnbounded, Queue, Token};
 use crate::crossbeam::seg_queue::SegQueue;
 use std::mem::MaybeUninit;
 
@@ -93,3 +93,5 @@ impl<T> FlavorSelect for List<T> {
         self.0.read(token)
     }
 }
+
+impl<T> FlavorUnbounded for List<T> {}
