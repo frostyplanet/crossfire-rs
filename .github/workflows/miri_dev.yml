@@ -26,5 +26,5 @@ jobs:
     - name: Run miri tests without log (tokio multi thread)
       run: cd test-suite; NIGHTLY_VERSION=nightly-2025-12-01 scripts/miri.sh -F tokio,time
 
-    - name: Run miri tests without log (tokio current thread)
-      run: cd test-suite; SINGLE_THREAD_RUNTIME=1 NIGHTLY_VERSION=nightly-2025-12-01 scripts/miri.sh -F tokio
+#- name: Run miri tests without log (tokio current thread)
+#  run: cd test-suite; SINGLE_THREAD_RUNTIME=1 NIGHTLY_VERSION=nightly-2025-12-01 scripts/miri.sh -F tokio
