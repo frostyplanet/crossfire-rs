@@ -15,11 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.16] - 2026-05-22
+
+### Fixed
+
+- select: select dropping fix (SelectHandle::try_select final ordering)
+
 ## [3.1.15] - 2026-05-21
 
 ### Added
 
-waitgroup: Implement Pointer & SmartPointer for waitGroupZero
+- waitgroup: Implement Pointer & SmartPointer for waitGroupZero
 
 ## [3.1.14] - 2026-05-21
 
