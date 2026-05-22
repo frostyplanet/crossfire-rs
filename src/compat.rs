@@ -87,6 +87,9 @@ impl<T> Queue for CompatFlavor<T> {
 }
 
 impl<T> FlavorImpl for CompatFlavor<T> {
+    /// IS_BOUNDED does not have meaning here
+    const IS_BOUNDED: bool = true;
+
     flavor_dispatch!(wrap_compat);
 }
 

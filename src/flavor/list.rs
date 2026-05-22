@@ -48,6 +48,8 @@ impl<T> Queue for List<T> {
 }
 
 impl<T> FlavorImpl for List<T> {
+    const IS_BOUNDED: bool = false;
+
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         self.0.push(unsafe { item.assume_init_read() });
@@ -67,11 +69,6 @@ impl<T> FlavorImpl for List<T> {
     #[inline]
     fn backoff_limit(&self) -> u16 {
         crate::backoff::DEFAULT_LIMIT
-    }
-
-    #[inline]
-    fn may_direct_copy(&self) -> bool {
-        false
     }
 }
 

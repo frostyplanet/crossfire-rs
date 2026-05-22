@@ -215,6 +215,8 @@ impl<T> Drop for One<T> {
 }
 
 impl<T> FlavorImpl for One<T> {
+    const IS_BOUNDED: bool = true;
+
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         // Will always double-check with is_full or try_send_oneshot()
@@ -241,11 +243,6 @@ impl<T> FlavorImpl for One<T> {
         // Due to bound is too small,
         // yield with MAX_LIMIT to prevent collapse in high contention
         crate::backoff::MAX_LIMIT
-    }
-
-    #[inline]
-    fn may_direct_copy(&self) -> bool {
-        true
     }
 }
 

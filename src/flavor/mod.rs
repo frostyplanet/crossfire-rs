@@ -56,8 +56,10 @@ pub trait Queue {
     fn is_empty(&self) -> bool;
 }
 
-/// Internal flavor interface
+/// `FlavorImpl` provides lockless queue basic operation needed by channel
 pub(crate) trait FlavorImpl: Queue {
+    const IS_BOUNDED: bool;
+
     fn try_send(&self, item: &MaybeUninit<Self::Item>) -> bool;
 
     #[inline]
@@ -78,11 +80,6 @@ pub(crate) trait FlavorImpl: Queue {
     fn try_recv_final(&self) -> Option<Self::Item>;
 
     fn backoff_limit(&self) -> u16;
-
-    #[inline(always)]
-    fn may_direct_copy(&self) -> bool {
-        false
-    }
 }
 
 pub(crate) trait FlavorSelect: Queue {
@@ -187,6 +184,7 @@ macro_rules! flavor_select_dispatch {
 #[allow(unused_imports)]
 pub(super) use flavor_select_dispatch;
 
+/// Flavor Inherits `FlavorImpl`, additionally define the combination of waker registers types
 pub trait Flavor: Send + 'static + FlavorImpl {
     type Send: RegistrySend;
     type Recv: RegistryRecv;

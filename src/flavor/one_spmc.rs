@@ -325,6 +325,8 @@ impl<T> Queue for OneSpsc<T> {
 }
 
 impl<T> FlavorImpl for OneSpsc<T> {
+    const IS_BOUNDED: bool = true;
+
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         self.try_push(item.as_ptr(), Acquire)
@@ -350,12 +352,6 @@ impl<T> FlavorImpl for OneSpsc<T> {
         // Due to bound is too small,
         // yield with MAX_LIMIT to prevent collapse in high contention
         crate::backoff::MAX_LIMIT
-    }
-
-    #[inline]
-    fn may_direct_copy(&self) -> bool {
-        // NOTE sender has no CAS, not safe to direct copy
-        false
     }
 }
 

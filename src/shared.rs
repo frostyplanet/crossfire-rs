@@ -18,7 +18,6 @@ pub struct ChannelShared<F: Flavor> {
     pub(crate) recvs: F::Recv,
     pub(crate) backoff_limit: u16,
     pub(crate) large: bool,
-    pub(crate) may_direct_copy: bool,
 }
 
 impl<F: Flavor> ChannelShared<F> {
@@ -36,7 +35,6 @@ impl<F: Flavor> ChannelShared<F> {
             recvs,
             backoff_limit: inner.backoff_limit(),
             large,
-            may_direct_copy: inner.may_direct_copy(),
             inner,
         })
     }
@@ -104,8 +102,8 @@ impl<F: Flavor> ChannelShared<F> {
     }
 
     #[inline(always)]
-    pub(crate) fn sender_direct_copy(&self) -> bool {
-        self.may_direct_copy && self.senders.use_direct_copy()
+    pub(crate) fn might_congest(&self) -> bool {
+        F::IS_BOUNDED && self.senders.use_direct_copy()
     }
 
     /// Returns the number of wakers for senders and receivers. For debugging purposes.

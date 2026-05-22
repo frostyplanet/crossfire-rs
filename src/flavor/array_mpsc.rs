@@ -59,6 +59,8 @@ impl<T> Queue for ArrayMpsc<T> {
 }
 
 impl<T> FlavorImpl for ArrayMpsc<T> {
+    const IS_BOUNDED: bool = true;
+
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         unsafe { self.0.push_with_ptr(item.as_ptr()) }
@@ -98,11 +100,6 @@ impl<T> FlavorImpl for ArrayMpsc<T> {
                 crate::backoff::MAX_LIMIT
             }
         }
-    }
-
-    #[inline]
-    fn may_direct_copy(&self) -> bool {
-        true
     }
 }
 

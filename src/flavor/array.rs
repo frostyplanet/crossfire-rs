@@ -57,6 +57,8 @@ impl<T, const MP: bool, const MC: bool> Queue for _Array<T, MP, MC> {
 }
 
 impl<T, const MP: bool, const MC: bool> FlavorImpl for _Array<T, MP, MC> {
+    const IS_BOUNDED: bool = true;
+
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         unsafe { self.0.push_with_ptr(item.as_ptr()) }
@@ -90,16 +92,6 @@ impl<T, const MP: bool, const MC: bool> FlavorImpl for _Array<T, MP, MC> {
             {
                 crate::backoff::MAX_LIMIT
             }
-        }
-    }
-
-    #[inline]
-    fn may_direct_copy(&self) -> bool {
-        if MP {
-            true
-        } else {
-            // sender has no CAS, not safe to direct copy
-            false
         }
     }
 }

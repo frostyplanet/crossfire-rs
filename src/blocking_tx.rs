@@ -105,7 +105,7 @@ impl<F: Flavor> Tx<F> {
         let large = shared.large;
         let backoff_cfg = BackoffConfig::detect().spin(2).limit(shared.backoff_limit);
         let mut backoff = Backoff::from(backoff_cfg);
-        let congest = shared.sender_direct_copy();
+        let congest = shared.might_congest();
         if large {
             backoff.set_step(2);
         }

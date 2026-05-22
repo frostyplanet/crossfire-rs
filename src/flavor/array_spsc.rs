@@ -59,6 +59,8 @@ impl<T> Queue for ArraySpsc<T> {
 }
 
 impl<T> FlavorImpl for ArraySpsc<T> {
+    const IS_BOUNDED: bool = true;
+
     #[inline(always)]
     fn try_send(&self, item: &MaybeUninit<T>) -> bool {
         unsafe { self.0.push_with_ptr(item.as_ptr()) }
@@ -87,14 +89,6 @@ impl<T> FlavorImpl for ArraySpsc<T> {
     #[inline]
     fn backoff_limit(&self) -> u16 {
         crate::backoff::MAX_LIMIT
-    }
-
-    #[inline]
-    fn may_direct_copy(&self) -> bool {
-        // NOTE:
-        // The spsc is not safe for direct copy,
-        // because it has no cas, consumer cannot touch the producers pointer
-        false
     }
 }
 
