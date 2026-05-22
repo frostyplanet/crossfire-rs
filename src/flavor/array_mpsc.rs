@@ -1,4 +1,4 @@
-use super::{FlavorBounded, FlavorImpl, FlavorSelect, Queue, Token};
+use super::{FlavorBounded, FlavorImpl, FlavorMP, FlavorSelect, Queue, Token};
 use crate::crossbeam::array_queue_mpsc::ArrayQueueMpsc;
 use std::mem::MaybeUninit;
 
@@ -121,3 +121,5 @@ impl<T> FlavorBounded for ArrayMpsc<T> {
         Self::new(size)
     }
 }
+
+impl<T> FlavorMP for ArrayMpsc<T> {}

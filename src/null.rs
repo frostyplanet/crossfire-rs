@@ -56,8 +56,9 @@
 //! # }
 //! ```
 
-use crate::flavor::Flavor;
-use crate::flavor::{FlavorImpl, FlavorNew, FlavorSelect, Queue, Token};
+use crate::flavor::{
+    Flavor, FlavorImpl, FlavorMC, FlavorMP, FlavorNew, FlavorSelect, Queue, Token,
+};
 use crate::shared::ChannelShared;
 use crate::SenderType;
 use core::mem::MaybeUninit;
@@ -149,6 +150,9 @@ impl FlavorSelect for Null {
         unreachable!();
     }
 }
+
+impl FlavorMP for Null {}
+impl FlavorMC for Null {}
 
 /// The CloseHandle is a special type for flavor [Null], only impl `Clone` and `Drop`
 pub struct CloseHandle<F: Flavor>(Arc<ChannelShared<F>>);

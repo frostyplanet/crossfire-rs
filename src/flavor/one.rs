@@ -1,4 +1,4 @@
-use super::{FlavorImpl, FlavorNew, FlavorSelect, Queue, Token};
+use super::{FlavorImpl, FlavorMC, FlavorMP, FlavorNew, FlavorSelect, Queue, Token};
 use crate::backoff::*;
 use core::cell::UnsafeCell;
 use core::mem::{needs_drop, MaybeUninit};
@@ -274,3 +274,6 @@ impl<T> FlavorSelect for One<T> {
         slot.read(token.stamp as u16)
     }
 }
+
+impl<T> FlavorMP for One<T> {}
+impl<T> FlavorMC for One<T> {}

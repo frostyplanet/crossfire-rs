@@ -287,18 +287,18 @@ where
 
 impl<F, R> FlavorMP for FlavorWrap<F, RegistryDummy, R>
 where
-    F: FlavorImpl,
+    F: FlavorImpl + FlavorMP,
     R: RegistryRecv,
 {
 }
 impl<F, R> FlavorMP for FlavorWrap<F, RegistryMulti, R>
 where
-    F: FlavorImpl,
+    F: FlavorImpl + FlavorMP,
     R: RegistryRecv,
 {
 }
 
-impl<F: FlavorImpl, S> FlavorMC for FlavorWrap<F, S, RegistryMulti> {}
+impl<F, S> FlavorMC for FlavorWrap<F, S, RegistryMulti> where F: FlavorImpl + FlavorMC {}
 
 macro_rules! wrap_new_type {
     ($self: expr, $method:ident $($arg:expr)*)=>{

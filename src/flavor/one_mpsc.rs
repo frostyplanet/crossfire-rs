@@ -1,4 +1,4 @@
-use super::{FlavorImpl, FlavorNew, FlavorSelect, Queue, Token};
+use super::{FlavorImpl, FlavorMP, FlavorNew, FlavorSelect, Queue, Token};
 use crate::backoff::*;
 use core::cell::UnsafeCell;
 use core::mem::{needs_drop, MaybeUninit};
@@ -235,6 +235,8 @@ impl<T> FlavorNew for OneMpsc<T> {
         OneMpsc::new()
     }
 }
+
+impl<T> FlavorMP for OneMpsc<T> {}
 
 impl<T> FlavorSelect for OneMpsc<T> {
     #[inline]
