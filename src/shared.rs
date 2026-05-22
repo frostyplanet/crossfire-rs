@@ -310,7 +310,7 @@ impl<F: Flavor + FlavorSelect> SelectHandle for ChannelShared<F> {
         if let Some(token) = self.inner.try_select(final_check) {
             return Some(token);
         }
-        if final_check && self.get_tx_count() == 0 {
+        if final_check && self.is_tx_closed() {
             return Some(Token::default());
         }
         None
