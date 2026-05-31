@@ -57,11 +57,11 @@ fn test_basic_wg_try_wait(setup_log: ()) {
 #[logfn]
 #[rstest]
 fn test_waitgroup_with_state(setup_log: ()) {
-    let wg = WaitGroup::new(AtomicBool::new(true), 0);
     macro_rules! test {
-        ($wg: expr) => {{
+        ($wg: expr, $cls: tt) => {{
             for i in 0..10 {
                 let guard = $wg.add_guard();
+                assert!($cls::get_mut(&mut $wg).is_none());
                 std::thread::spawn(move || {
                     if i == 5 {
                         guard.store(false, Ordering::SeqCst);
@@ -71,12 +71,15 @@ fn test_waitgroup_with_state(setup_log: ()) {
             }
             $wg.wait();
             assert_eq!($wg.load(Ordering::SeqCst), false);
+            *$cls::get_mut(&mut $wg).unwrap().get_mut() = true;
+            let inner = $cls::try_into_inner($wg).unwrap();
+            assert_eq!(inner.load(Ordering::Relaxed), true);
         }};
     }
-    test!(wg);
-
-    let wg = WaitGroupZero::new(AtomicBool::new(true));
-    test!(wg);
+    let mut wg = WaitGroupZero::new(AtomicBool::new(true));
+    test!(wg, WaitGroupZero);
+    let mut wg = WaitGroup::new(AtomicBool::new(true), 0);
+    test!(wg, WaitGroup);
 }
 
 #[logfn]

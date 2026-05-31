@@ -483,6 +483,41 @@ impl<T> WaitGroup<T> {
     pub fn wait_timeout(&self, timeout: Duration) -> Result<(), ()> {
         self.get_inner().wait_blocking(Some(Instant::now() + timeout), self.threshold)
     }
+
+    /// Attempt to unwrap to the inner `T` if all the guard reference is dropped
+    ///
+    /// # Safety
+    ///
+    /// It use SeqCst.
+    ///
+    /// Calling this function after a `wait()` / `wait_async()` with zero threshold,
+    /// ganrantee return Ok
+    #[inline]
+    pub fn try_into_inner(this: Self) -> Result<T, Self> {
+        if this.get_left_seqcst() == 0 {
+            let inner = unsafe { Box::from_raw(this.inner.as_ptr()) };
+            core::mem::forget(this);
+            Ok(inner.inner)
+        } else {
+            Err(this)
+        }
+    }
+
+    /// Attempt to get the mutable reference of inner `T` if all the guard reference is dropped
+    ///
+    /// # Safety
+    ///
+    /// It use SeqCst ordering.
+    ///
+    /// Calling this function after a `wait()` / `wait_async()` return with zero threshold,
+    /// ganrantee return non-None result
+    pub fn get_mut(this: &mut Self) -> Option<&mut T> {
+        if this.get_left_seqcst() == 0 {
+            Some(unsafe { &mut this.inner.as_mut().inner })
+        } else {
+            None
+        }
+    }
 }
 
 impl<T> Drop for WaitGroup<T> {
@@ -678,6 +713,42 @@ impl<T> WaitGroupZero<T> {
     pub fn wait_timeout(&self, timeout: Duration) -> Result<(), ()> {
         // one ref for myself
         self.get_inner().wait_blocking(Some(Instant::now() + timeout), 1)
+    }
+
+    /// Attempt to unwrap to the inner `T` if all the guard reference is dropped
+    ///
+    /// # Safety
+    ///
+    /// It use SeqCst.
+    ///
+    /// Calling this function after a `wait()` / `wait_async()` with zero threshold,
+    /// ganrantee return Ok
+    #[inline]
+    pub fn try_into_inner(this: Self) -> Result<T, Self> {
+        if this.get_left_seqcst() == 0 {
+            let inner = unsafe { Box::from_raw(this.inner.as_ptr()) };
+            core::mem::forget(this);
+            Ok(inner.inner)
+        } else {
+            Err(this)
+        }
+    }
+
+    /// Attempt to get the mutable reference of inner `T` if all the guard reference is dropped
+    ///
+    /// # Safety
+    ///
+    /// It use SeqCst ordering.
+    ///
+    /// Calling this function after a `wait()` / `wait_async()` return with zero threshold,
+    /// ganrantee return non-None result
+    #[inline]
+    pub fn get_mut(this: &mut Self) -> Option<&mut T> {
+        if this.get_left_seqcst() == 0 {
+            Some(unsafe { &mut this.inner.as_mut().inner })
+        } else {
+            None
+        }
     }
 }
 
