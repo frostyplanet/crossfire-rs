@@ -15,7 +15,7 @@ compio = { version = "0.17", optional = true, features = ["runtime", "dispatcher
 tokio = { version = "1", optional = true, features = ["sync", "rt-multi-thread", "rt", "macros"] }
 fastrand = "2.3"
 rstest = "0"
-captains-log = {version="0.13", features = ["ringfile", "tracing"] }
+captains-log = {version=">=0.16", features = ["ringfile", "tracing"] }
 criterion2 = { version="3.0.2", features = ["async"]}
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
