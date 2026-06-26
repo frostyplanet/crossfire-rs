@@ -21,7 +21,7 @@ jobs:
       run: cargo build --verbose
 
     - name: Run test-suite with LSAN
-      run: env NIGHTLY="+nightly" RUSTFLAGS="-Zsanitizer=leak" WORKFLOW=1 make test
+      run: env WORKFLOW=1 make test_leak
 
     - name: Run internal test
       run: make test_internal

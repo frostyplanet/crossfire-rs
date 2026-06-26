@@ -9,7 +9,7 @@ RUN_TEST_CASE = _run_test_case() {                                              
         export TEST_FLAG=" -- --nocapture --test-threads=1"; \
         export LOG_FILE="/tmp/test_crossfire.log"; \
     fi; \
-	RUST_BACKTRACE=full cargo ${NIGHTLY} test  -p crossfire-test ${ARGS} $${FEATURE_FLAG} $${TEST_FLAG};    \
+	RUST_BACKTRACE=full cargo test -p crossfire-test ${ARGS} $${FEATURE_FLAG} $${TEST_FLAG};    \
 }
 
 RUN_RELEASE_CASE = _run_test_release_case() {                                                  \
@@ -20,7 +20,7 @@ RUN_RELEASE_CASE = _run_test_release_case() {                                   
         export LOG_FILE="/tmp/test_crossfire.log"; \
         export TEST_FLAG=" --release -- --nocapture --test-threads=1"; \
     fi; \
-	RUST_BACKTRACE=full cargo ${NIGHTLY} test -p crossfire-test ${ARGS} $${FEATURE_FLAG} $${TEST_FLAG};  \
+	RUST_BACKTRACE=full cargo test -p crossfire-test ${ARGS} $${FEATURE_FLAG} $${TEST_FLAG};  \
 }
 
 RUN_BENCH = _run_bench() { \
@@ -153,12 +153,12 @@ bench:
 	@${RUN_BENCH}; _run_bench
 
 .PHONY: test_leak
-test_leak: test_internal
-	@${RUN_TEST_CASE}; NIGHTLY="+nightly" RUSTFLAGS="-Zsanitizer=leak"; _run_test_case
+test_leak:
+	@${RUN_TEST_CASE}; export RUSTUP_TOOLCHAIN="nightly" RUSTFLAGS="-Zsanitizer=leak" FEATURE_FLAG="-F tokio,time"; _run_test_case
 
 .PHONY: test_internal
 test_internal:
-	RUSTFLAGS="-Zsanitizer=leak" cargo +nightly test -F trace_log --lib -- --nocapture ${ARGS}
+	RUSTUP_TOOLCHAIN="nightly" RUSTFLAGS="-Zsanitizer=leak" cargo +nightly test -F trace_log --lib -- --nocapture ${ARGS}
 
 .PHONY: build
 build: init
