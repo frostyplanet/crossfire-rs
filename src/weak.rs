@@ -9,6 +9,9 @@ use std::sync::Arc;
 /// When the number of valid sender is non-zero, can try [upgrade](WeakTx::upgrade) to a [MTx](crate::MTx) or [MAsyncTx](crate::MAsyncTx).
 pub struct WeakTx<F: Flavor + FlavorMP>(pub(crate) Arc<ChannelShared<F>>);
 
+unsafe impl<F: Flavor + FlavorMP> Send for WeakTx<F> {}
+unsafe impl<F: Flavor + FlavorMP> Sync for WeakTx<F> {}
+
 impl<F: Flavor + FlavorMP> WeakTx<F> {
     /// Upgrade to MTx or MAsyncTx (Only allow for mpsc or mpmc)
     ///
