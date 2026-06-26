@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.17] - 2026-06-26
+
+### Added
+
+- waitgroup: Add `try_into_inner()` and `get_mut()`
+
+- Add marker trait FlavorUnbounded
+
+### Fixed
+
+- weak: Add missing Send & Sync for WeakTx
+
+### Changed
+
+- waker: Remove generic from WakerInner, since direct_copy is removed
+
 ## [3.1.16] - 2026-05-22
 
 ### Fixed
