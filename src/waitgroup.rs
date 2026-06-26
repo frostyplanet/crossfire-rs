@@ -24,14 +24,14 @@
 //!       When changing threshold to larger value, wait() might not wake up as soon as new threshold reached.
 //!   - [WaitGroupGuard] cannot convert from raw pointer.
 //!
-//!
 //! # Safety
 //!
 //! [WaitGroup]/[WaitGroupZero] does not have `Sync` marker, because it's not safe to concurrently wait, due to only one slot reserved for waker.
 //!
-//! If you want to put inside other struct:
-//! - Use [WaitGroupInline] instead.
-//! - Use `unsafe impl Sync` on [WaitGroup]'s parent struct.
+//! Methods to get around compilation limits:
+//! - Use [WaitGroupInline] inside parent structure, and use unsafe.
+//! - Use `unsafe impl Sync` on parent structure of `WaitGroup`, and access `WaitGroup` via parent.
+//! - Use `&mut` reference of `Waitgroup`, because `&mut WaitGroup` have `Send`
 //!
 //! ```
 //! use crossfire::waitgroup::WaitGroup;
