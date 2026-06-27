@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.18] - 2026-06-27
+
+### Fixed
+
+- Fix compile error with `compat` feature (regression of 3.1.17)
+
 ## [3.1.17] - 2026-06-26
 
 ### Added
