@@ -152,15 +152,19 @@ pub mod stream {
     pub type AsyncStream<T> = crate::stream::AsyncStream<CompatFlavor<T>>;
 }
 
+macro_rules! init_share {
+    ($flavor: expr) => {{
+        ChannelShared::new(
+            $flavor,
+            <RegistryMulti as RegistrySend>::new(),
+            <RegistryMulti as RegistryRecv>::new(),
+        )
+    }};
+}
+
 pub mod spsc {
 
     use super::*;
-
-    macro_rules! init_share {
-        ($flavor: expr) => {{
-            ChannelShared::new($flavor, RegistryMulti::new(), RegistryMulti::new())
-        }};
-    }
 
     /// Creates an unbounded channel for use in a blocking context.
     ///
@@ -231,12 +235,6 @@ pub mod mpsc {
 
     use super::*;
 
-    macro_rules! init_share {
-        ($flavor: expr) => {{
-            ChannelShared::new($flavor, RegistryMulti::new(), RegistryMulti::new())
-        }};
-    }
-
     /// Creates an unbounded channel for use in a blocking context.
     ///
     /// The sender will never block, so we use the same `Tx` for all threads.
@@ -306,12 +304,6 @@ pub mod mpmc {
     //! v2 API Compatible Multiple producers, multiple consumers.
 
     use super::*;
-
-    macro_rules! init_share {
-        ($flavor: expr) => {{
-            ChannelShared::new($flavor, RegistryMulti::new(), RegistryMulti::new())
-        }};
-    }
 
     /// Creates an unbounded channel for use in a blocking context.
     ///
