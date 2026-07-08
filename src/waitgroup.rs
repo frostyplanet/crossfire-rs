@@ -134,7 +134,7 @@ use crate::backoff::Backoff;
 use crate::shared::{check_timeout, ThinWaker};
 #[allow(unused_imports)]
 use crate::{tokio_task_id, trace_log};
-pub use embed_collections::{Pointer, SmartPointer};
+pub use pointers::{Pointer, SmartPointer};
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::future::Future;
