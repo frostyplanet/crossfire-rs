@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.19] - 2026-07-09
+
+### Changed
+
+- Change dep:embed-collections to `pointers` crate, for a lighter dep tree
+
 ## [3.1.18] - 2026-06-27
 
 ### Fixed
