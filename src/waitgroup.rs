@@ -553,7 +553,7 @@ impl<T: fmt::Display> fmt::Display for WaitGroup<T> {
 ///
 /// It's just a subset of [WaitGroup]
 ///
-/// [WaitGroupZeroGuard] has impl [Pointer](https://docs.rs/embed-collections/latest/embed_collections/trait.Pointer.html),
+/// [WaitGroupZeroGuard] has impl [Pointer](https://docs.rs/pointers/latest/pointers/trait.Pointer.html),
 /// which supports casting from or to raw pointer.
 ///
 /// Features:
@@ -877,7 +877,7 @@ impl<T: fmt::Display> fmt::Display for WaitGroupGuard<T> {
 
 /// An RAII implementation got represent ref count for [WaitGroupZero].
 ///
-/// It has implemented [Pointer](https://docs.rs/embed-collections/latest/embed_collections/trait.Pointer.html) trait
+/// It has implemented [Pointer](https://docs.rs/pointers/latest/pointers/trait.Pointer.html) trait
 ///
 /// When cloning WaitGroupZeroGuard, which will increase the ref count.
 ///
