@@ -18,7 +18,7 @@ pub const DEFAULT_WEIGHT: u32 = 128;
 /// Type alias for multiplexed channel flavor
 pub type Mux<F> = FlavorWrap<F, <F as Flavor>::Send, SelectWakerWrapper>;
 
-/// A multiplexer that owns multi channel receivers of the same Flavor type.
+/// `Multiplex` owns multi channel receivers of the same Flavor type.
 ///
 /// Unlike select, it focus on round-robin mode, allow to specified weight on each channel.
 /// It maintains a count of message received for each channel.
@@ -30,17 +30,20 @@ pub type Mux<F> = FlavorWrap<F, <F as Flavor>::Send, SelectWakerWrapper>;
 /// the worst because of cpu cache thrashing)
 ///
 /// ## Capability and limitation:
-/// - New channel may be added on the fly
+/// - New channel may be added on the fly with [Multiplex::new_tx], [Multiplex::bounded_tx],
+///   [Multiplex::bounded_tx_with_weight].
 /// - This abstraction is only designed for stable channels for most efficient select.
-/// - If channel close by sender, the receiver will be automatically close inside the Multiplex,
-///   user will not be notify until all its channels closed.
-/// - Due to it binds on Flavor interface, it cannot be use between different type.
-///   If you want to multiplex between list and array, can use the
-///   [CompatFlavor](crate::compat::CompatFlavor)
-/// - **NOTE** : It has internal mutability because it need to impl [BlockingRxTrait](crate::BlockingRxTrait),
-///   the adding channel process remains `&mut self`. Because `Multiplex` is a single consumer just
-///   like [Rx](crate::Rx), it does not have `Sync`. If you can guarantee no concurrent access you
-///   can manutally add the `Sync` back in parent struct.
+/// - It has internal mutability because it need to impl [BlockingRxTrait](crate::BlockingRxTrait),
+///   the adding channel process remains `&mut self`.
+/// - **Limits and Safety**
+///   - In order to preserve internal order, if one of the sender closed, nothing will happen
+///     (because close is a rare case). User will not be notify until all its channels closed.
+///   - All channels created by the same `Multiplex` instance are sharing the same `ChannelShared`.
+///   - `Multiplex` is only for mpsc/spsc, You cannot clone the `Multiplex` instance.
+///   - For mpmc scenario, or mixing different channel types, you should use
+///     [Select](crate::select::Select).
+///   - Because `Multiplex` does not have `Sync`. If you can guarantee no concurrent access you
+///     can manutally add the `Sync` back in parent struct.
 ///
 ///
 /// # Examples
@@ -370,33 +373,42 @@ impl<F: Flavor> Multiplex<F> {
             }
             // TODO For thread, actually the waker can be reuse and not change
             self.waker.init_blocking();
+            // NOTE: we rely on global SelectWaker.opened_channels counter to tell weather all
+            // channel is close.
+            // We choose not to impl remove on receiver side because:
+            // - subtract the global value on receiver-side, and it's possible the sender-side might do the same,
+            //   to create a race condition on the global counter
+            // - We can not get the exact number and reset the counter either.
+            //   Because we can only tell specified channel connectivity in ChannelShared,
+            //   but we cannot ensure global atomic with checking multiple atomic.
             let closing = self.waker.get_opened_count() == 0;
             if let Some(item) = self._try_select_all::<true>(start_idx, len) {
                 return Ok(item);
             }
-            if closing {
+            if !closing {
+                let mut state = WakerState::Init as u8;
+                while state < WakerState::Woken as u8 {
+                    match check_timeout(deadline) {
+                        Ok(None) => {
+                            thread::park();
+                        }
+                        Ok(Some(dur)) => {
+                            thread::park_timeout(dur);
+                        }
+                        Err(_) => {
+                            // As sc don't need to abandon
+                            return Err(false);
+                        }
+                    }
+                    state = self.waker.get_waker_state(Ordering::SeqCst);
+                }
+                backoff.reset();
+                start_idx = self.waker.get_hint();
+            } else {
                 // NOTE: double check the channels after checking close count, otherwise we will be
                 // missing some last messages
                 return Err(true);
             }
-            let mut state = WakerState::Init as u8;
-            while state < WakerState::Woken as u8 {
-                match check_timeout(deadline) {
-                    Ok(None) => {
-                        thread::park();
-                    }
-                    Ok(Some(dur)) => {
-                        thread::park_timeout(dur);
-                    }
-                    Err(_) => {
-                        // As sc don't need to abandon
-                        return Err(false);
-                    }
-                }
-                state = self.waker.get_waker_state(Ordering::SeqCst);
-            }
-            backoff.reset();
-            start_idx = self.waker.get_hint();
         }
     }
 }
