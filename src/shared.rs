@@ -1,7 +1,6 @@
 use crate::backoff::*;
 pub(crate) use crate::crossbeam::err::*;
-pub(crate) use crate::flavor::{Flavor, FlavorSelect, Token};
-use crate::select::select::SelectHandle;
+pub(crate) use crate::flavor::{ChannelSharedSelect, Flavor, FlavorSelect, Token};
 use crate::trace_log;
 pub(crate) use crate::waker::*;
 pub(crate) use crate::waker_registry::*;
@@ -303,7 +302,7 @@ impl<F: Flavor> ChannelShared<F> {
     }
 }
 
-impl<F: Flavor + FlavorSelect> SelectHandle for ChannelShared<F> {
+impl<F: Flavor + FlavorSelect> ChannelSharedSelect for ChannelShared<F> {
     #[inline(always)]
     fn try_select(&self, final_check: bool) -> Option<Token> {
         if let Some(token) = self.inner.try_select(final_check) {

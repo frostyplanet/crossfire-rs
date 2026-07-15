@@ -3,7 +3,7 @@
 // Since mixing send and receive operations is rare, and the waker types for senders and receivers
 // are different, we only implement `select` for receive operations.
 //
-// In `shared.rs`, `SelectHandle` is implemented for `ChannelShare<F>`
+// In `shared.rs`, `ChannelSharedSelect` is implemented for `ChannelShare<F>`
 //
 // ## SelectWaker
 //
@@ -34,7 +34,7 @@
 
 use super::SelectMode;
 use crate::backoff::*;
-use crate::flavor::Token;
+use crate::flavor::{ChannelSharedSelect, Token};
 use crate::shared::{check_timeout, ChannelShared};
 use crate::trace_log;
 use crate::waker::WakerState;
@@ -163,12 +163,12 @@ impl<'a> Select<'a> {
     #[inline]
     pub fn add<R: ReceiverType>(&mut self, recv: &'a R)
     where
-        ChannelShared<R::Flavor>: SelectHandle,
+        ChannelShared<R::Flavor>: ChannelSharedSelect,
     {
         let shared: &ChannelShared<R::Flavor> = recv.as_ref();
         self.handlers.push(RecvHandle {
             registered: false,
-            shared: shared as &dyn SelectHandle,
+            shared: shared as &dyn ChannelSharedSelect,
             channel: recv as *const R as *const u8,
         });
     }
@@ -365,7 +365,7 @@ impl<'a> std::fmt::Debug for Select<'a> {
 }
 
 struct RecvHandle<'a> {
-    shared: &'a dyn SelectHandle,
+    shared: &'a dyn ChannelSharedSelect,
     // If multi is true, the registration is persistent until cancel
     registered: bool,
     // for validate against unsafe usage
@@ -424,15 +424,4 @@ impl<R: ReceiverType> PartialEq<R> for SelectResult {
     fn eq(&self, other: &R) -> bool {
         self.is_from(other)
     }
-}
-
-#[allow(private_bounds)]
-pub(crate) trait SelectHandle: Send {
-    /// If final_check is true, should check channel closing, should use SeqCst ordering
-    fn try_select(&self, final_check: bool) -> Option<Token>;
-
-    /// For RegistryMulti return true means the waker will be persistent, otherwise return false
-    fn reg_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool;
-
-    fn cancel_waker(&self, waker: &Arc<SelectWaker>);
 }

@@ -2,6 +2,7 @@ use crate::waker_registry::*;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
+use std::sync::Arc;
 
 pub mod array;
 pub use array::Array;
@@ -36,6 +37,17 @@ impl Default for Token {
     fn default() -> Self {
         Self { pos: std::ptr::null_mut(), stamp: 0 }
     }
+}
+
+#[allow(private_bounds)]
+pub(crate) trait ChannelSharedSelect: Send {
+    /// If final_check is true, should check channel closing, should use SeqCst ordering
+    fn try_select(&self, final_check: bool) -> Option<Token>;
+
+    /// For RegistryMulti return true means the waker will be persistent, otherwise return false
+    fn reg_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool;
+
+    fn cancel_waker(&self, waker: &Arc<SelectWaker>);
 }
 
 // The queue trait should be public because AsyncStream, AsyncRx ... all use it's associate type `Item`
