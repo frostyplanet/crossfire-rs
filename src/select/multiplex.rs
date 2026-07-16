@@ -42,7 +42,7 @@ pub type Mux<F> = FlavorWrap<F, <F as Flavor>::Send, SelectWakerWrapper>;
 ///   - All channels created by the same `Multiplex` instance are sharing the same `ChannelShared`.
 ///   - `Multiplex` is only for mpsc/spsc, You cannot clone the `Multiplex` instance.
 ///   - For mpmc scenario, or mixing different channel types, you should use
-///     [Select](crate::select::Select).
+///     [Select](crate::select::Select), or [MultiplexDyn](crate::select::MultiplexDyn).
 ///   - Because `Multiplex` does not have `Sync`. If you can guarantee no concurrent access you
 ///     can manutally add the `Sync` back in parent struct.
 ///
@@ -387,7 +387,8 @@ impl<F: Flavor> Multiplex<F> {
             // TODO For thread, actually the waker can be reuse and not change
             self.waker.init_blocking();
             // NOTE: we rely on global SelectWaker.opened_channels counter to tell weather all
-            // channel is close.
+            // channel is close, and Registry replaced with SelectWaker before init ensure we will
+            // discover close before parking.
             // We choose not to impl remove on receiver side because:
             // - subtract the global value on receiver-side, and it's possible the sender-side might do the same,
             //   to create a race condition on the global counter

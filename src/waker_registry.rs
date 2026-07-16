@@ -776,6 +776,7 @@ impl Registry for SelectWakerWrapper {
 
     #[inline(always)]
     fn close(&self) {
+        trace_log!("rx: close select");
         // decrease the opened_channels count to hint Multiplex
         self.0.close();
         self.wake();
