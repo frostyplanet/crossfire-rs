@@ -3,7 +3,7 @@ use crate::select::SelectResult;
 use crate::stream::AsyncStream;
 #[cfg(feature = "trace_log")]
 use crate::tokio_task_id;
-use crate::{shared::*, trace_log, MRx, NotCloneable, ReceiverType, Rx};
+use crate::{shared::*, trace_log, MRx, NotCloneable, ReceiverTypeBase, ReceiverTypePriv, Rx};
 use futures_core::Stream;
 use std::cell::Cell;
 use std::fmt;
@@ -907,20 +907,34 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MAsyncRx<F> {
     }
 }
 
-impl<T, F: Flavor<Item = T>> ReceiverType for AsyncRx<F> {
+impl<T, F: Flavor<Item = T>> ReceiverTypeBase for AsyncRx<F> {
     type Flavor = F;
+}
+
+impl<T, F: Flavor<Item = T>> ReceiverTypePriv for AsyncRx<F> {
     #[inline(always)]
     fn new(shared: NonNull<ChannelShared<F>>) -> Self {
         AsyncRx::new(shared)
+    }
+    #[inline(always)]
+    fn shared_ptr(&self) -> NonNull<ChannelShared<F>> {
+        self._shared
     }
 }
 
 impl<F: Flavor> NotCloneable for AsyncRx<F> {}
 
-impl<T, F: Flavor<Item = T> + FlavorMC> ReceiverType for MAsyncRx<F> {
+impl<T, F: Flavor<Item = T> + FlavorMC> ReceiverTypeBase for MAsyncRx<F> {
     type Flavor = F;
+}
+
+impl<T, F: Flavor<Item = T> + FlavorMC> ReceiverTypePriv for MAsyncRx<F> {
     #[inline(always)]
     fn new(shared: NonNull<ChannelShared<F>>) -> Self {
         MAsyncRx::new(shared)
+    }
+    #[inline(always)]
+    fn shared_ptr(&self) -> NonNull<ChannelShared<F>> {
+        self.0._shared
     }
 }

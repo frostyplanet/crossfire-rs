@@ -1,6 +1,8 @@
 use crate::backoff::*;
 pub(crate) use crate::crossbeam::err::*;
-pub(crate) use crate::flavor::{ChannelSharedSelect, Flavor, FlavorSelect, Token};
+pub(crate) use crate::flavor::{
+    ChannelSharedMultiplex, ChannelSharedSelect, Flavor, FlavorSelect, Token,
+};
 use crate::trace_log;
 pub(crate) use crate::waker::*;
 pub(crate) use crate::waker_registry::*;
@@ -199,6 +201,12 @@ impl<F: Flavor> ChannelShared<F> {
         }
     }
 
+    /// for MultiplexDyn
+    #[inline(always)]
+    pub(crate) fn close_rx_erased(this: *mut ()) {
+        Self::close_rx(this as *mut Self)
+    }
+
     /// This method is called when a receiver is dropped.
     #[inline(always)]
     pub(crate) fn close_rx(this: *mut Self) {
@@ -275,9 +283,6 @@ impl<F: Flavor> ChannelShared<F> {
     #[inline(always)]
     pub(crate) fn on_recv(&self) {
         self.senders.fire();
-        //        if WakeResult::Sent == self.senders.fire(&self.inner) {
-        //            self.on_send();
-        //        }
     }
 
     /// Call on cancellation, return true to indicate drop temporary message
@@ -357,6 +362,47 @@ impl<F: Flavor + FlavorSelect> ChannelSharedSelect for ChannelShared<F> {
     #[inline(always)]
     fn cancel_waker(&self, waker: &Arc<SelectWaker>) {
         self.recvs.cancel_select_waker(waker)
+    }
+}
+
+/// only for MultiplexDyn
+impl<F: Flavor + FlavorSelect> ChannelSharedMultiplex<F::Item> for ChannelShared<F> {
+    fn try_recv_cached(&self) -> Option<F::Item> {
+        let item = self.inner.try_recv_cached()?;
+        self.on_recv();
+        Some(item)
+    }
+
+    fn try_recv(&self) -> Option<F::Item> {
+        let item = self.inner.try_recv()?;
+        self.on_recv();
+        Some(item)
+    }
+
+    /// On disconnected return `Err(true)`; on empty returns `Err(false)`
+    fn try_recv_final(&self) -> Result<F::Item, bool> {
+        let closed = self.is_tx_closed();
+        if let Some(item) = self.inner.try_recv_final() {
+            self.on_recv();
+            return Ok(item);
+        }
+        if !closed {
+            return Err(false);
+        } else {
+            Err(true)
+        }
+    }
+
+    fn reg_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool {
+        self.recvs.reg_select_waker(channel_id, waker)
+    }
+
+    fn cancel_waker(&self, waker: &Arc<SelectWaker>) {
+        self.recvs.cancel_select_waker(waker)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
     }
 }
 

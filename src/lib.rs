@@ -61,9 +61,13 @@
 //! - [oneshot] has its special sender/receiver type because using `Tx` / `Rx` will be too heavy.
 //!
 //! - [select]:
-//!     - [Select<'a>](crate::select::Select): crossbeam-channel style type erased API, borrows receiver address and select with "token"
-//!     - [Multiplex](crate::select::Multiplex): Multiplex stream that owns multiple receiver, select from the same type of
-//!       channel flavors, for the same type of message.
+//!     - [Select<'a>](crate::select::Select): crossbeam-channel style type erased API,
+//!       borrows receiver reference, and select with "token"
+//!     - [Multiplex](crate::select::Multiplex): Multiplex that owns multiple receiver (spsc/mpsc),
+//!       select from the same type of channel flavors, for the same type of message.
+//!     - [MultiplexDyn](crate::select::MultiplexDyn): Multiplex that owns multiple,
+//!       mixing different type of receivers (spsc/mpsc/mpmc, bounded/unbounded),
+//!       for the same type of message.
 //!
 //! - [waitgroup]: High performance WaitGroup which allows custom threshold
 //!
@@ -272,9 +276,12 @@ mod waker;
 #[allow(private_bounds)]
 mod waker_registry;
 
+#[allow(private_bounds)]
 pub mod mpmc;
+#[allow(private_bounds)]
 pub mod mpsc;
 pub mod oneshot;
+#[allow(private_bounds)]
 pub mod spsc;
 pub mod waitgroup;
 
@@ -337,11 +344,24 @@ pub trait SenderType {
     fn new(shared: NonNull<ChannelShared<Self::Flavor>>) -> Self;
 }
 
-/// type limiter for channel builder
-pub trait ReceiverType: AsRef<ChannelShared<Self::Flavor>> {
+pub trait ReceiverTypeBase {
     type Flavor: Flavor;
+}
 
+pub(crate) trait ReceiverTypePriv:
+    ReceiverTypeBase + AsRef<ChannelShared<Self::Flavor>>
+where
+    ChannelShared<Self::Flavor>:
+        flavor::ChannelSharedMultiplex<<Self::Flavor as flavor::Queue>::Item>,
+{
+    fn shared_ptr(&self) -> NonNull<ChannelShared<Self::Flavor>>;
     fn new(shared: NonNull<ChannelShared<Self::Flavor>>) -> Self;
 }
+
+/// type limiter for channel builder
+#[allow(private_bounds)]
+pub trait ReceiverType: ReceiverTypePriv + ReceiverTypeBase {}
+
+impl<T: ReceiverTypePriv> ReceiverType for T {}
 
 pub trait NotCloneable {}

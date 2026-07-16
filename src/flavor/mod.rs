@@ -50,6 +50,26 @@ pub(crate) trait ChannelSharedSelect: Send {
     fn cancel_waker(&self, waker: &Arc<SelectWaker>);
 }
 
+#[allow(private_bounds)]
+pub(crate) trait ChannelSharedMultiplex<T>: Send {
+    /// For multiplex dyn, only using cached value
+    ///
+    /// (without spin and loading sender value)
+    fn try_recv_cached(&self) -> Option<T>;
+
+    fn try_recv(&self) -> Option<T>;
+
+    /// On disconnected return `Err(true)`; on empty returns `Err(false)`
+    fn try_recv_final(&self) -> Result<T, bool>;
+
+    /// For RegistryMulti return true means the waker will be persistent, otherwise return false
+    fn reg_waker(&self, channel_id: usize, waker: &Arc<SelectWaker>) -> bool;
+
+    fn cancel_waker(&self, waker: &Arc<SelectWaker>);
+
+    fn is_empty(&self) -> bool;
+}
+
 // The queue trait should be public because AsyncStream, AsyncRx ... all use it's associate type `Item`
 /// Trait for lockless queue, it's safe to use if you don't want the channel mechanisms
 pub trait Queue {
@@ -192,7 +212,7 @@ macro_rules! flavor_select_dispatch {
 pub(super) use flavor_select_dispatch;
 
 /// Flavor Inherits `FlavorImpl`, additionally define the combination of waker registers types
-pub trait Flavor: Send + 'static + FlavorImpl {
+pub trait Flavor: Send + 'static + FlavorImpl + FlavorSelect {
     type Send: RegistrySend;
     type Recv: RegistryRecv;
 }
@@ -275,7 +295,7 @@ where
 
 impl<F, S, R> Flavor for FlavorWrap<F, S, R>
 where
-    F: FlavorImpl + 'static,
+    F: FlavorImpl + FlavorSelect + 'static,
     S: RegistrySend,
     R: RegistryRecv,
 {

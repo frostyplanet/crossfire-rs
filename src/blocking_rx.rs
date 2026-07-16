@@ -1,7 +1,9 @@
 use crate::backoff::*;
 use crate::flavor::{FlavorMC, FlavorSelect};
 use crate::select::SelectResult;
-use crate::{shared::*, trace_log, AsyncRx, MAsyncRx, NotCloneable, ReceiverType};
+use crate::{
+    shared::*, trace_log, AsyncRx, MAsyncRx, NotCloneable, ReceiverTypeBase, ReceiverTypePriv,
+};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -643,24 +645,42 @@ impl<F: Flavor> AsRef<ChannelShared<F>> for MRx<F> {
     }
 }
 
-impl<T, F: Flavor<Item = T>> ReceiverType for Rx<F> {
+impl<T, F: Flavor<Item = T>> ReceiverTypeBase for Rx<F> {
     type Flavor = F;
+}
+
+impl<T, F: Flavor<Item = T>> ReceiverTypePriv for Rx<F> {
     #[inline(always)]
     fn new(shared: NonNull<ChannelShared<F>>) -> Self {
         Rx::new(shared)
+    }
+
+    #[inline(always)]
+    fn shared_ptr(&self) -> NonNull<ChannelShared<F>> {
+        self._shared
     }
 }
 
 impl<F: Flavor> NotCloneable for Rx<F> {}
 
-impl<F> ReceiverType for MRx<F>
+impl<F> ReceiverTypeBase for MRx<F>
 where
     F: Flavor + FlavorMC,
 {
     type Flavor = F;
+}
 
+impl<F> ReceiverTypePriv for MRx<F>
+where
+    F: Flavor + FlavorMC,
+{
     #[inline(always)]
     fn new(shared: NonNull<ChannelShared<F>>) -> Self {
         MRx::new(shared)
+    }
+
+    #[inline(always)]
+    fn shared_ptr(&self) -> NonNull<ChannelShared<F>> {
+        self.0._shared
     }
 }
