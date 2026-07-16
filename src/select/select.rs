@@ -183,6 +183,7 @@ impl<'a> Select<'a> {
                 if self.next_index >= self.handlers.len() {
                     self.next_index = 0;
                 }
+                // unregister all to avoid wrong hint within SelectWaker
                 for handler in &mut self.handlers {
                     handler.registered = false;
                     handler.shared.cancel_waker(&self.waker);
@@ -386,10 +387,7 @@ impl<'a> RecvHandle<'a> {
 
     #[inline(always)]
     fn reg_waker(&mut self, index: usize, global_waker: &Arc<SelectWaker>) {
-        if self.registered {
-            return;
-        }
-        if self.shared.reg_waker(index, global_waker) {
+        if !self.registered & self.shared.reg_waker(index, global_waker) {
             trace_log!("select: reg waker");
             self.registered = true;
         }
