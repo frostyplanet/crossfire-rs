@@ -14,6 +14,120 @@ fn setup_log() {
 
 #[logfn]
 #[rstest]
+#[case(spsc::bounded_blocking(100))]
+#[case(mpsc::bounded_blocking(100))]
+#[case(mpmc::bounded_blocking(100))]
+#[case(spsc::unbounded_blocking())]
+#[case(mpsc::unbounded_blocking())]
+#[case(mpmc::unbounded_blocking())]
+fn test_basic_sender_close_try_recv<
+    T: BlockingTxTrait<usize> + 'static + Send,
+    R: BlockingRxTrait<usize> + 'static + Send,
+>(
+    setup_log: (), #[case] channel: (T, R),
+) {
+    let (tx, rx) = channel;
+    let total = {
+        #[cfg(miri)]
+        {
+            10
+        }
+        #[cfg(not(miri))]
+        {
+            1000
+        }
+    };
+    let th_s = spawn_named_thread("sender", move || {
+        for i in 0..total {
+            tx.send(i).expect("send");
+        }
+    });
+    let mut got = std::collections::BTreeSet::new();
+    loop {
+        match rx.try_recv() {
+            Ok(_item) => {
+                got.insert(_item);
+            }
+            Err(TryRecvError::Empty) => {
+                if let Ok(_item) = rx.recv() {
+                    got.insert(_item);
+                }
+            }
+            Err(TryRecvError::Disconnected) => break,
+        }
+    }
+    let _ = th_s.join().expect("join send");
+    assert_eq!(total, got.len());
+}
+
+#[logfn]
+#[rstest]
+fn test_pressure_sender_close_try_recv() {
+    const SENDERS: usize = 4;
+    const ITEMS: usize = 2; // per sender
+    const TOTAL: usize = SENDERS * ITEMS;
+
+    let _deadline = Instant::now() + Duration::from_secs(10);
+    let mut iters = 0usize;
+    loop {
+        #[cfg(miri)]
+        {
+            if iters > 100 {
+                break;
+            }
+        }
+        #[cfg(not(miri))]
+        {
+            if Instant::now() > _deadline {
+                break;
+            }
+        }
+        iters += 1;
+        let (tx, rx) = mpsc::bounded_blocking::<usize>(16);
+        let mut th_s = Vec::new();
+        for sender_id in 0..SENDERS {
+            let _tx = tx.clone();
+            th_s.push(spawn_named_thread(&format!("sender {sender_id}"), move || {
+                for i in 0..ITEMS {
+                    // rx outlives every sender, so send must succeed
+                    _tx.send(sender_id * ITEMS + i).unwrap();
+                }
+            }))
+        }
+        drop(tx);
+        let mut got = std::collections::BTreeSet::new();
+        'drain: loop {
+            loop {
+                match rx.try_recv() {
+                    Ok(_v) => {
+                        // NOTE: insert to btreeSet slows down the recv a bit, more effective to
+                        // re-produce than just increase a counter
+                        got.insert(_v);
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => break 'drain,
+                }
+            }
+            match rx.recv() {
+                Ok(_v) => {
+                    got.insert(_v);
+                }
+                Err(_) => break 'drain,
+            }
+        }
+        for th in th_s {
+            th.join().unwrap();
+        }
+        let lost = TOTAL - got.len();
+        if lost > 0 {
+            panic!("iteration {iters}: try_recv lost {lost}");
+        }
+    }
+    println!("{iters} iterations");
+}
+
+#[logfn]
+#[rstest]
 #[case(spsc::bounded_blocking(1))]
 #[case(mpsc::bounded_blocking(1))]
 #[case(mpmc::bounded_blocking(1))]

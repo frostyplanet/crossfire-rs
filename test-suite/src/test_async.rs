@@ -46,6 +46,53 @@ fn test_basic_weak(setup_log: ()) {
 
 #[logfn]
 #[rstest]
+#[case(spsc::bounded_async(100))]
+#[case(mpsc::bounded_async(100))]
+#[case(mpmc::bounded_async(100))]
+fn test_basic_sender_close_try_recv<
+    T: AsyncTxTrait<usize> + 'static + Send,
+    R: AsyncRxTrait<usize> + 'static + Send,
+>(
+    setup_log: (), #[case] channel: (T, R),
+) {
+    runtime_block_on!(async move {
+        let (tx, rx) = channel;
+        let total = {
+            #[cfg(miri)]
+            {
+                100
+            }
+            #[cfg(not(miri))]
+            {
+                1000
+            }
+        };
+        let th_s = async_spawn!(async move {
+            for i in 0..total {
+                tx.send(i).await.expect("send");
+            }
+        });
+        let mut recv_count = 0;
+        loop {
+            match rx.try_recv() {
+                Ok(_item) => {
+                    recv_count += 1;
+                }
+                Err(TryRecvError::Empty) => {
+                    if let Ok(_item) = rx.recv().await {
+                        recv_count += 1;
+                    }
+                }
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        let _ = async_join_result!(th_s);
+        assert_eq!(total, recv_count);
+    });
+}
+
+#[logfn]
+#[rstest]
 #[case(spsc::bounded_async(1))]
 #[case(mpsc::bounded_async(1))]
 #[case(mpmc::bounded_async(1))]

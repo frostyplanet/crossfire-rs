@@ -3,10 +3,11 @@ use captains_log::logfn;
 use crossfire::select::{Multiplex, Mux, Select};
 use crossfire::*;
 use rstest::*;
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[fixture]
 fn setup_log() {
@@ -118,6 +119,153 @@ fn test_select_basic_disconnect_after_park(setup_log: ()) {
     let res = select.select().unwrap();
     assert!(res == rx2);
     assert_eq!(rx2.read_select(res).unwrap(), 200);
+}
+
+#[logfn]
+#[rstest]
+fn test_select_pressure_sender_close_select(setup_log: ()) {
+    const ITEMS: usize = 2; // per sender
+    let _deadline = Instant::now() + Duration::from_secs(10);
+    let mut iters = 0usize;
+    loop {
+        #[cfg(miri)]
+        {
+            if iters > 100 {
+                break;
+            }
+        }
+        #[cfg(not(miri))]
+        {
+            if Instant::now() > _deadline {
+                break;
+            }
+        }
+        let (tx1, rx1) = mpmc::bounded_blocking::<usize>(10);
+        let (tx2, rx2) = mpmc::bounded_blocking::<usize>(10);
+        let mut select = Select::new();
+        select.add(&rx1);
+        select.add(&rx2);
+        let mut th_s = Vec::new();
+        th_s.push(spawn_named_thread("sender1", move || {
+            for i in 0..ITEMS {
+                // NOTE: we should let sender close sooner on miri to revent receiver loop too much
+                tx1.send(i).expect("send");
+            }
+        }));
+
+        th_s.push(spawn_named_thread("sender2", move || {
+            for i in 0..ITEMS {
+                // NOTE: we should let sender close sooner on miri to revent receiver loop too much
+                tx2.send(i + ITEMS).expect("send");
+            }
+        }));
+        let mut got = BTreeSet::new();
+        while let Ok(res) = select.select() {
+            if res == rx1 {
+                if let Ok(_item) = rx1.read_select(res) {
+                    got.insert(_item);
+                } else {
+                    select.remove(&rx1);
+                }
+            } else {
+                assert_eq!(res, rx2);
+                if let Ok(_item) = rx2.read_select(res) {
+                    got.insert(_item);
+                } else {
+                    select.remove(&rx2);
+                }
+            }
+        }
+        assert_eq!(select.try_select().unwrap_err(), TryRecvError::Disconnected);
+        assert_eq!(got.len(), 2 * ITEMS, "lost message after {iters} iteration");
+        iters += 1;
+    }
+    println!("{iters} iterations");
+}
+
+#[logfn]
+#[rstest]
+fn test_select_pressure_sender_close_try_select(setup_log: ()) {
+    const ITEMS: usize = 2; // per sender
+    let _deadline = Instant::now() + Duration::from_secs(10);
+    let mut iters = 0usize;
+    loop {
+        #[cfg(miri)]
+        {
+            if iters > 100 {
+                break;
+            }
+        }
+        #[cfg(not(miri))]
+        {
+            if Instant::now() > _deadline {
+                break;
+            }
+        }
+        let (tx1, rx1) = mpmc::bounded_blocking::<usize>(10);
+        let (tx2, rx2) = mpmc::bounded_blocking::<usize>(10);
+        let mut select = Select::new();
+        select.add(&rx1);
+        select.add(&rx2);
+        let mut th_s = Vec::new();
+        th_s.push(spawn_named_thread("sender1", move || {
+            for i in 0..ITEMS {
+                // NOTE: we should let sender close sooner on miri to revent receiver loop too much
+                tx1.send(i).expect("send");
+            }
+        }));
+
+        th_s.push(spawn_named_thread("sender2", move || {
+            for i in 0..ITEMS {
+                // NOTE: we should let sender close sooner on miri to revent receiver loop too much
+                tx2.send(i + ITEMS).expect("send");
+            }
+        }));
+        let mut got = BTreeSet::new();
+        loop {
+            match select.try_select() {
+                Ok(res) => {
+                    if res == rx1 {
+                        if let Ok(_item) = rx1.read_select(res) {
+                            got.insert(_item);
+                        } else {
+                            select.remove(&rx1);
+                        }
+                    } else {
+                        assert_eq!(res, rx2);
+                        if let Ok(_item) = rx2.read_select(res) {
+                            got.insert(_item);
+                        } else {
+                            select.remove(&rx2);
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    if let Ok(res) = select.select() {
+                        if res == rx1 {
+                            if let Ok(_item) = rx1.read_select(res) {
+                                got.insert(_item);
+                            } else {
+                                select.remove(&rx1);
+                            }
+                        } else {
+                            assert_eq!(res, rx2);
+                            if let Ok(_item) = rx2.read_select(res) {
+                                got.insert(_item);
+                            } else {
+                                select.remove(&rx2);
+                            }
+                        }
+                    }
+                }
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        assert_eq!(select.try_select().unwrap_err(), TryRecvError::Disconnected);
+        assert_eq!(got.len(), 2 * ITEMS, "lost message after {iters} iteration");
+        iters += 1;
+    }
+    println!("{iters} iterations");
 }
 
 #[logfn]
@@ -728,6 +876,67 @@ fn test_multiplex_sender_close(setup_log: ()) {
         received += 1;
     }
     assert_eq!(received, 2);
+}
+
+#[logfn]
+#[rstest]
+fn test_multiplex_pressure_sender_close_try_recv(setup_log: ()) {
+    const ITEMS: usize = 2; // per sender
+    let _deadline = Instant::now() + Duration::from_secs(10);
+    let mut iters = 0usize;
+    loop {
+        #[cfg(miri)]
+        {
+            if iters > 100 {
+                break;
+            }
+        }
+        #[cfg(not(miri))]
+        {
+            if Instant::now() > _deadline {
+                break;
+            }
+        }
+        let mut mp = Multiplex::<mpsc::Array<usize>>::new();
+        let tx1: MTx<_> = mp.bounded_tx(10);
+        let tx2: MTx<_> = mp.bounded_tx(10);
+        let mut th_s = Vec::new();
+        th_s.push(spawn_named_thread("sender1", move || {
+            for i in 0..ITEMS {
+                // NOTE: we should let sender close sooner on miri to revent receiver loop too much
+                tx1.send(i).expect("send");
+            }
+        }));
+
+        th_s.push(spawn_named_thread("sender2", move || {
+            for i in 0..ITEMS {
+                // NOTE: we should let sender close sooner on miri to revent receiver loop too much
+                tx2.send(i + ITEMS).expect("send");
+            }
+        }));
+        let mut got = BTreeSet::new();
+        loop {
+            match mp.try_recv() {
+                Ok(_item) => {
+                    // NOTE: insert to btreeSet slows down the recv a bit, more effective to
+                    // re-produce than just increase a counter
+                    got.insert(_item);
+                }
+                Err(TryRecvError::Empty) => {
+                    if let Ok(_item) = mp.recv() {
+                        got.insert(_item);
+                    }
+                }
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        assert_eq!(got.len(), 2 * ITEMS, "lost message after {iters} iteration");
+        for th in th_s {
+            th.join().expect("join sender");
+        }
+        iters += 1;
+    }
+    println!("{iters} iterations");
 }
 
 #[logfn]
