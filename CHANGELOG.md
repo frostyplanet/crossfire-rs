@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.20] - 2026-09-05
+
+### Fixed
+
+- Fix message lost for try_recv while sender drop, affects try_recv on all receivers,  Multiplex::try_recv, Select::try_select. (issue #70)
+
 ## [3.1.19] - 2026-07-09
 
 ### Changed
