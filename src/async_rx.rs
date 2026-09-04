@@ -195,6 +195,10 @@ impl<T> AsyncRx<T> {
             return Ok(item);
         } else {
             if self.shared.is_disconnected() {
+                if let Some(item) = self.shared.inner.try_recv() {
+                    self.shared.on_recv();
+                    return Ok(item);
+                }
                 return Err(TryRecvError::Disconnected);
             }
             return Err(TryRecvError::Empty);
