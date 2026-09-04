@@ -40,15 +40,19 @@ impl<F: Flavor> ChannelShared<F> {
 
     #[inline(always)]
     pub(crate) fn try_recv(&self) -> Result<F::Item, TryRecvError> {
-        if let Some(item) = self.inner.try_recv_final() {
-            self.on_recv();
-            Ok(item)
-        } else {
-            if self.is_tx_closed() {
-                return Err(TryRecvError::Disconnected);
+        if !self.is_tx_closed() {
+            if let Some(item) = self.inner.try_recv() {
+                self.on_recv();
+                return Ok(item);
             }
-            Err(TryRecvError::Empty)
+        } else {
+            if let Some(item) = self.inner.try_recv_final() {
+                self.on_recv();
+                return Ok(item);
+            }
+            return Err(TryRecvError::Disconnected);
         }
+        Err(TryRecvError::Empty)
     }
 
     #[inline(always)]
