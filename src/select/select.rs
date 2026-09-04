@@ -194,18 +194,21 @@ impl<'a> Select<'a> {
     /// Attempts to select a message from any of the registered receivers without blocking.
     ///
     /// Returns:
-    /// - `Ok(SelectResult)` if a message is immediately available from any channel.
+    /// - `Ok(SelectResult)` if a message or close event is immediately available from any channel.
+    ///    - NOTE: If a closed channel not removed from the registration, it will trigger an Ok
+    ///      result immediately on the next select.
     /// - `Err(TryRecvError::Empty)` if no messages are ready, but at least one channel is still connected.
-    /// - `Err(TryRecvError::Disconnected)` if all registered channels are disconnected or removed from select.
+    /// - `Err(TryRecvError::Disconnected)` if all registered channels are removed from select.
     pub fn try_select(&mut self) -> Result<SelectResult, TryRecvError> {
-        if self.handlers.is_empty() {
-            return Err(TryRecvError::Disconnected);
+        if !self.handlers.is_empty() {
+            let idx = self._try_select_begin();
+            if let Some(res) = self._try_select(idx, true) {
+                return Ok(res);
+            }
+            Err(TryRecvError::Empty)
+        } else {
+            Err(TryRecvError::Disconnected)
         }
-        let idx = self._try_select_begin();
-        if let Some(res) = self._try_select(idx, true) {
-            return Ok(res);
-        }
-        Err(TryRecvError::Empty)
     }
 
     #[inline(always)]

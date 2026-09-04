@@ -309,10 +309,13 @@ impl<F: Flavor> ChannelShared<F> {
 impl<F: Flavor + FlavorSelect> ChannelSharedSelect for ChannelShared<F> {
     #[inline(always)]
     fn try_select(&self, final_check: bool) -> Option<Token> {
+        // NOTE: we cannot use generic const for final_check because ChannelSharedSelect trait
+        // require Object Safety
+        let closed = if !final_check { false } else { self.is_tx_closed() };
         if let Some(token) = self.inner.try_select(final_check) {
             return Some(token);
         }
-        if final_check && self.is_tx_closed() {
+        if closed {
             return Some(Token::default());
         }
         None
