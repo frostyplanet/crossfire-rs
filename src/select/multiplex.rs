@@ -250,10 +250,15 @@ impl<F: Flavor> Multiplex<F> {
     #[inline]
     pub fn try_recv(&self) -> Result<F::Item, TryRecvError> {
         let last_idx = self.last_idx.get();
-        if let Some(item) = self._try_select_all::<true>(last_idx, self.handlers.len()) {
-            return Ok(item);
-        }
-        if self.waker.get_opened_count() == 0 {
+        let len = self.handlers.len();
+        if self.waker.get_opened_count() > 0 {
+            if let Some(item) = self._try_select_all::<false>(last_idx, len) {
+                return Ok(item);
+            }
+        } else {
+            if let Some(item) = self._try_select_all::<true>(last_idx, len) {
+                return Ok(item);
+            }
             return Err(TryRecvError::Disconnected);
         }
         Err(TryRecvError::Empty)
