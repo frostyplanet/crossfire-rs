@@ -22,7 +22,7 @@ crossbeam-utils = "0.8"
 flume = {version="0.11", features= ["async"] }
 kanal = {version="0.1"}
 async-channel = {version="2.5.0"}
-futures-util = {version="0.3", default-features = false}
+futures-util = {version="^0.3"}
 async-oneshot = "0.5"
 oneshot = "0.1"
 
