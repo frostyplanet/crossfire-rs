@@ -3,7 +3,7 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::{
-    atomic::{AtomicU32, AtomicU8, Ordering},
+    atomic::{AtomicU64, AtomicU8, Ordering},
     Arc, Weak,
 };
 use std::task::*;
@@ -62,7 +62,7 @@ impl ArcWaker {
     #[inline(always)]
     pub fn new_async(ctx: &Context) -> Self {
         Self(Arc::new(WakerInner {
-            seq: AtomicU32::new(0),
+            seq: AtomicU64::new(0),
             state: AtomicU8::new(WakerState::Init as u8),
             waker: UnsafeCell::new(ThinWaker::Async(ctx.waker().clone())),
         }))
@@ -71,7 +71,7 @@ impl ArcWaker {
     #[inline(always)]
     pub fn new_blocking() -> Self {
         Self(Arc::new(WakerInner {
-            seq: AtomicU32::new(0),
+            seq: AtomicU64::new(0),
             state: AtomicU8::new(WakerState::Init as u8),
             waker: UnsafeCell::new(ThinWaker::Blocking(thread::current())),
         }))
@@ -105,14 +105,15 @@ impl ArcWaker {
 // Global registration stamp, unique process-wide. Per-registry counters
 // cannot tell a stale entry from a node re-armed on another registry.
 // Cross-episode re-arms bump it in WakerInner::reset().
-pub(crate) static REG_STAMP: AtomicU32 = AtomicU32::new(1);
+// Starts at 1, so an unregistered node's seq (0) never matches a stamp.
+pub(crate) static REG_STAMP: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
     // The blocking wake target is thread::current(), which never changes, so
     // the node lives per-thread and is only re-armed between episodes. The
     // ThinWaker handle is written once, before any publication.
     static BLOCKING_WAKER: Arc<WakerInner> = Arc::new(WakerInner {
-        seq: AtomicU32::new(0),
+        seq: AtomicU64::new(0),
         state: AtomicU8::new(WakerState::Init as u8),
         waker: UnsafeCell::new(ThinWaker::Blocking(thread::current())),
     });
@@ -168,7 +169,7 @@ impl ThinWaker {
 
 pub struct WakerInner {
     state: AtomicU8,
-    seq: AtomicU32,
+    seq: AtomicU64,
     waker: UnsafeCell<ThinWaker>,
 }
 
@@ -196,12 +197,12 @@ impl WakerInner {
     }
 
     #[inline(always)]
-    pub fn get_seq(&self) -> u32 {
+    pub fn get_seq(&self) -> u64 {
         self.seq.load(Ordering::Relaxed)
     }
 
     #[inline(always)]
-    pub fn set_seq(&self, seq: u32) {
+    pub fn set_seq(&self, seq: u64) {
         self.seq.store(seq, Ordering::Relaxed);
     }
 

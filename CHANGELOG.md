@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- waker: blocking waiters reuse an immortal per-thread waker node, removing the per-episode allocation on contended blocking send/recv
+
 ### Fixed
 
 ## [3.1.20] - 2026-09-05

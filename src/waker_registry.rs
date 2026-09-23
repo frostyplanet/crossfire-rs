@@ -255,12 +255,23 @@ impl RegistryRecv for RegistrySingle {
     }
 }
 
+struct QueueEntry {
+    weak: Weak<WakerInner>,
+    stamp: u64,
+}
+
+impl QueueEntry {
+    /// None if the node is dead or was re-armed since this push (seq != stamp).
+    #[inline(always)]
+    fn upgrade_live(&self) -> Option<Arc<WakerInner>> {
+        self.weak.upgrade().filter(|inner| inner.get_seq() == self.stamp)
+    }
+}
+
 struct RegistryMultiInner {
-    // (weak node, registration stamp). If the node's current seq differs, it
-    // was re-armed since the push and the entry is stale.
-    queue: VecDeque<(Weak<WakerInner>, u32)>,
+    queue: VecDeque<QueueEntry>,
     selectors: Vec<SelectWakerWrapper>,
-    seq: u32,
+    seq: u64,
 }
 
 impl RegistryMultiInner {
@@ -312,7 +323,7 @@ impl RegistryMulti {
             if guard.queue.is_empty() {
                 self.state.store(guard.check_select() | MULTI_HAS_WAKER, Ordering::SeqCst);
             }
-            guard.queue.push_back((weak, seq));
+            guard.queue.push_back(QueueEntry { weak, stamp: seq });
         }
     }
 
@@ -386,7 +397,7 @@ impl RegistryMulti {
     /// return Some((waker, again))
     /// if there's more waker after pop_first, again=true
     #[inline(always)]
-    fn pop_first(&self) -> Option<(ArcWaker, Option<u32>)> {
+    fn pop_first(&self) -> Option<(ArcWaker, Option<u64>)> {
         // This is a snapshot, it's safe to ignore the new situation after acquire lock
         let flag = self.state.load(Ordering::SeqCst);
         if flag == MULTI_EMPTY {
@@ -402,13 +413,9 @@ impl RegistryMulti {
             if flag & MULTI_HAS_WAKER > 0 {
                 let mut has_pop = false;
                 loop {
-                    if let Some((weak, seq)) = guard.queue.pop_front() {
+                    if let Some(entry) = guard.queue.pop_front() {
                         has_pop = true;
-                        if let Some(inner) = weak.upgrade() {
-                            if inner.get_seq() != seq {
-                                // Stale: node re-armed since this push.
-                                continue;
-                            }
+                        if let Some(inner) = entry.upgrade_live() {
                             if guard.queue.is_empty() {
                                 self.state.store(guard.check_select(), Ordering::SeqCst);
                                 return Some((ArcWaker::from_arc(inner), None));
@@ -443,13 +450,9 @@ impl RegistryMulti {
             let mut guard = self.inner.lock();
             let mut has_pop = false;
             loop {
-                if let Some((weak, seq)) = guard.queue.pop_front() {
+                if let Some(entry) = guard.queue.pop_front() {
                     has_pop = true;
-                    if let Some(inner) = weak.upgrade() {
-                        if inner.get_seq() != seq {
-                            // Stale: node re-armed since this push.
-                            continue;
-                        }
+                    if let Some(inner) = entry.upgrade_live() {
                         if guard.queue.is_empty() {
                             self.state.store(guard.check_select(), Ordering::SeqCst);
                         }
@@ -477,14 +480,14 @@ impl RegistryMulti {
         // the macro yield true to stop, false to continue
         macro_rules! process {
             ($guard: expr, $entry: expr) => {{
-                let (weak, entry_seq) = $entry;
-                if let Some(waker) = weak.upgrade() {
-                    if entry_seq == old_seq {
-                        // Stamps are unique, so entry_seq == old_seq is the live entry.
+                let entry = $entry;
+                if let Some(waker) = entry.weak.upgrade() {
+                    if entry.stamp == old_seq {
+                        // Stamps are unique, so a stamp match is the live entry.
                         trace_log!("{}: clear {:?} hit", self._tag, waker);
                         true
-                    } else if entry_seq > old_seq {
-                        $guard.queue.push_front((weak, entry_seq));
+                    } else if entry.stamp > old_seq {
+                        $guard.queue.push_front(entry);
                         true
                     } else if old_waker.same_node(&waker) {
                         // Stale duplicate of old_waker: drop and keep scanning.
@@ -495,7 +498,7 @@ impl RegistryMulti {
                         // While earlier waker is still waiting.
                         let state = waker.get_state();
                         if state < WakerState::Woken as u8 {
-                            $guard.queue.push_front((weak, entry_seq));
+                            $guard.queue.push_front(entry);
                             true
                         } else {
                             if oneshot {
@@ -572,12 +575,8 @@ impl Registry for RegistryMulti {
         for selector in &guard.selectors {
             selector.wake();
         }
-        while let Some((weak, seq)) = guard.queue.pop_front() {
-            if let Some(waker) = weak.upgrade() {
-                if waker.get_seq() != seq {
-                    // Stale: node re-armed elsewhere; skip as fire() does.
-                    continue;
-                }
+        while let Some(entry) = guard.queue.pop_front() {
+            if let Some(waker) = entry.upgrade_live() {
                 let _r = waker.close_wake();
                 trace_log!("close {} wake {:?} {}", self._tag, waker, _r);
             }
@@ -644,9 +643,8 @@ impl Registry for RegistryMulti {
                     if r.is_done() {
                         return r;
                     }
-                    // The latest seq in RegistryMulti is always last_waker.get_seq() +1
-                    // Because some waker (issued by sink / stream) might be INIT all the time,
-                    // prevent to dead loop situation when they are wake up and re-register again.
+                    // seq >= last_seq: pushed after the pop_first snapshot (the woken waker
+                    // re-armed in this loop); stop to avoid spinning on always-Init wakers.
                     if _waker.get_seq() >= last_seq {
                         trace_log!("wake {} stop at {}", self._tag, last_seq);
                         return WakeResult::Next;
