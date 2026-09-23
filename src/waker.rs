@@ -90,10 +90,42 @@ impl ArcWaker {
         self.0
     }
 
+    /// Whether `inner` is this handle's node.
+    #[inline(always)]
+    pub(crate) fn same_node(&self, inner: &Arc<WakerInner>) -> bool {
+        Arc::ptr_eq(&self.0, inner)
+    }
+
     #[inline(always)]
     pub fn weak(&self) -> Weak<WakerInner> {
         Arc::downgrade(&self.0)
     }
+}
+
+// Global registration stamp, unique process-wide. Per-registry counters
+// cannot tell a stale entry from a node re-armed on another registry.
+// Cross-episode re-arms bump it in WakerInner::reset().
+pub(crate) static REG_STAMP: AtomicU32 = AtomicU32::new(1);
+
+thread_local! {
+    // The blocking wake target is thread::current(), which never changes, so
+    // the node lives per-thread and is only re-armed between episodes. The
+    // ThinWaker handle is written once, before any publication.
+    static BLOCKING_WAKER: Arc<WakerInner> = Arc::new(WakerInner {
+        seq: AtomicU32::new(0),
+        state: AtomicU8::new(WakerState::Init as u8),
+        waker: UnsafeCell::new(ThinWaker::Blocking(thread::current())),
+    });
+}
+
+/// The per-thread blocking waker, re-armed for a new episode.
+#[inline(always)]
+pub(crate) fn tl_blocking_waker() -> ArcWaker {
+    BLOCKING_WAKER.with(|inner| {
+        let waker = ArcWaker::from_arc(inner.clone());
+        waker.reset();
+        waker
+    })
 }
 
 #[derive(Debug)]
@@ -156,9 +188,11 @@ impl WakerInner {
 
     #[inline(always)]
     pub fn reset(&self) {
-        // From the object pool to reset value,
-        // we should use SeqCst fence to clear the cache of other cores
-        self.reset_init();
+        // Cross-episode re-arm, published before any registry mutex: SeqCst.
+        self.state.store(WakerState::Init as u8, Ordering::SeqCst);
+        // New episode must change the seq (stale entries are matched by seq);
+        // RegistrySingle never stamps the node, so bump here.
+        self.set_seq(REG_STAMP.fetch_add(1, Ordering::SeqCst));
     }
 
     #[inline(always)]
@@ -408,5 +442,30 @@ mod tests {
         use std::mem::size_of;
         println!("wakertype {}", size_of::<ThinWaker>());
         println!("waker inner {}", size_of::<WakerInner>());
+    }
+
+    #[test]
+    fn test_tl_blocking_waker_identity() {
+        let w1 = tl_blocking_waker();
+        let node = w1.0.clone(); // TL slot + w1 + node = 3
+        assert_eq!(Arc::strong_count(&node), 3);
+        assert_eq!(w1.get_state(), WakerState::Init as u8);
+        drop(w1);
+        assert_eq!(Arc::strong_count(&node), 2);
+
+        // Next episode: same node, re-armed to Init even from Woken.
+        node.state.store(WakerState::Woken as u8, Ordering::SeqCst);
+        let w2 = tl_blocking_waker();
+        assert!(Arc::ptr_eq(&node, &w2.0));
+        assert_eq!(Arc::strong_count(&node), 3); // TL slot + node + w2
+        assert_eq!(w2.get_state(), WakerState::Init as u8);
+    }
+
+    #[test]
+    fn test_tl_blocking_waker_nodes_differ_across_threads() {
+        let main_node = tl_blocking_waker().0.clone();
+        let t = std::thread::spawn(|| tl_blocking_waker().0.clone());
+        let other_node = t.join().expect("join");
+        assert!(!Arc::ptr_eq(&main_node, &other_node));
     }
 }
