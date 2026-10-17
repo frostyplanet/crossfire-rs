@@ -141,12 +141,14 @@ impl<T> ArrayQueueSpsc<T> {
         let tail = sender_val as u32;
         let mut head_cached = (sender_val >> 32) as u32;
 
-        if head_cached.wrapping_add(self.one_lap) == tail {
+        if head_cached.wrapping_add(self.one_lap) != tail {
+        } else {
             let head = self.recv.load(order) as u32;
-            if head == head_cached {
+            if head != head_cached {
+                head_cached = head;
+            } else {
                 return false;
             }
-            head_cached = head;
         }
 
         let cap = self.capacity();
@@ -223,9 +225,10 @@ impl<T> ArrayQueueSpsc<T> {
     fn _start_read<const SPIN: bool>(&self, _final_check: bool) -> Option<(u32, u32)> {
         let recv_val = self.recv.load(Ordering::Relaxed);
         let head = recv_val as u32;
-        let mut tail_cached = (recv_val >> 32) as u32;
-
-        if tail_cached == head {
+        let tail_cached = (recv_val >> 32) as u32;
+        if tail_cached != head {
+            return Some((head, tail_cached));
+        } else {
             if SPIN {
                 // because we don't have stamp, and no spinning loop,
                 // this line is critical for performance
@@ -239,15 +242,12 @@ impl<T> ArrayQueueSpsc<T> {
                         self.sender.load(Ordering::Acquire) as u32
                     }
                 };
-                if head == tail {
-                    return None;
+                if head != tail {
+                    return Some((head, tail));
                 }
-                tail_cached = tail;
-            } else {
-                return None;
             }
         }
-        Some((head, tail_cached))
+        None
     }
 
     #[inline]
