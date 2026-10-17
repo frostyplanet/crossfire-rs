@@ -158,11 +158,11 @@ impl<T> ArrayQueue<T> {
         }
         check_full!(tail);
         match self._try_push(tail, value) {
-            Ok(_) => Some(true),
             Err((_stamp, _new_tail)) => {
                 // after the first check_full with both loads are SeqCst, this is unlikely full, but also a hot path
                 None
             }
+            Ok(_) => Some(true),
         }
     }
 
@@ -191,18 +191,24 @@ impl<T> ArrayQueue<T> {
                 lap.wrapping_add(self.one_lap)
             };
             // Try moving the tail.
-            if let Err(t) =
-                self.tail.compare_exchange_weak(tail, new_tail, Ordering::SeqCst, Ordering::Relaxed)
-            {
-                return Err((stamp, Some(t)));
+
+            match self.tail.compare_exchange_weak(
+                tail,
+                new_tail,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    // Write the value into the slot and update the stamp.
+                    unsafe {
+                        let item: &mut MaybeUninit<T> = &mut *slot.value.get();
+                        item.write(ptr::read(value));
+                    }
+                    slot.stamp.store(tail + 1, Ordering::Release);
+                    Ok(true)
+                }
+                Err(t) => return Err((stamp, Some(t))),
             }
-            // Write the value into the slot and update the stamp.
-            unsafe {
-                let item: &mut MaybeUninit<T> = &mut *slot.value.get();
-                item.write(ptr::read(value));
-            }
-            slot.stamp.store(tail + 1, Ordering::Release);
-            Ok(true)
         } else {
             Err((stamp, None))
         }
@@ -226,7 +232,6 @@ impl<T> ArrayQueue<T> {
         }
         loop {
             match self._try_push(tail, value) {
-                Ok(res) => return res,
                 Err((stamp, new_tail)) => {
                     if let Some(_tail) = new_tail {
                         tail = _tail;
@@ -239,6 +244,7 @@ impl<T> ArrayQueue<T> {
                     backoff.snooze();
                     tail = self.tail.load(Ordering::Relaxed);
                 }
+                Ok(res) => return res,
             }
         }
     }
@@ -295,15 +301,21 @@ impl<T> ArrayQueue<T> {
                     lap.wrapping_add(self.one_lap)
                 };
                 // Try moving the head.
-                if let Err(new_head) =
-                    self.head.compare_exchange_weak(head, new, Ordering::SeqCst, Ordering::Relaxed)
-                {
-                    head = new_head;
-                    backoff.spin();
-                    continue;
+                match self.head.compare_exchange_weak(
+                    head,
+                    new,
+                    Ordering::SeqCst,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => {
+                        let new_head = head.wrapping_add(self.one_lap);
+                        return Some((slot, new_head));
+                    }
+                    Err(new_head) => {
+                        head = new_head;
+                        backoff.spin();
+                    }
                 }
-                let new_head = head.wrapping_add(self.one_lap);
-                return Some((slot, new_head));
             } else {
                 if stamp == head {
                     // Check full
@@ -320,7 +332,6 @@ impl<T> ArrayQueue<T> {
                     backoff.snooze();
                 }
                 head = self.head.load(Ordering::Relaxed);
-                continue;
             }
         }
     }
