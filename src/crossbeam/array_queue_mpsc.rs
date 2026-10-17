@@ -145,7 +145,6 @@ impl<T> ArrayQueueMpsc<T> {
                 debug_assert!(index < self.buffer.len());
                 unsafe {
                     let slot = self.buffer.get_unchecked(index);
-
                     let item: &mut MaybeUninit<T> = &mut *slot.value.get();
                     item.write(ptr::read(value));
                     slot.stamp.store((tail as usize).wrapping_add(1), Ordering::Release);
@@ -242,9 +241,10 @@ impl<T> ArrayQueueMpsc<T> {
     fn _start_read<const SPIN: bool>(&self, _final_check: bool) -> Option<(u32, u32)> {
         let recv_val = self.recv.load(Ordering::Relaxed);
         let head = recv_val as u32;
-        let mut tail_cached = (recv_val >> 32) as u32;
-
-        if tail_cached == head {
+        let tail_cached = (recv_val >> 32) as u32;
+        if tail_cached != head {
+            Some((head, tail_cached))
+        } else {
             if SPIN {
                 core::hint::spin_loop();
                 let tail = if _final_check {
@@ -252,15 +252,12 @@ impl<T> ArrayQueueMpsc<T> {
                 } else {
                     self.sender.load(Ordering::Acquire) as u32
                 };
-                if head == tail {
-                    return None;
+                if head != tail {
+                    return Some((head, tail));
                 }
-                tail_cached = tail;
-            } else {
-                return None;
             }
+            None
         }
-        Some((head, tail_cached))
     }
 
     #[inline]
