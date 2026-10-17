@@ -216,73 +216,71 @@ impl<T> SegQueue<T> {
         loop {
             // Calculate the offset of the index into the block.
             let offset = (tail >> SHIFT) % LAP;
+            if offset != BLOCK_CAP {
+                // If we're going to have to install the next block, allocate it in advance in order to
+                // make the wait for other threads as short as possible.
+                if offset + 1 != BLOCK_CAP || next_block.is_some() {
+                } else {
+                    next_block = Some(Block::<T>::new());
+                }
+                // If this is the first push operation, we need to allocate the first block.
+                if !block.is_null() {
+                    let new_tail = tail + (1 << SHIFT);
+                    // Try advancing the tail forward.
+                    match self.tail.index.compare_exchange_weak(
+                        tail,
+                        new_tail,
+                        Ordering::SeqCst,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => unsafe {
+                            // If we've reached the end of the block, install the next one.
+                            if offset + 1 != BLOCK_CAP {
+                            } else {
+                                let next_block = Box::into_raw(next_block.unwrap());
+                                let next_index = new_tail.wrapping_add(1 << SHIFT);
 
-            // If we reached the end of the block, wait until the next one is installed.
-            if offset == BLOCK_CAP {
+                                self.tail.block.store(next_block, Ordering::Release);
+                                self.tail.index.store(next_index, Ordering::Release);
+                                (*block).next.store(next_block, Ordering::Release);
+                            }
+                            // Write the value into the slot.
+                            let slot = (*block).slots.get_unchecked(offset);
+                            slot.value.get().write(MaybeUninit::new(value));
+                            slot.state.fetch_or(WRITE, Ordering::Release);
+                            return;
+                        },
+                        Err(t) => {
+                            tail = t;
+                            block = self.tail.block.load(Ordering::Acquire);
+                            backoff.spin();
+                        }
+                    }
+                } else {
+                    let new = Box::into_raw(Block::<T>::new());
+
+                    if self
+                        .tail
+                        .block
+                        .compare_exchange(block, new, Ordering::Release, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        self.head.block.store(new, Ordering::Release);
+                        block = new;
+                    } else {
+                        next_block = unsafe { Some(Box::from_raw(new)) };
+                        tail = self.tail.index.load(Ordering::Acquire);
+                        block = self.tail.block.load(Ordering::Acquire);
+                        continue;
+                    }
+                }
+            } else {
+                debug_assert_eq!(offset, BLOCK_CAP);
+                // If we reached the end of the block, wait until the next one is installed.
                 backoff.snooze();
                 tail = self.tail.index.load(Ordering::Acquire);
                 block = self.tail.block.load(Ordering::Acquire);
                 continue;
-            }
-
-            // If we're going to have to install the next block, allocate it in advance in order to
-            // make the wait for other threads as short as possible.
-            if offset + 1 == BLOCK_CAP && next_block.is_none() {
-                next_block = Some(Block::<T>::new());
-            }
-
-            // If this is the first push operation, we need to allocate the first block.
-            if block.is_null() {
-                let new = Box::into_raw(Block::<T>::new());
-
-                if self
-                    .tail
-                    .block
-                    .compare_exchange(block, new, Ordering::Release, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    self.head.block.store(new, Ordering::Release);
-                    block = new;
-                } else {
-                    next_block = unsafe { Some(Box::from_raw(new)) };
-                    tail = self.tail.index.load(Ordering::Acquire);
-                    block = self.tail.block.load(Ordering::Acquire);
-                    continue;
-                }
-            }
-
-            let new_tail = tail + (1 << SHIFT);
-
-            // Try advancing the tail forward.
-            match self.tail.index.compare_exchange_weak(
-                tail,
-                new_tail,
-                Ordering::SeqCst,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => unsafe {
-                    // If we've reached the end of the block, install the next one.
-                    if offset + 1 == BLOCK_CAP {
-                        let next_block = Box::into_raw(next_block.unwrap());
-                        let next_index = new_tail.wrapping_add(1 << SHIFT);
-
-                        self.tail.block.store(next_block, Ordering::Release);
-                        self.tail.index.store(next_index, Ordering::Release);
-                        (*block).next.store(next_block, Ordering::Release);
-                    }
-
-                    // Write the value into the slot.
-                    let slot = (*block).slots.get_unchecked(offset);
-                    slot.value.get().write(MaybeUninit::new(value));
-                    slot.state.fetch_or(WRITE, Ordering::Release);
-
-                    return;
-                },
-                Err(t) => {
-                    tail = t;
-                    block = self.tail.block.load(Ordering::Acquire);
-                    backoff.spin();
-                }
             }
         }
     }
@@ -307,7 +305,6 @@ impl<T> SegQueue<T> {
 
     #[inline(always)]
     fn _pop<const FINAL: bool>(&self) -> Option<(*mut Block<T>, usize)> {
-        let mut backoff = Backoff::new();
         let mut head;
         if FINAL {
             head = self.head.index.load(Ordering::SeqCst);
@@ -319,71 +316,70 @@ impl<T> SegQueue<T> {
             head = self.head.index.load(Ordering::Acquire);
         }
         let mut block = self.head.block.load(Ordering::Acquire);
-
+        let mut backoff = Backoff::new();
         loop {
             // Calculate the offset of the index into the block.
             let offset = (head >> SHIFT) % LAP;
 
             // If we reached the end of the block, wait until the next one is installed.
-            if offset == BLOCK_CAP {
-                backoff.snooze();
-                head = self.head.index.load(Ordering::Acquire);
-                block = self.head.block.load(Ordering::Acquire);
-                continue;
-            }
-
-            let mut new_head = head + (1 << SHIFT);
-
-            if new_head & HAS_NEXT == 0 {
-                atomic::fence(Ordering::SeqCst);
-                let tail = self.tail.index.load(Ordering::Relaxed);
-
-                // If the tail equals the head, that means the queue is empty.
-                if head >> SHIFT == tail >> SHIFT {
-                    return None;
-                }
-
-                // If head and tail are not in the same block, set `HAS_NEXT` in head.
-                if (head >> SHIFT) / LAP != (tail >> SHIFT) / LAP {
-                    new_head |= HAS_NEXT;
-                }
-            }
-
-            // The block can be null here only if the first push operation is in progress. In that
-            // case, just wait until it gets initialized.
-            if block.is_null() {
-                backoff.snooze();
-                head = self.head.index.load(Ordering::Acquire);
-                block = self.head.block.load(Ordering::Acquire);
-                continue;
-            }
-
-            // Try moving the head index forward.
-            match self.head.index.compare_exchange_weak(
-                head,
-                new_head,
-                Ordering::SeqCst,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => unsafe {
-                    // If we've reached the end of the block, move to the next one.
-                    if offset + 1 == BLOCK_CAP {
-                        let next = (*block).wait_next();
-                        let mut next_index = (new_head & !HAS_NEXT).wrapping_add(1 << SHIFT);
-                        if !(*next).next.load(Ordering::Relaxed).is_null() {
-                            next_index |= HAS_NEXT;
-                        }
-
-                        self.head.block.store(next, Ordering::Release);
-                        self.head.index.store(next_index, Ordering::Release);
+            if offset != BLOCK_CAP {
+                let mut new_head = head + (1 << SHIFT);
+                if new_head & HAS_NEXT != 0 {
+                } else {
+                    atomic::fence(Ordering::SeqCst);
+                    let tail = self.tail.index.load(Ordering::Relaxed);
+                    // If the tail equals the head, that means the queue is empty.
+                    if head >> SHIFT == tail >> SHIFT {
+                        return None;
                     }
-                    return Some((block, offset));
-                },
-                Err(h) => {
-                    head = h;
-                    block = self.head.block.load(Ordering::Acquire);
-                    backoff.spin();
+                    // If head and tail are not in the same block, set `HAS_NEXT` in head.
+                    if (head >> SHIFT) / LAP != (tail >> SHIFT) / LAP {
+                        new_head |= HAS_NEXT;
+                    }
                 }
+                // The block can be null here only if the first push operation is in progress. In that
+                // case, just wait until it gets initialized.
+                if !block.is_null() {
+                    // Try moving the head index forward.
+                    match self.head.index.compare_exchange_weak(
+                        head,
+                        new_head,
+                        Ordering::SeqCst,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => unsafe {
+                            // If we've reached the end of the block, move to the next one.
+                            if offset + 1 != BLOCK_CAP {
+                            } else {
+                                let next = (*block).wait_next();
+                                let mut next_index =
+                                    (new_head & !HAS_NEXT).wrapping_add(1 << SHIFT);
+                                if !(*next).next.load(Ordering::Relaxed).is_null() {
+                                    next_index |= HAS_NEXT;
+                                }
+                                self.head.block.store(next, Ordering::Release);
+                                self.head.index.store(next_index, Ordering::Release);
+                            }
+                            return Some((block, offset));
+                        },
+                        Err(h) => {
+                            head = h;
+                            block = self.head.block.load(Ordering::Acquire);
+                            backoff.spin();
+                        }
+                    }
+                } else {
+                    backoff.snooze();
+                    head = self.head.index.load(Ordering::Acquire);
+                    block = self.head.block.load(Ordering::Acquire);
+                    continue;
+                }
+            } else {
+                debug_assert_eq!(offset, BLOCK_CAP);
+                backoff.snooze();
+                head = self.head.index.load(Ordering::Acquire);
+                block = self.head.block.load(Ordering::Acquire);
+                continue;
             }
         }
     }
