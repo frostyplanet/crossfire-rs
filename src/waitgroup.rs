@@ -134,7 +134,7 @@ use crate::shared::{check_timeout, ThinWaker};
 #[allow(unused_imports)]
 use crate::{tokio_task_id, trace_log};
 use crossfire_utils::backoff::*;
-pub use pointers::{Pointer, SmartPointer};
+pub use pointers::{CloneablePointer, Pointer, SmartPointer};
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::future::Future;
@@ -791,7 +791,7 @@ impl<T> Pointer for WaitGroupZero<T> {
 
     /// # Safety
     ///
-    /// You should make sure the pointer originate from [WaitGroupZeroGuard::into_raw()].
+    /// You should make sure the pointer originate from [WaitGroupZero::into_raw()].
     /// In order for max efficiency, we don't check the pointer is null.
     #[inline]
     unsafe fn from_raw(p: *const Self::Target) -> Self {
@@ -809,13 +809,6 @@ impl<T> Pointer for WaitGroupZero<T> {
         let p = unsafe { self.inner.as_ptr().byte_add(offset) } as *const Self::Target;
         std::mem::forget(self);
         p
-    }
-}
-
-impl<T> SmartPointer for WaitGroupZero<T> {
-    #[inline]
-    fn new(inner: T) -> Self {
-        WaitGroupZero::new(inner)
     }
 }
 
@@ -927,7 +920,7 @@ impl<T> Pointer for WaitGroupZeroGuard<T> {
     /// # Safety
     ///
     /// You should make sure the pointer originate from [WaitGroupZeroGuard::into_raw()].
-    /// In order for max efficiency, we don't check the pointer is null.
+    /// On release build we don't check the pointer is null.
     #[inline]
     unsafe fn from_raw(p: *const Self::Target) -> Self {
         debug_assert!(!p.is_null());
@@ -944,6 +937,23 @@ impl<T> Pointer for WaitGroupZeroGuard<T> {
         let p = unsafe { self.inner.as_ptr().byte_add(offset) } as *const Self::Target;
         std::mem::forget(self);
         p
+    }
+}
+
+impl<T> CloneablePointer for WaitGroupZeroGuard<T> {
+    /// # Safety
+    ///
+    /// You should make sure the pointer originate from [WaitGroupZeroGuard::into_raw()].
+    /// On release build we don't check the pointer is null.
+    #[inline]
+    unsafe fn from_raw_and_clone(p: *const Self::Target) -> Self {
+        debug_assert!(!p.is_null());
+        let offset = offset_of!(WaitGroupInner<T>, inner);
+        unsafe {
+            let rc_ptr = p.byte_sub(offset) as *mut WaitGroupInner<T>;
+            (*rc_ptr).add(1);
+            Self { inner: NonNull::new_unchecked(rc_ptr) }
+        }
     }
 }
 
