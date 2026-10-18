@@ -172,7 +172,6 @@
 //!
 //! If you like to use poll function directly for complex behavior, you can call
 //! [AsyncSink::poll_send()](crate::sink::AsyncSink::poll_send()) or [AsyncStream::poll_item()](crate::stream::AsyncStream::poll_item()) with Context.
-
 //!
 //! ## Usage
 //!
@@ -193,6 +192,12 @@
 //!   with `tokio` feature)
 //!
 //! * `trace_log`: Development mode, to enable internal log while testing or benchmark, to debug deadlock issues.
+//!
+//! * `oneshot`: Enable the [oneshot] module
+//!
+//! * `select`: Enable the [select] module
+//!
+//! * `waitgroup`: Enable the [waitgroup] module
 //!
 //! ### Example
 //!
@@ -272,17 +277,15 @@ pub use crossfire_utils::backoff::detect_backoff_cfg;
 mod collections;
 #[allow(dead_code)]
 mod waker;
-#[allow(private_bounds)]
+#[allow(private_bounds, dead_code)]
 mod waker_registry;
 
 #[allow(private_bounds)]
 pub mod mpmc;
 #[allow(private_bounds)]
 pub mod mpsc;
-pub mod oneshot;
 #[allow(private_bounds)]
 pub mod spsc;
-pub mod waitgroup;
 
 mod blocking_tx;
 pub use blocking_tx::*;
@@ -303,8 +306,17 @@ pub mod null;
 pub mod sink;
 pub mod stream;
 
+#[allow(dead_code)]
 mod crossbeam;
 pub use crossbeam::err::*;
+
+#[cfg(feature = "oneshot")]
+pub mod oneshot;
+
+#[cfg(feature = "waitgroup")]
+pub mod waitgroup;
+
+#[cfg(feature = "select")]
 #[allow(private_bounds)]
 pub mod select;
 
@@ -353,8 +365,10 @@ where
     ChannelShared<Self::Flavor>:
         flavor::ChannelSharedMultiplex<<Self::Flavor as flavor::Queue>::Item>,
 {
-    fn shared_ptr(&self) -> NonNull<ChannelShared<Self::Flavor>>;
     fn new(shared: NonNull<ChannelShared<Self::Flavor>>) -> Self;
+
+    #[cfg(feature = "select")]
+    fn shared_ptr(&self) -> NonNull<ChannelShared<Self::Flavor>>;
 }
 
 /// type limiter for channel builder

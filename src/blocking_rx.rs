@@ -1,5 +1,4 @@
-use crate::flavor::{FlavorMC, FlavorSelect};
-use crate::select::SelectResult;
+use crate::flavor::FlavorMC;
 use crate::{
     shared::*, trace_log, AsyncRx, MAsyncRx, NotCloneable, ReceiverTypeBase, ReceiverTypePriv,
 };
@@ -233,10 +232,11 @@ impl<F: Flavor> Rx<F> {
     /// # Panics
     ///
     /// Panics if SelectResult from other receiver is passed.
+    #[cfg(feature = "select")]
     #[inline(always)]
-    pub fn read_select(&self, result: SelectResult) -> Result<F::Item, RecvError>
+    pub fn read_select(&self, result: crate::select::SelectResult) -> Result<F::Item, RecvError>
     where
-        F: FlavorSelect,
+        F: crate::flavor::FlavorSelect,
     {
         assert_eq!(
             self as *const Self as *const u8, result.channel,
@@ -655,6 +655,7 @@ impl<T, F: Flavor<Item = T>> ReceiverTypePriv for Rx<F> {
         Rx::new(shared)
     }
 
+    #[cfg(feature = "select")]
     #[inline(always)]
     fn shared_ptr(&self) -> NonNull<ChannelShared<F>> {
         self._shared
@@ -679,6 +680,7 @@ where
         MRx::new(shared)
     }
 
+    #[cfg(feature = "select")]
     #[inline(always)]
     fn shared_ptr(&self) -> NonNull<ChannelShared<F>> {
         self.0._shared
