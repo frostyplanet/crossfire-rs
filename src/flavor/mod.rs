@@ -21,11 +21,13 @@ mod one_spmc;
 pub use one_spmc::OneSpsc;
 
 /// Essential struct for select and read interface
+#[allow(dead_code)]
 pub(crate) struct Token {
     pub(crate) pos: *const u8,
     pub(crate) stamp: usize,
 }
 
+#[allow(dead_code)]
 impl Token {
     #[inline]
     pub(crate) fn new(pos: *const u8, stamp: usize) -> Self {
@@ -33,6 +35,7 @@ impl Token {
     }
 }
 
+#[allow(dead_code)]
 impl Default for Token {
     #[inline]
     fn default() -> Self {
@@ -40,6 +43,7 @@ impl Default for Token {
     }
 }
 
+#[cfg(feature = "select")]
 #[allow(private_bounds)]
 pub(crate) trait ChannelSharedSelect: Send {
     /// If final_check is true, should check channel closing, should use SeqCst ordering
@@ -51,6 +55,7 @@ pub(crate) trait ChannelSharedSelect: Send {
     fn cancel_waker(&self, waker: &Arc<SelectWaker>);
 }
 
+#[allow(dead_code)]
 #[allow(private_bounds)]
 pub(crate) trait ChannelSharedMultiplex<T>: Send {
     /// For multiplex dyn, only using cached value
@@ -103,6 +108,7 @@ pub(crate) trait FlavorImpl: Queue {
     /// For multiplex, only using cached value
     ///
     /// (without spin and loading sender value)
+    #[allow(dead_code)]
     #[inline]
     fn try_recv_cached(&self) -> Option<Self::Item> {
         self.try_recv()
@@ -124,9 +130,11 @@ pub(crate) trait FlavorImpl: Queue {
 }
 
 pub(crate) trait FlavorSelect: Queue {
+    #[allow(dead_code)]
     /// Note: this is internal function, it does not check if the token has other result
     fn try_select(&self, final_check: bool) -> Option<Token>;
 
+    #[allow(dead_code)]
     /// Note: this is internal function, it does not check if the token is valid
     fn read_with_token(&self, token: Token) -> Self::Item;
 }
