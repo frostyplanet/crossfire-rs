@@ -1,7 +1,5 @@
 pub(crate) use crate::crossbeam::err::*;
-pub(crate) use crate::flavor::{
-    ChannelSharedMultiplex, ChannelSharedSelect, Flavor, FlavorSelect, Token,
-};
+pub(crate) use crate::flavor::{ChannelSharedMultiplex, Flavor, FlavorSelect, Token};
 use crate::trace_log;
 pub(crate) use crate::waker::*;
 pub(crate) use crate::waker_registry::*;
@@ -63,6 +61,7 @@ impl<F: Flavor> ChannelShared<F> {
         Err(TryRecvError::Empty)
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn read_with_token(&self, token: Token) -> Result<F::Item, RecvError>
     where
@@ -201,6 +200,7 @@ impl<F: Flavor> ChannelShared<F> {
         }
     }
 
+    #[cfg(feature = "select")]
     /// for MultiplexDyn
     #[inline(always)]
     pub(crate) fn close_rx_erased(this: *mut ()) {
@@ -335,7 +335,8 @@ impl<F: Flavor> ChannelShared<F> {
     }
 }
 
-impl<F: Flavor + FlavorSelect> ChannelSharedSelect for ChannelShared<F> {
+#[cfg(feature = "select")]
+impl<F: Flavor + FlavorSelect> crate::flavor::ChannelSharedSelect for ChannelShared<F> {
     #[inline(always)]
     fn try_select(&self, final_check: bool) -> Option<Token> {
         // NOTE: we cannot use generic const for final_check because ChannelSharedSelect trait

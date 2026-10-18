@@ -29,8 +29,8 @@ parking_lot = "0"
 tokio = { version = "1", features = ["time", "rt"], optional=true }
 async-std = {version = "1", optional=true}
 log = { version="0.4", optional=true}
-smallvec = "1"
-pointers = "0"
+smallvec = {version="1", optional=true}
+pointers = {version=">=0.2.1", optional=true}
 
 [dev-dependencies]
 log = "0"
@@ -44,7 +44,16 @@ crossbeam-utils = "0.8"
 #debug = true
 
 [features]
-default = []
+default = ["select", "waitgroup", "oneshot"]
+
+# Enable the select module
+select = ["dep:smallvec"]
+
+# Enable the waitgroup module
+waitgroup = ["dep:pointers"]
+
+# Enable the oneshot module
+oneshot = []
 
 # Enable compat model for v2.x API
 compat = []
