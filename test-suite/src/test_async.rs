@@ -3,7 +3,7 @@ use captains_log::{logfn, *};
 use crossfire::{sink::*, stream::*, *};
 use futures_util::{pin_mut, select, stream::FusedStream, stream::StreamExt, FutureExt};
 use rstest::*;
-use std::future::Future;
+use std::future::{pending, ready, Future};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -1236,21 +1236,46 @@ fn _test_async_drop_msg<M: TestDropMsg, T: AsyncTxTrait<M>, R: AsyncRxTrait<M>>(
     reset_drop_counter();
     runtime_block_on!(async move {
         let cap = tx.capacity().unwrap();
+        // Dropping a completed send future must leave the item owned by the channel.
+        let mut send = Box::pin(tx.send_with_timer(M::new(0), pending::<()>()));
+        send.as_mut().await.expect("timed send");
+        drop(send);
+        assert_eq!(get_drop_counter(), 0);
+        let msg = rx.recv().await.expect("receive timed send");
+        assert_eq!(msg.get_value(), 0);
+        drop(msg);
+        assert_eq!(get_drop_counter(), 1);
+
         let mut ids = cap;
         for i in 0..ids {
             let msg = M::new(i);
             assert!(tx.try_send(msg).is_ok());
         }
-        assert_eq!(get_drop_counter(), 0);
+        assert_eq!(get_drop_counter(), 1);
         let msg = M::new(ids);
         if let Err(TrySendError::Full(_msg)) = tx.try_send(msg) {
             assert_eq!(_msg.get_value(), ids);
-            assert_eq!(get_drop_counter(), 0);
-            drop(_msg);
             assert_eq!(get_drop_counter(), 1);
+            drop(_msg);
+            assert_eq!(get_drop_counter(), 2);
         } else {
             unreachable!();
         }
+
+        // An immediately ready timer forces a timeout; only the returned error owns the item.
+        let mut send = Box::pin(tx.send_with_timer(M::new(ids), ready(())));
+        let error = send.as_mut().await.expect_err("full channel should time out");
+        drop(send);
+        assert_eq!(get_drop_counter(), 2);
+        match error {
+            SendTimeoutError::Timeout(msg) => {
+                assert_eq!(msg.get_value(), ids);
+                drop(msg);
+            }
+            SendTimeoutError::Disconnected(_) => unreachable!(),
+        }
+        assert_eq!(get_drop_counter(), 3);
+
         let th = async_spawn!(async move {
             let _msg = rx.recv().await.expect("recv");
             assert_eq!(_msg.get_value(), 0);
@@ -1262,7 +1287,7 @@ fn _test_async_drop_msg<M: TestDropMsg, T: AsyncTxTrait<M>, R: AsyncRxTrait<M>>(
         ids += 1;
         let rx = async_join_result!(th);
         drop(rx);
-        assert_eq!(get_drop_counter(), 2);
+        assert_eq!(get_drop_counter(), 4);
         let msg = M::new(ids);
         if let Err(TrySendError::Disconnected(_msg)) = tx.try_send(msg) {
             assert_eq!(_msg.get_value(), ids);
@@ -1276,11 +1301,78 @@ fn _test_async_drop_msg<M: TestDropMsg, T: AsyncTxTrait<M>, R: AsyncRxTrait<M>>(
         } else {
             unreachable!();
         }
-        assert_eq!(get_drop_counter(), 4);
+        assert_eq!(get_drop_counter(), 6);
         ids += 1;
+
+        // On disconnection, dropping the completed future must not drop the error's item.
+        let mut send = Box::pin(tx.send_with_timer(M::new(ids), pending::<()>()));
+        let error = send.as_mut().await.expect_err("receiver disconnected");
+        drop(send);
+        assert_eq!(get_drop_counter(), 6);
+        match error {
+            SendTimeoutError::Disconnected(msg) => {
+                assert_eq!(msg.get_value(), ids);
+                drop(msg);
+            }
+            SendTimeoutError::Timeout(_) => unreachable!(),
+        }
+        assert_eq!(get_drop_counter(), 7);
+
         drop(tx);
         // every thing dropped inside the channel
-        assert_eq!(get_drop_counter(), ids + 1); // ids begins at 0
-        assert_eq!(get_drop_counter(), 4 + cap);
+        assert_eq!(get_drop_counter(), 7 + cap);
+    });
+}
+
+#[logfn]
+#[rstest]
+#[case(spsc::bounded_async(1))]
+#[case(mpsc::bounded_async(1))]
+#[case(mpmc::bounded_async(1))]
+fn test_unpolled_future_item_drop_bounded<
+    T: AsyncTxTrait<SmallMsg> + 'static + Send,
+    R: AsyncRxTrait<SmallMsg> + 'static + Send,
+>(
+    setup_log: (), #[case] channel: (T, R),
+) {
+    reset_drop_counter();
+    runtime_block_on!(async move {
+        let (tx, rx) = channel;
+        let fut = tx.send(SmallMsg::new(0));
+        assert_eq!(get_drop_counter(), 0);
+
+        drop(fut);
+        assert_eq!(get_drop_counter(), 1);
+
+        drop(tx);
+        drop(rx);
+        assert_eq!(get_drop_counter(), 1);
+    });
+}
+
+#[cfg(feature = "tokio")]
+#[logfn]
+#[rstest]
+#[case(spsc::bounded_async(1))]
+#[case(mpsc::bounded_async(1))]
+#[case(mpmc::bounded_async(1))]
+fn test_unpolled_timeout_future_item_drop_bounded<
+    T: AsyncTxTrait<SmallMsg> + 'static + Send,
+    R: AsyncRxTrait<SmallMsg> + 'static + Send,
+>(
+    setup_log: (), #[case] channel: (T, R),
+) {
+    reset_drop_counter();
+    runtime_block_on!(async move {
+        let (tx, rx) = channel;
+        let fut = tx.send_timeout(SmallMsg::new(0), Duration::from_millis(1));
+        assert_eq!(get_drop_counter(), 0);
+
+        drop(fut);
+        assert_eq!(get_drop_counter(), 1);
+
+        drop(tx);
+        drop(rx);
+        assert_eq!(get_drop_counter(), 1);
     });
 }
