@@ -131,7 +131,7 @@ impl<F: Flavor> AsyncTx<F> {
     /// You should rely on the Drop trait of the message to cleanup.
     #[inline(always)]
     pub fn send<'a>(&'a self, item: F::Item) -> SendFuture<'a, F> {
-        SendFuture { tx: self, item: MaybeUninit::new(item), waker: None }
+        SendFuture { tx: Some(self), item: MaybeUninit::new(item), waker: None }
     }
 
     /// Attempts to send a message without blocking.
@@ -234,7 +234,7 @@ impl<F: Flavor> AsyncTx<F> {
     where
         FR: Future<Output = R>,
     {
-        SendTimeoutFuture { tx: self, item: MaybeUninit::new(item), waker: None, sleep: fut }
+        SendTimeoutFuture { tx: Some(self), item: MaybeUninit::new(item), waker: None, sleep: fut }
     }
 
     /// Internal function might change in the future. For public version, use AsyncSink::poll_send() instead.
@@ -312,7 +312,8 @@ impl<F: Flavor> AsyncTx<F> {
 /// A fixed-sized future object constructed by [AsyncTx::send()]
 #[must_use]
 pub struct SendFuture<'a, F: Flavor> {
-    tx: &'a AsyncTx<F>,
+    /// `None` indicates that the future completed
+    tx: Option<&'a AsyncTx<F>>,
     item: MaybeUninit<F::Item>,
     waker: Option<<F::Send as Registry>::Waker>,
 }
@@ -322,11 +323,19 @@ unsafe impl<F: Flavor> Send for SendFuture<'_, F> where F::Item: Send {}
 impl<F: Flavor> Drop for SendFuture<'_, F> {
     #[inline]
     fn drop(&mut self) {
-        // Cancelling the future, poll is not ready
-        if let Some(waker) = self.waker.as_ref() {
-            if self.tx.shared.abandon_send_waker(waker) && needs_drop::<F::Item>() {
-                unsafe { self.item.assume_init_drop() };
-            }
+        if self.tx.is_none() {
+            return;
+        }
+
+        let owns_item = match self.waker.as_ref() {
+            Some(waker) => self.tx.unwrap().shared.abandon_send_waker(waker),
+            // self.tx is Some (checked above) but there is no waker, this
+            // means no waker was registered yet and we still own the item
+            None => true,
+        };
+
+        if owns_item && needs_drop::<F::Item>() {
+            unsafe { self.item.assume_init_drop() };
         }
     }
 }
@@ -340,13 +349,19 @@ where
     #[inline]
     fn poll(self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         let mut _self = self.get_mut();
-        match _self.tx.poll_send::<false>(ctx, &_self.item, &mut _self.waker) {
+        match _self.tx.expect("SendFuture polled after completion").poll_send::<false>(
+            ctx,
+            &_self.item,
+            &mut _self.waker,
+        ) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
+                let _ = _self.tx.take();
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(())) => {
                 let _ = _self.waker.take();
+                let _ = _self.tx.take();
                 Poll::Ready(Err(SendError(unsafe { _self.item.assume_init_read() })))
             }
             Poll::Pending => Poll::Pending,
@@ -361,7 +376,8 @@ where
     F: Flavor,
     FR: Future<Output = R>,
 {
-    tx: &'a AsyncTx<F>,
+    /// `None` indicates that the future completed
+    tx: Option<&'a AsyncTx<F>>,
     sleep: FR,
     item: MaybeUninit<F::Item>,
     waker: Option<<F::Send as Registry>::Waker>,
@@ -381,11 +397,19 @@ where
 {
     #[inline]
     fn drop(&mut self) {
-        if let Some(waker) = self.waker.as_ref() {
-            // Cancelling the future, poll is not ready
-            if self.tx.shared.abandon_send_waker(waker) && needs_drop::<F::Item>() {
-                unsafe { self.item.assume_init_drop() };
-            }
+        if self.tx.is_none() {
+            return;
+        }
+
+        let owns_item = match self.waker.as_ref() {
+            Some(waker) => self.tx.unwrap().shared.abandon_send_waker(waker),
+            // self.tx is Some (checked above) but there is no waker, this
+            // means no waker was registered yet and we still own the item
+            None => true,
+        };
+
+        if owns_item && needs_drop::<F::Item>() {
+            unsafe { self.item.assume_init_drop() };
         }
     }
 }
@@ -403,13 +427,19 @@ where
         // NOTE: we can use unchecked to bypass pin because we are not movig "sleep",
         // neither it's exposed outside
         let mut _self = unsafe { self.get_unchecked_mut() };
-        match _self.tx.poll_send::<false>(ctx, &_self.item, &mut _self.waker) {
+        match _self.tx.expect("SendTimeoutFuture polled after completion").poll_send::<false>(
+            ctx,
+            &_self.item,
+            &mut _self.waker,
+        ) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
+                let _ = _self.tx.take();
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(())) => {
                 let _ = _self.waker.take();
+                let _ = _self.tx.take();
                 Poll::Ready(Err(SendTimeoutError::Disconnected(unsafe {
                     _self.item.assume_init_read()
                 })))
@@ -417,12 +447,19 @@ where
             Poll::Pending => {
                 let sleep = unsafe { Pin::new_unchecked(&mut _self.sleep) };
                 if sleep.poll(ctx).is_ready() {
-                    if _self.tx.shared.abandon_send_waker(&_self.waker.take().unwrap()) {
+                    if _self
+                        .tx
+                        .expect("SendTimeoutFuture polled after completion")
+                        .shared
+                        .abandon_send_waker(&_self.waker.take().unwrap())
+                    {
+                        let _ = _self.tx.take();
                         return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
                             _self.item.assume_init_read()
                         })));
                     } else {
                         // Message already sent in background (on_recv).
+                        let _ = _self.tx.take();
                         return Poll::Ready(Ok(()));
                     }
                 }
