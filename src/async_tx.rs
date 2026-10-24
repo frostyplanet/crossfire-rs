@@ -327,14 +327,12 @@ impl<F: Flavor> Drop for SendFuture<'_, F> {
             return;
         }
 
-        let owns_item = match self.waker.as_ref() {
-            Some(waker) => self.tx.unwrap().shared.abandon_send_waker(waker),
-            // self.tx is Some (checked above) but there is no waker, this
-            // means no waker was registered yet and we still own the item
-            None => true,
-        };
-
-        if owns_item && needs_drop::<F::Item>() {
+        if let Some(waker) = self.waker.as_ref() {
+            self.tx.unwrap().shared.abandon_send_waker(waker);
+            // self.tx is Some (checked above) but there is no waker,
+            // this means future is not polled and we still own the item
+        }
+        if needs_drop::<F::Item>() {
             unsafe { self.item.assume_init_drop() };
         }
     }
@@ -401,14 +399,12 @@ where
             return;
         }
 
-        let owns_item = match self.waker.as_ref() {
-            Some(waker) => self.tx.unwrap().shared.abandon_send_waker(waker),
-            // self.tx is Some (checked above) but there is no waker, this
-            // means no waker was registered yet and we still own the item
-            None => true,
+        if let Some(waker) = self.waker.as_ref() {
+            self.tx.unwrap().shared.abandon_send_waker(waker);
+            // self.tx is Some (checked above) but there is no waker,
+            // this means future is not polled and we still own the item
         };
-
-        if owns_item && needs_drop::<F::Item>() {
+        if needs_drop::<F::Item>() {
             unsafe { self.item.assume_init_drop() };
         }
     }
@@ -427,11 +423,8 @@ where
         // NOTE: we can use unchecked to bypass pin because we are not movig "sleep",
         // neither it's exposed outside
         let mut _self = unsafe { self.get_unchecked_mut() };
-        match _self.tx.expect("SendTimeoutFuture polled after completion").poll_send::<false>(
-            ctx,
-            &_self.item,
-            &mut _self.waker,
-        ) {
+        let tx = _self.tx.as_ref().expect("SendTimeoutFuture polled after completion");
+        match tx.poll_send::<false>(ctx, &_self.item, &mut _self.waker) {
             Poll::Ready(Ok(())) => {
                 debug_assert!(_self.waker.is_none());
                 let _ = _self.tx.take();
@@ -447,21 +440,12 @@ where
             Poll::Pending => {
                 let sleep = unsafe { Pin::new_unchecked(&mut _self.sleep) };
                 if sleep.poll(ctx).is_ready() {
-                    if _self
-                        .tx
-                        .expect("SendTimeoutFuture polled after completion")
-                        .shared
-                        .abandon_send_waker(&_self.waker.take().unwrap())
-                    {
-                        let _ = _self.tx.take();
-                        return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
-                            _self.item.assume_init_read()
-                        })));
-                    } else {
-                        // Message already sent in background (on_recv).
-                        let _ = _self.tx.take();
-                        return Poll::Ready(Ok(()));
-                    }
+                    // waker must exist
+                    tx.shared.abandon_send_waker(&_self.waker.take().unwrap());
+                    let _ = _self.tx.take();
+                    return Poll::Ready(Err(SendTimeoutError::Timeout(unsafe {
+                        _self.item.assume_init_read()
+                    })));
                 }
                 Poll::Pending
             }

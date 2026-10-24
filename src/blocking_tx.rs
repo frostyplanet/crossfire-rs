@@ -151,15 +151,10 @@ impl<F: Flavor> Tx<F> {
                             std::thread::park_timeout(dur);
                         }
                         Err(_) => {
-                            if shared.abandon_send_waker(o_waker.as_ref().unwrap()) {
-                                return Err(SendTimeoutError::Timeout(unsafe {
-                                    item.assume_init_read()
-                                }));
-                            } else {
-                                // NOTE: Unlikely since we disable direct copy with deadline
-                                // state is WakerState::Done
-                                return Ok(());
-                            }
+                            shared.abandon_send_waker(o_waker.as_ref().unwrap());
+                            return Err(SendTimeoutError::Timeout(unsafe {
+                                item.assume_init_read()
+                            }));
                         }
                     }
                     state = self.senders.get_waker_state(&o_waker, Ordering::SeqCst);

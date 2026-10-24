@@ -255,21 +255,18 @@ impl<F: Flavor> ChannelShared<F> {
     /// Call on cancellation, return true to indicate drop temporary message
     /// return false to indicate already Done.
     #[inline(always)]
-    pub(crate) fn abandon_send_waker(&self, waker: &<F::Send as Registry>::Waker) -> bool {
+    pub(crate) fn abandon_send_waker(&self, waker: &<F::Send as Registry>::Waker) {
         match self.senders.abandon_waker(waker) {
-            Ok(_) => true,
+            Ok(_) => {}
             Err(state) => {
                 trace_log!("tx: abandon err  {:?} {}", waker, state);
                 if state == WakerState::Woken as u8 {
                     // We are awake, but give up sending, should notify another sender for safety
                     self.on_recv();
-                } else if state == WakerState::Closed as u8 {
                 } else {
-                    debug_assert_eq!(state, WakerState::Done as u8);
-                    // Unused code for direct_copy
-                    return false;
+                    debug_assert_eq!(state, WakerState::Closed as u8);
+                    // direct_copy logic is removed, WakerState::Done is not possible
                 }
-                true
             }
         }
     }
