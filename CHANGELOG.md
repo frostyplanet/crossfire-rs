@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.22] - 2026-10-24
+
+### Fixed
+
+-  Fix item leaks when send futures dropped before being polled (issue #72 by Chepelau) (backported to 2.1.12)
+
 ## [3.1.21] - 2026-10-18
 
 ### Changed
@@ -27,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix message lost for try_recv while sender drop, affects try_recv on all receivers,  Multiplex::try_recv, Select::try_select. (issue #70)
+- Fix message lost for try_recv while sender drop, affects try_recv on all receivers,  Multiplex::try_recv, Select::try_select. (issue #70) (backported to 2.1.11)
 
 ## [3.1.19] - 2026-07-09
 
