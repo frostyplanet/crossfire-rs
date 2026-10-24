@@ -385,6 +385,7 @@ unsafe impl<F, FR, R> Send for SendTimeoutFuture<'_, F, FR, R>
 where
     F: Flavor,
     FR: Future<Output = R>,
+    F::Item: Send,
 {
 }
 
