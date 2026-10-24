@@ -15,7 +15,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
       with:
-          ref: v2.0
+          ref: v2
 
     - name: Run tests with tokio multi-thread
       run: env WORKFLOW=1 make test
