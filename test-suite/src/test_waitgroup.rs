@@ -62,7 +62,7 @@ fn test_waitgroup_with_state(setup_log: ()) {
             for i in 0..10 {
                 let guard = $wg.add_guard();
                 assert!($cls::get_mut(&mut $wg).is_none());
-                std::thread::spawn(move || {
+                spawn_named_thread!(format!("guard {i}"), move || {
                     if i == 5 {
                         guard.store(false, Ordering::SeqCst);
                     }
@@ -92,7 +92,7 @@ fn test_basic_wg_timeout_blocking(setup_log: ()) {
     let _wg = WaitGroup::new((), 0);
     let _guard_parent = _wg.add_guard();
     // Test drop while guard not finish
-    let th = std::thread::spawn(move || {
+    let th = spawn_named_thread!("guard", move || {
         _wg.wait();
         std::thread::sleep(Duration::from_secs(1));
         drop(_guard);
@@ -116,7 +116,7 @@ fn test_basic_wg_zero_timeout_blocking_raw_pointer(setup_log: ()) {
     let _wg = WaitGroupZero::new(());
     let _guard_parent_raw = _wg.add_guard().into_raw();
     // Test drop while guard not finish
-    let th = std::thread::spawn(move || {
+    let th = spawn_named_thread!("guard", move || {
         _wg.wait();
         std::thread::sleep(Duration::from_secs(1));
         let _guard =
@@ -265,7 +265,7 @@ fn test_pressure_wg_blocking_spawn_sleep(setup_log: ()) {
         }
         let mut handles = Vec::new();
         for (i, guard) in guards.into_iter().enumerate() {
-            handles.push(spawn_named_thread(&format!("worker-{}", i), move || {
+            handles.push(spawn_named_thread!(&format!("worker-{}", i), move || {
                 let millis = fastrand::u64(0..=10); // Sleep for 0 to 10 milliseconds
                 std::thread::sleep(Duration::from_millis(millis));
                 drop(guard);
@@ -429,9 +429,9 @@ fn test_pressure_wg_blocking_channel(
 
         // Spawn consumer tasks
         let mut th_s = Vec::new();
-        for _ in 0..num_threads {
+        for i in 0..num_threads {
             let _rx = rx.clone();
-            let th = std::thread::spawn(move || {
+            let th = spawn_named_thread!(format!("rx{i}"), move || {
                 let mut count = 0;
                 while let Ok(guard) = _rx.recv() {
                     count += 1;
@@ -473,7 +473,7 @@ fn test_waitgroup_inline(setup_log: ()) {
     wg.add_many(1);
     assert!(wg.try_wait().is_err());
     let _wg = wg.clone();
-    let th = std::thread::spawn(move || {
+    let th = spawn_named_thread!("guard", move || {
         std::thread::sleep(Duration::from_secs(1));
         unsafe { _wg.done_many(1) };
     });

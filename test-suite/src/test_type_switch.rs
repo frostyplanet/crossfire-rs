@@ -72,7 +72,7 @@ fn test_bounded_async_with_sync_receiver_switch_buffered<
 
         // Continue receiving with blocking receiver in a thread
         let remaining_messages = total_messages - async_consumed;
-        let sync_th = std::thread::spawn(move || {
+        let sync_th = spawn_named_thread!("rx", move || {
             let mut sync_received = Vec::new();
 
             while let Ok(value) = blocking_rx.recv() {
@@ -156,7 +156,7 @@ fn test_mpmc_bounded_async_with_sync_receiver_switch_buffered<
 
         // Consume remaining messages with blocking receiver in thread
         let remaining_messages = total_messages - async_consumed;
-        let sync_th = std::thread::spawn(move || {
+        let sync_th = spawn_named_thread!("rx", move || {
             let mut sync_received = Vec::new();
             while let Ok(value) = sync_rx.recv() {
                 trace!("Sync receiver got message: {}", value);
@@ -201,7 +201,7 @@ fn test_spsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> +
 
     runtime_block_on_with_timeout!(async move {
         // Start blocking receiver in a thread
-        let receiver_handle = std::thread::spawn(move || {
+        let receiver_handle = spawn_named_thread!("rx", move || {
             let mut all_received = Vec::new();
             while let Ok(value) = rx.recv() {
                 trace!("Blocking receiver got message: {}", value);
@@ -212,7 +212,7 @@ fn test_spsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> +
         });
 
         // Send messages with blocking sender in a thread (will block when buffer fills)
-        let sender_handle = std::thread::spawn(move || {
+        let sender_handle = spawn_named_thread!("tx", move || {
             for i in 0..sync_sent {
                 trace!("Blocking sender sending message {}", i);
                 tx.send(i).expect("Failed to send message");
@@ -264,7 +264,7 @@ fn test_mpsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> +
 
     runtime_block_on_with_timeout!(async move {
         // Send messages with blocking multi-sender in a thread
-        let sender_handle = std::thread::spawn(move || {
+        let sender_handle = spawn_named_thread!("tx", move || {
             for i in 0..sync_sent {
                 tx.send(i).expect("Failed to send message");
             }
@@ -288,7 +288,7 @@ fn test_mpsc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> +
         });
 
         // Receive all messages with blocking receiver in a thread
-        let receiver_handle = std::thread::spawn(move || {
+        let receiver_handle = spawn_named_thread!("rx", move || {
             let mut all_received = Vec::new();
             while let Ok(value) = rx.recv() {
                 all_received.push(value);
@@ -325,7 +325,7 @@ fn test_mpmc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> +
 
     runtime_block_on_with_timeout!(async move {
         // Send messages with blocking multi-sender in a thread
-        let sender_handle = std::thread::spawn(move || {
+        let sender_handle = spawn_named_thread!("tx", move || {
             for i in 0..sync_sent {
                 tx.send(i).expect("Failed to send message");
             }
@@ -349,7 +349,7 @@ fn test_mpmc_bounded_blocking_with_async_sender_switch<F: Flavor<Item = usize> +
         });
 
         // Receive all messages with blocking receiver in a thread
-        let receiver_handle = std::thread::spawn(move || {
+        let receiver_handle = spawn_named_thread!("rx", move || {
             let mut all_received = Vec::new();
             while let Ok(value) = rx.recv() {
                 all_received.push(value);
@@ -387,7 +387,7 @@ fn test_spsc_bounded_blocking_with_async_receiver_switch<
 
     runtime_block_on_with_timeout!(async move {
         // Send all messages in a thread (sync sender)
-        let sender_handle = std::thread::spawn(move || {
+        let sender_handle = spawn_named_thread!("tx", move || {
             for i in 0..total_messages {
                 tx.send(i).expect("Failed to send message");
             }
@@ -395,7 +395,7 @@ fn test_spsc_bounded_blocking_with_async_receiver_switch<
         });
 
         // Start receiver in a thread to consume some messages
-        let receiver_handle = std::thread::spawn(move || {
+        let receiver_handle = spawn_named_thread!("rx", move || {
             let mut sync_received = Vec::new();
             for _ in 0..sync_consumed {
                 sync_received.push(rx.recv().expect("Failed to receive message"));
@@ -461,7 +461,7 @@ fn test_mpsc_bounded_blocking_with_async_receiver_switch<
 
     runtime_block_on_with_timeout!(async move {
         // Start sender in a thread (sync sender)
-        let sender_handle = std::thread::spawn(move || {
+        let sender_handle = spawn_named_thread!("tx", move || {
             for i in 0..total_messages {
                 tx.send(i).expect("Failed to send message");
             }
@@ -469,7 +469,7 @@ fn test_mpsc_bounded_blocking_with_async_receiver_switch<
         });
 
         // Start receiver in a thread to consume some messages
-        let receiver_handle = std::thread::spawn(move || {
+        let receiver_handle = spawn_named_thread!("rx", move || {
             let mut sync_received = Vec::new();
             for _ in 0..sync_consumed {
                 sync_received.push(rx.recv().expect("Failed to receive message"));
@@ -535,7 +535,7 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch<
 
     runtime_block_on_with_timeout!(async move {
         // Send all messages in a thread (sync sender)
-        let sender_handle = std::thread::spawn(move || {
+        let sender_handle = spawn_named_thread!("tx", move || {
             for i in 0..total_messages {
                 tx.send(i).expect("Failed to send message");
             }
@@ -543,7 +543,7 @@ fn test_mpmc_bounded_blocking_with_async_receiver_switch<
         });
 
         // Start receiver in a thread to consume some messages
-        let receiver_handle = std::thread::spawn(move || {
+        let receiver_handle = spawn_named_thread!("rx", move || {
             let mut sync_received = Vec::new();
             for _ in 0..sync_consumed {
                 sync_received.push(rx.recv().expect("Failed to receive message"));
@@ -605,7 +605,7 @@ fn test_multi_producer_sender_switch<
 
     runtime_block_on_with_timeout!(async move {
         // Start receiver first to consume messages as they arrive
-        let receiver_handle = std::thread::spawn(move || {
+        let receiver_handle = spawn_named_thread!("tx", move || {
             let mut all_received = Vec::new();
             while let Ok(value) = rx.recv() {
                 all_received.push(value);
@@ -614,7 +614,7 @@ fn test_multi_producer_sender_switch<
         });
 
         // Send messages with blocking multi-sender in a thread
-        let sender_handle = std::thread::spawn(move || {
+        let sender_handle = spawn_named_thread!("rx", move || {
             for i in 0..sync_sent {
                 tx.send(i).expect("Failed to send message");
             }
@@ -674,7 +674,7 @@ fn test_spsc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> +
         let blocking_tx: Tx<F> = tx.into();
 
         // Send remaining messages with blocking sender in thread
-        let blocking_sender_handle = std::thread::spawn(move || {
+        let blocking_sender_handle = spawn_named_thread!("tx", move || {
             let remaining_messages = total_messages - async_sent;
             for i in async_sent..total_messages {
                 blocking_tx.send(i).expect("Failed to send message");
@@ -731,7 +731,7 @@ fn test_mpsc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> +
         let blocking_tx: MTx<F> = tx.into();
 
         // Send remaining messages with blocking multi-sender in thread
-        let blocking_sender_handle = std::thread::spawn(move || {
+        let blocking_sender_handle = spawn_named_thread!("tx", move || {
             let remaining_messages = total_messages - async_sent;
             for i in async_sent..total_messages {
                 blocking_tx.send(i).expect("Failed to send message");
@@ -788,7 +788,7 @@ fn test_mpmc_bounded_async_with_blocking_sender_switch<F: Flavor<Item = usize> +
         let blocking_tx: MTx<F> = tx.into();
 
         // Send remaining messages with blocking multi-sender in thread
-        let blocking_sender_handle = std::thread::spawn(move || {
+        let blocking_sender_handle = spawn_named_thread!("tx", move || {
             let remaining_messages = total_messages - async_sent;
             for i in async_sent..total_messages {
                 blocking_tx.send(i).expect("Failed to send message");

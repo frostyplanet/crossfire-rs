@@ -100,7 +100,7 @@ fn test_select_basic_disconnect_after_park(setup_log: ()) {
     select.add(&rx4);
     let barrier = Arc::new(Barrier::new(2));
     let _barrier = barrier.clone();
-    let th = thread::spawn(move || {
+    let th = spawn_named_thread!("sleep", move || {
         _barrier.wait();
         thread::sleep(Duration::from_millis(500));
         drop(_tx3);
@@ -146,14 +146,14 @@ fn test_select_pressure_sender_close_select(setup_log: ()) {
         select.add(&rx1);
         select.add(&rx2);
         let mut th_s = Vec::new();
-        th_s.push(spawn_named_thread("sender1", move || {
+        th_s.push(spawn_named_thread!("sender1", move || {
             for i in 0..ITEMS {
                 // NOTE: we should let sender close sooner on miri to revent receiver loop too much
                 tx1.send(i).expect("send");
             }
         }));
 
-        th_s.push(spawn_named_thread("sender2", move || {
+        th_s.push(spawn_named_thread!("sender2", move || {
             for i in 0..ITEMS {
                 // NOTE: we should let sender close sooner on miri to revent receiver loop too much
                 tx2.send(i + ITEMS).expect("send");
@@ -208,14 +208,14 @@ fn test_select_pressure_sender_close_try_select(setup_log: ()) {
         select.add(&rx1);
         select.add(&rx2);
         let mut th_s = Vec::new();
-        th_s.push(spawn_named_thread("sender1", move || {
+        th_s.push(spawn_named_thread!("sender1", move || {
             for i in 0..ITEMS {
                 // NOTE: we should let sender close sooner on miri to revent receiver loop too much
                 tx1.send(i).expect("send");
             }
         }));
 
-        th_s.push(spawn_named_thread("sender2", move || {
+        th_s.push(spawn_named_thread!("sender2", move || {
             for i in 0..ITEMS {
                 // NOTE: we should let sender close sooner on miri to revent receiver loop too much
                 tx2.send(i + ITEMS).expect("send");
@@ -286,42 +286,42 @@ fn test_select_basic_loop(setup_log: ()) {
     select.add(&rx5);
     select.add(&rx6);
 
-    let t1 = thread::spawn(move || {
+    let t1 = spawn_named_thread!("tx1", move || {
         for i in 0..10 {
             tx1.send(i).expect("send");
             thread::sleep(Duration::from_millis(10));
         }
     });
 
-    let t2 = thread::spawn(move || {
+    let t2 = spawn_named_thread!("tx2", move || {
         for i in 0..10 {
             tx2.send(i + 100).expect("send");
             thread::sleep(Duration::from_millis(10));
         }
     });
 
-    let t3 = thread::spawn(move || {
+    let t3 = spawn_named_thread!("tx3", move || {
         for i in 0..10 {
             tx3.send(i + 200).expect("send");
             thread::sleep(Duration::from_millis(10));
         }
     });
 
-    let t4 = thread::spawn(move || {
+    let t4 = spawn_named_thread!("tx4", move || {
         for i in 0..10 {
             tx4.send(i + 300).expect("send");
             thread::sleep(Duration::from_millis(10));
         }
     });
 
-    let t5 = thread::spawn(move || {
+    let t5 = spawn_named_thread!("tx5", move || {
         for i in 0..10 {
             tx5.send(i + 400).expect("send");
             thread::sleep(Duration::from_millis(10));
         }
     });
 
-    let t6 = thread::spawn(move || {
+    let t6 = spawn_named_thread!("tx6", move || {
         for i in 0..10 {
             tx6.send(i + 500).expect("send");
             thread::sleep(Duration::from_millis(10));
@@ -523,42 +523,42 @@ fn test_select_pressure(setup_log: (), #[case] producers: usize) {
 
     for _ in 0..producers {
         let tx = tx_list.clone();
-        handlers.push(thread::spawn(move || {
+        handlers.push(spawn_named_thread!("tx_list", move || {
             for i in 0..round {
                 tx.send(i).expect("send");
             }
         }));
 
         let tx = tx_array.clone();
-        handlers.push(thread::spawn(move || {
+        handlers.push(spawn_named_thread!("tx_array", move || {
             for i in 0..round {
                 tx.send(i).expect("send");
             }
         }));
 
         let tx = tx_one.clone();
-        handlers.push(thread::spawn(move || {
+        handlers.push(spawn_named_thread!("tx_one", move || {
             for i in 0..round {
                 tx.send(i).expect("send");
             }
         }));
 
         let tx = tx_mpsc_list.clone();
-        handlers.push(thread::spawn(move || {
+        handlers.push(spawn_named_thread!("tx_mpsc_list", move || {
             for i in 0..round {
                 tx.send(i).expect("send");
             }
         }));
 
         let tx = tx_mpsc_array.clone();
-        handlers.push(thread::spawn(move || {
+        handlers.push(spawn_named_thread!("tx_mpsc_array", move || {
             for i in 0..round {
                 tx.send(i).expect("send");
             }
         }));
 
         let tx = tx_mpsc_one.clone();
-        handlers.push(thread::spawn(move || {
+        handlers.push(spawn_named_thread!("tx_mpsc_one", move || {
             for i in 0..round {
                 tx.send(i).expect("send");
             }
@@ -628,7 +628,7 @@ fn test_select_null(setup_log: ()) {
     select.add(&rx);
     select.add(&stop_rx);
 
-    let h = thread::spawn(move || {
+    let h = spawn_named_thread!("tx_null", move || {
         for i in 0..10 {
             tx.send(i).unwrap();
         }
@@ -666,10 +666,10 @@ fn test_select_pressure_concurrent(setup_log: ()) {
     let (tx_list, rx_list) = mpmc::unbounded_blocking::<i32>();
     let (tx_array, rx_array) = mpmc::bounded_blocking::<i32>(100);
     let mut th_recv = Vec::new();
-    for _ in 0..2 {
+    for i in 0..2 {
         let rx_list_clone = rx_list.clone();
         let rx_array_clone = rx_array.clone();
-        th_recv.push(thread::spawn(move || {
+        th_recv.push(spawn_named_thread!(format!("tx {i}"), move || {
             let mut select = Select::new();
             select.add(&rx_list_clone);
             select.add(&rx_array_clone);
@@ -700,15 +700,15 @@ fn test_select_pressure_concurrent(setup_log: ()) {
         }));
     }
     let mut th_send = Vec::new();
-    for _ in 0..2 {
+    for i in 0..2 {
         let tx_list_clone = tx_list.clone();
         let tx_array_clone = tx_array.clone();
-        th_send.push(thread::spawn(move || {
+        th_send.push(spawn_named_thread!(format!("tx_list {i}"), move || {
             for i in 0..ROUND {
                 tx_list_clone.send(i as i32).expect("send");
             }
         }));
-        th_send.push(thread::spawn(move || {
+        th_send.push(spawn_named_thread!(format!("tx_array {i}"), move || {
             for i in 0..ROUND {
                 tx_array_clone.send((i + ROUND) as i32).expect("send");
             }
@@ -734,10 +734,10 @@ fn test_multiplex_basic(setup_log: ()) {
     let tx2: MTx<_> = mp.bounded_tx(10);
 
     // Send values from different threads
-    let h1 = thread::spawn(move || {
+    let h1 = spawn_named_thread!("tx1", move || {
         tx1.send(1).unwrap();
     });
-    let h2 = thread::spawn(move || {
+    let h2 = spawn_named_thread!("tx2", move || {
         tx2.send(2).unwrap();
     });
 
@@ -785,15 +785,15 @@ fn test_multiplex_basic_array_blocking(setup_log: ()) {
     let tx2: MTx<_> = mp.bounded_tx(10);
     let tx3: MTx<_> = mp.bounded_tx(10);
 
-    let h1 = thread::spawn(move || {
+    let h1 = spawn_named_thread!("tx1", move || {
         thread::sleep(Duration::from_millis(50));
         tx1.send(10).expect("send");
     });
-    let h2 = thread::spawn(move || {
+    let h2 = spawn_named_thread!("tx2", move || {
         thread::sleep(Duration::from_millis(100));
         tx2.send(20).expect("send");
     });
-    let h3 = thread::spawn(move || {
+    let h3 = spawn_named_thread!("tx3", move || {
         thread::sleep(Duration::from_millis(25));
         tx3.send(30).expect("send");
     });
@@ -826,12 +826,12 @@ fn test_multiplex_basic_list_blocking(setup_log: ()) {
         }
     };
 
-    let h1 = thread::spawn(move || {
+    let h1 = spawn_named_thread!("tx1", move || {
         for i in 0..round {
             tx1.send(1000 + i).expect("send");
         }
     });
-    let h2 = thread::spawn(move || {
+    let h2 = spawn_named_thread!("tx2", move || {
         for i in 0..round {
             tx2.send(2000 + i).expect("send");
         }
@@ -901,14 +901,14 @@ fn test_multiplex_pressure_sender_close_try_recv(setup_log: ()) {
         let tx1: MTx<_> = mp.bounded_tx(10);
         let tx2: MTx<_> = mp.bounded_tx(10);
         let mut th_s = Vec::new();
-        th_s.push(spawn_named_thread("sender1", move || {
+        th_s.push(spawn_named_thread!("sender1", move || {
             for i in 0..ITEMS {
                 // NOTE: we should let sender close sooner on miri to revent receiver loop too much
                 tx1.send(i).expect("send");
             }
         }));
 
-        th_s.push(spawn_named_thread("sender2", move || {
+        th_s.push(spawn_named_thread!("sender2", move || {
             for i in 0..ITEMS {
                 // NOTE: we should let sender close sooner on miri to revent receiver loop too much
                 tx2.send(i + ITEMS).expect("send");
@@ -967,7 +967,7 @@ fn test_multiplex_basic_drop_on_sender_blocked(
             for tx in senders {
                 let barrier_clone = barrier.clone();
                 let results_clone = results.clone();
-                handles.push(thread::spawn(move || {
+                handles.push(spawn_named_thread!("tx", move || {
                     barrier_clone.wait(); // Wait for all senders to be ready to block
                     let res = tx.send(100);
                     if let Err(SendError(_)) = res {
@@ -1012,9 +1012,9 @@ fn test_pressure_multiplex_array(setup_log: (), #[case] producers: usize, #[case
     let total_messages = round * producers;
     let mut handlers = Vec::new();
 
-    for _ in 0..producers {
+    for i in 0..producers {
         let tx: Tx<_> = mp.bounded_tx(bound);
-        handlers.push(thread::spawn(move || {
+        handlers.push(spawn_named_thread!(format!("tx {i}"), move || {
             for i in 0..round {
                 tx.send(i).expect("send");
             }
@@ -1055,11 +1055,11 @@ fn test_pressure_multiplex_array_mp(setup_log: (), #[case] producers: usize, #[c
             let round = ROUND;
             let total_messages = round * producers * 4;
             let mut handlers = Vec::new();
-            for _ in 0..producers {
+            for i in 0..producers {
                 let tx: MTx<_> = $mp.bounded_tx(bound);
-                for _ in 0..4 {
+                for j in 0..4 {
                     let _tx = tx.clone();
-                    handlers.push(thread::spawn(move || {
+                    handlers.push(spawn_named_thread!(format!("tx{i}-{j}"), move || {
                         for i in 0..round {
                             _tx.send(i).expect("send");
                         }
@@ -1104,9 +1104,9 @@ fn test_pressure_multiplex_list(setup_log: (), #[case] producers: usize) {
             let round = ROUND;
             let total_messages = round * producers;
             let mut handlers = Vec::new();
-            for _ in 0..producers {
+            for i in 0..producers {
                 let tx: $tx_c<_> = $mp.new_tx();
-                handlers.push(thread::spawn(move || {
+                handlers.push(spawn_named_thread!(format!("tx{i}"), move || {
                     for i in 0..round {
                         tx.send(i).expect("send");
                     }

@@ -12,6 +12,25 @@ fn setup_log() {
     _setup_log();
 }
 
+#[test]
+fn test_arc_handle() {
+    let (tx, rx) = mpmc::bounded_blocking::<usize>(100);
+    // MRx can put in Arc
+    let rx = Arc::new(rx);
+    let mut th_s = Vec::new();
+    th_s.push(spawn_named_thread!("rx", move || {
+        let _ = rx.try_recv();
+    }));
+    // MTx can put in Arc
+    let tx = Arc::new(tx);
+    th_s.push(spawn_named_thread!("tx", move || {
+        let _ = tx.try_send(1);
+    }));
+    for th in th_s {
+        let _ = th.join();
+    }
+}
+
 #[logfn]
 #[rstest]
 #[case(spsc::bounded_blocking(100))]
@@ -37,7 +56,7 @@ fn test_basic_sender_close_try_recv<
             1000
         }
     };
-    let th_s = spawn_named_thread("sender", move || {
+    let th_s = spawn_named_thread!("sender", move || {
         for i in 0..total {
             tx.send(i).expect("send");
         }
@@ -87,12 +106,12 @@ fn test_pressure_sender_close_try_recv() {
         let mut th_s = Vec::new();
         for sender_id in 0..SENDERS {
             let _tx = tx.clone();
-            th_s.push(spawn_named_thread(&format!("sender {sender_id}"), move || {
+            th_s.push(spawn_named_thread!(&format!("sender {sender_id}"), move || {
                 for i in 0..ITEMS {
                     // rx outlives every sender, so send must succeed
                     _tx.send(sender_id * ITEMS + i).unwrap();
                 }
-            }))
+            }));
         }
         drop(tx);
         let mut got = std::collections::BTreeSet::new();
@@ -304,7 +323,7 @@ fn test_basic_bounded_1_thread<
         assert!(tx_res.is_err());
         assert!(tx_res.unwrap_err().is_full());
 
-        let th = spawn_named_thread("receiver_1", move || {
+        let th = spawn_named_thread!("receiver_1", move || {
             for i in 0i32..12 {
                 match rx.recv() {
                     Ok(j) => {
@@ -350,7 +369,7 @@ fn test_basic_unbounded_1_thread<
             assert!(tx_res.is_ok());
         }
 
-        let th = spawn_named_thread("receiver_1", move || {
+        let th = spawn_named_thread!("receiver_1", move || {
             for i in 0i32..12 {
                 match rx.recv() {
                     Ok(j) => {
@@ -445,7 +464,7 @@ fn test_pressure_bounded_blocking_1_1<
         {
             round = ROUND * 100;
         }
-        let th = spawn_named_thread("sender_1", move || {
+        let th = spawn_named_thread!("sender_1", move || {
             for i in 0..round {
                 if let Err(e) = tx.send(i) {
                     panic!("{:?}", e);
@@ -512,7 +531,7 @@ fn test_pressure_bounded_blocking_multi_1<
         let mut th_s = Vec::new();
         for _tx_i in 0..tx_count {
             let _tx = tx.clone();
-            th_s.push(spawn_named_thread(&format!("sender_{}", _tx_i), move || {
+            th_s.push(spawn_named_thread!(&format!("sender_{}", _tx_i), move || {
                 for i in 0..round {
                     match _tx.send(i) {
                         Err(e) => panic!("{:?}", e),
@@ -577,7 +596,7 @@ fn test_pressure_bounded_blocking_multi<F: Flavor<Item = usize> + 'static + Send
         let mut th_rx = Vec::new();
         for _tx_i in 0..tx_count {
             let _tx = tx.clone();
-            th_tx.push(spawn_named_thread(&format!("sender_{}", _tx_i), move || {
+            th_tx.push(spawn_named_thread!(&format!("sender_{}", _tx_i), move || {
                 for i in 0..round {
                     match _tx.send(i) {
                         Err(e) => panic!("{:?}", e),
@@ -589,7 +608,7 @@ fn test_pressure_bounded_blocking_multi<F: Flavor<Item = usize> + 'static + Send
         }
         for _rx_i in 0..rx_count {
             let _rx = rx.clone();
-            th_rx.push(spawn_named_thread(&format!("receiver_{}", _rx_i), move || {
+            th_rx.push(spawn_named_thread!(&format!("receiver_{}", _rx_i), move || {
                 let mut count = 0;
                 'A: loop {
                     match _rx.recv() {
@@ -647,7 +666,7 @@ fn test_pressure_bounded_timeout_blocking<F: Flavor<Item = usize> + 'static + Se
         for thread_id in 0..tx_count {
             let _recv_map = recv_map.clone();
             let _tx = tx.clone();
-            th_tx.push(spawn_named_thread(&format!("sender_{}", thread_id), move || {
+            th_tx.push(spawn_named_thread!(&format!("sender_{}", thread_id), move || {
                 // randomize start up
                 sleep(Duration::from_millis((thread_id & 3) as u64));
                 let mut local_timeout_counter = 0;
@@ -680,7 +699,7 @@ fn test_pressure_bounded_timeout_blocking<F: Flavor<Item = usize> + 'static + Se
         for _thread_id in 0..2 {
             let _rx = rx.clone();
             let _recv_map = recv_map.clone();
-            th_rx.push(spawn_named_thread(&format!("receiver_{}", _thread_id), move || {
+            th_rx.push(spawn_named_thread!(&format!("receiver_{}", _thread_id), move || {
                 let mut step: usize = 0;
                 let mut local_recv_counter = 0;
                 let mut local_timeout_counter = 0;
@@ -802,7 +821,7 @@ fn _test_drop_msg<
     } else {
         unreachable!();
     }
-    let th = spawn_named_thread("receiver_3", move || {
+    let th = spawn_named_thread!("receiver_3", move || {
         let _msg = rx.recv().expect("recv");
         assert_eq!(_msg.get_value(), 0);
         drop(_msg);

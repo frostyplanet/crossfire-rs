@@ -14,7 +14,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::*;
-use std::thread;
 use std::time::Duration;
 
 #[fixture]
@@ -165,55 +164,32 @@ fn test_basic_compile_bounded_empty_full() {
     assert_eq!(tx.is_disconnected(), true);
 }
 
+#[test]
+fn test_arc_handle() {
+    runtime_block_on!(async move {
+        let (tx, rx) = mpmc::bounded_async::<usize>(100);
+        // MRx can put in Arc
+        let rx = Arc::new(rx);
+        let mut th_s = Vec::new();
+        th_s.push(async_spawn!(async move {
+            let _ = rx.recv().await;
+        }));
+        // MTx can put in Arc
+        let tx = Arc::new(tx);
+        th_s.push(async_spawn!(async move {
+            let _ = tx.send(1).await;
+        }));
+        for th in th_s {
+            let _ = async_join_result!(th);
+        }
+    });
+}
+
 #[cfg(feature = "time")]
 #[logfn]
 #[rstest]
 fn test_sync() {
     runtime_block_on!(async move {
-        let (tx, rx) = spsc::bounded_async::<usize>(100);
-        //  Example1: should fail to compile with Arc
-        //    let tx = Arc::new(tx);
-        let _task = async_spawn!(async move {
-            let _ = tx.send(2).await;
-        });
-        drop(rx);
-
-        let (tx, rx) = mpsc::bounded_async::<usize>(100);
-        //  example2: should fail to compile with Arc
-        //    let rx = Arc::new(rx);
-        let _task = async_spawn!(async move {
-            let _ = rx.recv().await;
-        });
-        drop(tx);
-
-        let (tx, rx) = mpsc::bounded_blocking::<usize>(100);
-        ////  example3: should fail to compile with Arc
-        //    let rx = Arc::new(rx);
-        let _task = std::thread::spawn(move || {
-            let _ = rx.recv();
-        });
-        drop(tx);
-
-        let (tx, rx) = spsc::bounded_blocking::<usize>(100);
-        ////  example4: should fail to compile after Arc
-        //   let tx = Arc::new(tx);
-        std::thread::spawn(move || {
-            let _ = tx.send(1);
-        });
-        drop(rx);
-
-        let (tx, rx) = mpmc::bounded_blocking::<usize>(100);
-        // MRx can put in Arc
-        let rx = Arc::new(rx);
-        std::thread::spawn(move || {
-            let _ = rx.try_recv();
-        });
-        // MTx can put in Arc
-        let tx = Arc::new(tx);
-        std::thread::spawn(move || {
-            let _ = tx.try_send(1);
-        });
-
         let (tx, rx) = spsc::bounded_async::<usize>(100);
         let th = async_spawn!(async move {
             let mut i = 0;
@@ -976,7 +952,7 @@ fn test_pressure_bounded_mixed_async_blocking_conversion<
         let mut co_tx = Vec::new();
         let mut co_rx = Vec::new();
         let _tx: MTx<F> = tx.clone().into();
-        th_tx.push(thread::spawn(move || {
+        th_tx.push(spawn_named_thread!("tx", move || {
             for i in 0..ROUND {
                 match _tx.send(i) {
                     Err(e) => panic!("{:?}", e),
@@ -995,7 +971,7 @@ fn test_pressure_bounded_mixed_async_blocking_conversion<
             debug!("tx{:?} async exit", tokio_task_id!());
         }));
         let _rx: MRx<F> = rx.clone().into();
-        th_rx.push(thread::spawn(move || {
+        th_rx.push(spawn_named_thread!("rx", move || {
             let mut count: usize = 0;
             'A: loop {
                 match _rx.recv() {

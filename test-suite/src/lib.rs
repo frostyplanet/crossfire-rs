@@ -279,13 +279,17 @@ where
     }
 }
 
-pub fn spawn_named_thread<F, T>(name: &str, f: F) -> std::thread::JoinHandle<T>
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    std::thread::Builder::new()
-        .name(name.to_string())
-        .spawn(f)
-        .unwrap_or_else(|e| panic!("Failed to spawn thread '{}': {:?}", name, e))
+#[macro_export]
+macro_rules! spawn_named_thread {
+    ($name: expr, $f: expr) => {{
+        match std::thread::Builder::new().name($name.to_string()).spawn($f) {
+            Ok(handle) => handle,
+            Err(e) => {
+                std::eprintln!("spawn {} err: {e}", $name);
+                // if resource is not enough, don't fail to fast
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                return;
+            }
+        }
+    }};
 }

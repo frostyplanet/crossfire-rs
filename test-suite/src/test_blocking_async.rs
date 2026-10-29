@@ -128,7 +128,7 @@ fn test_basic_1_tx_blocking_1_rx_async<
     assert!(tx_res.is_err());
     assert!(tx_res.unwrap_err().is_full());
 
-    let th = spawn_named_thread("sender_1", move || {
+    let th = spawn_named_thread!("sender_1", move || {
         assert!(tx.send(10).is_ok());
         std::thread::sleep(Duration::from_secs(1));
         assert!(tx.send(11).is_ok());
@@ -179,7 +179,7 @@ fn test_pressure_1_tx_blocking_1_rx_async<
     {
         round = ROUND * 100;
     }
-    let th = spawn_named_thread("sender_2", move || {
+    let th = spawn_named_thread!("sender_2", move || {
         for i in 0..round {
             tx.send(i).expect("send ok");
         }
@@ -239,7 +239,7 @@ fn test_pressure_tx_multi_blocking_1_rx_async<
     let mut tx_th_s = Vec::new();
     for _tx_i in 0..tx_count {
         let _tx = tx.clone();
-        tx_th_s.push(spawn_named_thread(&format!("sender_{}", _tx_i), move || {
+        tx_th_s.push(spawn_named_thread!(&format!("sender_{}", _tx_i), move || {
             debug!("tx {} spawn", _tx_i);
             for i in 0..ROUND {
                 match _tx.send(i) {
@@ -307,7 +307,7 @@ fn test_pressure_tx_multi_blocking_multi_rx_async<F: Flavor<Item = usize> + 'sta
     let mut tx_th_s = Vec::new();
     for _tx_i in 0..tx_count {
         let _tx = tx.clone();
-        tx_th_s.push(spawn_named_thread(&format!("sender_{}", _tx_i), move || {
+        tx_th_s.push(spawn_named_thread!(&format!("sender_{}", _tx_i), move || {
             for i in 0..ROUND {
                 match _tx.send(i) {
                     Err(e) => panic!("{}", e),

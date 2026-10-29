@@ -37,7 +37,7 @@ fn test_oneshot_blocking_drop_tx(setup_log: ()) {
     assert_eq!(rx.recv(), Err(RecvError));
 
     let (tx, rx) = oneshot::oneshot::<i32>();
-    let th = thread::spawn(move || {
+    let th = spawn_named_thread!("rx", move || {
         // Should be wake up on sender drop
         assert_eq!(rx.recv(), Err(RecvError));
     });
@@ -162,7 +162,7 @@ fn test_oneshot_blocking_batch(setup_log: ()) {
         txs.push(tx);
         rxs.push(rx);
     }
-    let th = thread::spawn(move || {
+    let th = spawn_named_thread!("tx", move || {
         for (i, tx) in txs.into_iter().enumerate() {
             tx.send(i);
         }
@@ -212,10 +212,10 @@ fn test_oneshot_blocking_concurrent(setup_log: ()) {
     let mut th_s = Vec::new();
     for i in 0..count {
         let (tx, rx) = oneshot::oneshot();
-        th_s.push(thread::spawn(move || {
+        th_s.push(spawn_named_thread!("tx", move || {
             tx.send(i);
         }));
-        th_s.push(thread::spawn(move || {
+        th_s.push(spawn_named_thread!("rx", move || {
             assert_eq!(rx.recv(), Ok(i));
         }));
     }
@@ -268,15 +268,16 @@ fn test_oneshot_blocking_with_sleep(setup_log: ()) {
         let count = 50usize;
         let mut th_s = Vec::new();
         for i in 0..(count as u64) {
-            th_s.push(thread::spawn(move || {
+            th_s.push(spawn_named_thread!(format!("rx{i}"), move || {
                 let (tx, rx) = oneshot::oneshot();
                 // Spawn a thread that sends after a short delay
-                thread::spawn(move || {
+                let th = spawn_named_thread!("tx", move || {
                     thread::sleep(Duration::from_millis(i % 10)); // Vary the delay
                     tx.send(i);
                 });
                 // Wait for the value
                 assert_eq!(rx.recv(), Ok(i));
+                let _ = th.join();
             }));
         }
         for th in th_s {
@@ -373,7 +374,7 @@ fn test_oneshot_blocking_timeout_fail(setup_log: ()) {
 #[rstest]
 fn test_oneshot_blocking_timeout_success(setup_log: ()) {
     let (tx, rx) = oneshot::oneshot::<i32>();
-    let th = thread::spawn(move || {
+    let th = spawn_named_thread!("tx", move || {
         thread::sleep(Duration::from_millis(50));
         tx.send(42);
     });
@@ -388,7 +389,7 @@ fn test_oneshot_blocking_timeout_success(setup_log: ()) {
 #[rstest]
 fn test_oneshot_blocking_timeout_disconnected(setup_log: ()) {
     let (tx, rx) = oneshot::oneshot::<i32>();
-    let th = thread::spawn(move || {
+    let th = spawn_named_thread!("tx", move || {
         thread::sleep(Duration::from_millis(50));
         drop(tx);
     });
@@ -419,7 +420,7 @@ fn test_oneshot_async_timeout_fail(setup_log: ()) {
 fn test_oneshot_async_timeout_disconnected(setup_log: ()) {
     runtime_block_on!(async move {
         let (tx, rx) = oneshot::oneshot::<i32>();
-        let th = std::thread::spawn(move || {
+        let th = spawn_named_thread!("tx", move || {
             std::thread::sleep(Duration::from_millis(50));
             drop(tx);
         });
