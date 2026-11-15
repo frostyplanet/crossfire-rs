@@ -15,15 +15,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.2.0] - Pending
+
+### Changed
+
+- Remove Arc usage in ChannelShared, speed up `Clone` and dropping (because we already do manual ref counting).
+
+- feature gate for `oneshot`, `select`, `waitgroup`
+
+### Added
+
+- Impl `Pointer` trait for all endpoints, `AsRef` is replaced with `Pointer::as_ref`.
+
+- WaitGroupGuard impl CloneablePointer
+
+- select: Add MultiplexDyn, impl FlavorSelect for all Flavor.
+
 ## [3.1.23] - 2026-11-18
 
 - waitgroup: Fix Guard Send signature (issue #75)
+
 
 ## [3.1.22] - 2026-10-24
 
 ### Fixed
 
--  Fix item leaks when send futures dropped before being polled (issue #72 by Chepelau) (backported to 2.1.12)
+- Fix item leaks when send futures dropped before being polled (issue #72 by Chepelau) (backported to 2.1.12)
 
 ## [3.1.21] - 2026-10-18
 
