@@ -4,6 +4,7 @@ use crate::stream::AsyncStream;
 use crate::tokio_task_id;
 use crate::{shared::*, trace_log, MRx, NotCloneable, ReceiverTypeBase, ReceiverTypePriv, Rx};
 use futures_core::Stream;
+use pointers::Pointer;
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
@@ -893,20 +894,6 @@ impl<F: Flavor + FlavorMC> AsyncRxTrait<F::Item> for &MAsyncRx<F> {
     }
 }
 
-impl<F: Flavor> AsRef<ChannelShared<F>> for AsyncRx<F> {
-    #[inline(always)]
-    fn as_ref(&self) -> &ChannelShared<F> {
-        self.shared()
-    }
-}
-
-impl<F: Flavor> AsRef<ChannelShared<F>> for MAsyncRx<F> {
-    #[inline(always)]
-    fn as_ref(&self) -> &ChannelShared<F> {
-        self.0.shared()
-    }
-}
-
 impl<T, F: Flavor<Item = T>> ReceiverTypeBase for AsyncRx<F> {
     type Flavor = F;
 }
@@ -940,5 +927,47 @@ impl<T, F: Flavor<Item = T> + FlavorMC> ReceiverTypePriv for MAsyncRx<F> {
     #[inline(always)]
     fn shared_ptr(&self) -> NonNull<ChannelShared<F>> {
         self.0._shared
+    }
+}
+
+impl<F: Flavor> Pointer for AsyncRx<F> {
+    type Target = ChannelShared<F>;
+
+    #[inline]
+    fn as_ref(&self) -> &Self::Target {
+        self.shared()
+    }
+
+    #[inline]
+    unsafe fn from_raw(p: *const Self::Target) -> Self {
+        unsafe { Self::new(NonNull::new_unchecked(p as *mut Self::Target)) }
+    }
+
+    #[inline]
+    fn into_raw(self) -> *const Self::Target {
+        let p = self._shared.as_ptr();
+        core::mem::forget(self);
+        p
+    }
+}
+
+impl<F: Flavor + FlavorMC> Pointer for MAsyncRx<F> {
+    type Target = ChannelShared<F>;
+
+    #[inline]
+    fn as_ref(&self) -> &Self::Target {
+        self.shared()
+    }
+
+    #[inline]
+    unsafe fn from_raw(p: *const Self::Target) -> Self {
+        Self::new(unsafe { NonNull::new_unchecked(p as *mut Self::Target) })
+    }
+
+    #[inline]
+    fn into_raw(self) -> *const Self::Target {
+        let p = self.0._shared.as_ptr();
+        core::mem::forget(self);
+        p
     }
 }

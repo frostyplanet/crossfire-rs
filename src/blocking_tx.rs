@@ -2,6 +2,7 @@ use crate::flavor::FlavorMP;
 use crate::weak::WeakTx;
 use crate::{shared::*, trace_log, AsyncTx, MAsyncTx, NotCloneable, SenderType};
 use crossfire_utils::backoff::*;
+use pointers::Pointer;
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
@@ -673,20 +674,6 @@ impl<F: Flavor> Deref for Tx<F> {
     }
 }
 
-impl<F: Flavor> AsRef<ChannelShared<F>> for Tx<F> {
-    #[inline(always)]
-    fn as_ref(&self) -> &ChannelShared<F> {
-        self.shared()
-    }
-}
-
-impl<F: Flavor> AsRef<ChannelShared<F>> for MTx<F> {
-    #[inline(always)]
-    fn as_ref(&self) -> &ChannelShared<F> {
-        self.0.shared()
-    }
-}
-
 impl<T, F: Flavor<Item = T>> SenderType for Tx<F> {
     type Flavor = F;
     #[inline(always)]
@@ -702,5 +689,47 @@ impl<T, F: Flavor<Item = T> + FlavorMP> SenderType for MTx<F> {
     #[inline(always)]
     fn new(shared: NonNull<ChannelShared<F>>) -> Self {
         MTx::new(shared)
+    }
+}
+
+impl<F: Flavor> Pointer for Tx<F> {
+    type Target = ChannelShared<F>;
+
+    #[inline]
+    fn as_ref(&self) -> &Self::Target {
+        self.shared()
+    }
+
+    #[inline]
+    unsafe fn from_raw(p: *const Self::Target) -> Self {
+        unsafe { Self::new(NonNull::new_unchecked(p as *mut Self::Target)) }
+    }
+
+    #[inline]
+    fn into_raw(self) -> *const Self::Target {
+        let p = self._shared.as_ptr();
+        core::mem::forget(self);
+        p
+    }
+}
+
+impl<F: Flavor + FlavorMP> Pointer for MTx<F> {
+    type Target = ChannelShared<F>;
+
+    #[inline]
+    fn as_ref(&self) -> &Self::Target {
+        self.shared()
+    }
+
+    #[inline]
+    unsafe fn from_raw(p: *const Self::Target) -> Self {
+        Self::new(unsafe { NonNull::new_unchecked(p as *mut Self::Target) })
+    }
+
+    #[inline]
+    fn into_raw(self) -> *const Self::Target {
+        let p = self.0._shared.as_ptr();
+        core::mem::forget(self);
+        p
     }
 }

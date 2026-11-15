@@ -360,7 +360,7 @@ pub trait ReceiverTypeBase {
 }
 
 pub(crate) trait ReceiverTypePriv:
-    ReceiverTypeBase + AsRef<ChannelShared<Self::Flavor>>
+    ReceiverTypeBase + pointers::Pointer<Target = ChannelShared<Self::Flavor>>
 where
     ChannelShared<Self::Flavor>:
         flavor::ChannelSharedMultiplex<<Self::Flavor as flavor::Queue>::Item>,

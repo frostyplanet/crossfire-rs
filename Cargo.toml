@@ -30,7 +30,7 @@ tokio = { version = "1", features = ["time", "rt"], optional=true }
 async-std = {version = "1", optional=true}
 log = { version="0.4", optional=true}
 smallvec = {version="1", optional=true}
-pointers = {version=">=0.2.1", optional=true}
+pointers = {version=">=0.3.1"}
 
 [dev-dependencies]
 log = "0"
@@ -50,7 +50,7 @@ default = ["select", "waitgroup", "oneshot"]
 select = ["dep:smallvec"]
 
 # Enable the waitgroup module
-waitgroup = ["dep:pointers"]
+waitgroup = []
 
 # Enable the oneshot module
 oneshot = []

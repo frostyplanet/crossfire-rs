@@ -2,6 +2,7 @@ use crate::flavor::{FlavorMP, FlavorUnbounded};
 use crate::{shared::*, SenderType};
 use core::mem::MaybeUninit;
 use core::ptr::NonNull;
+use pointers::Pointer;
 
 /// A weak reference of SenderType
 ///
@@ -89,5 +90,26 @@ where
         let _item = MaybeUninit::new(item);
         shared.inner.try_send(&_item);
         shared.on_send();
+    }
+}
+
+impl<F: Flavor + FlavorMP> Pointer for WeakTx<F> {
+    type Target = ChannelShared<F>;
+
+    #[inline]
+    fn as_ref(&self) -> &Self::Target {
+        self.shared()
+    }
+
+    #[inline]
+    unsafe fn from_raw(p: *const Self::Target) -> Self {
+        Self(unsafe { NonNull::new_unchecked(p as *mut Self::Target) })
+    }
+
+    #[inline]
+    fn into_raw(self) -> *const Self::Target {
+        let p = self.0.as_ptr();
+        core::mem::forget(self);
+        p
     }
 }
