@@ -834,8 +834,8 @@ pub struct WaitGroupGuard<T> {
     threshold: usize,
 }
 
-unsafe impl<T: Send> Send for WaitGroupGuard<T> {}
-unsafe impl<T: Sync> Sync for WaitGroupGuard<T> {}
+unsafe impl<T: Send + Sync> Send for WaitGroupGuard<T> {}
+unsafe impl<T: Send + Sync> Sync for WaitGroupGuard<T> {}
 
 impl<T> Drop for WaitGroupGuard<T> {
     #[inline(always)]
@@ -887,8 +887,8 @@ pub struct WaitGroupZeroGuard<T> {
     inner: NonNull<WaitGroupInner<T>>,
 }
 
-unsafe impl<T: Send> Send for WaitGroupZeroGuard<T> {}
-unsafe impl<T: Sync> Sync for WaitGroupZeroGuard<T> {}
+unsafe impl<T: Send + Sync> Send for WaitGroupZeroGuard<T> {}
+unsafe impl<T: Sync + Sync> Sync for WaitGroupZeroGuard<T> {}
 
 impl<T> Drop for WaitGroupZeroGuard<T> {
     #[inline(always)]
@@ -1361,6 +1361,51 @@ impl State {
     fn to_usize(&self) -> usize {
         self.0
     }
+}
+
+#[cfg(debug_assertions)]
+#[allow(dead_code)]
+mod compile_tests {
+
+    /// ```compile_fail
+    /// use std::cell::Cell;
+    /// use crossfire::waitgroup::WaitGroup;
+    /// let wg = WaitGroup::new(Cell::new(0), 0);
+    /// let guard = wg.add_guard();
+    /// let t = std::thread::spawn(move || guard.set(1));
+    /// wg.set(2);
+    /// t.join().unwrap();
+    ///```
+    fn cell_in_waitgroup_guard() {}
+
+    /// ```compile_fail
+    /// use std::cell::Cell;
+    /// use crossfire::waitgroup::WaitGroupZero;
+    /// let wg = WaitGroupZero::new(Cell::new(0));
+    /// let guard = wg.add_guard();
+    /// let t = std::thread::spawn(move || guard.set(1));
+    /// wg.set(2);
+    /// t.join().unwrap();
+    ///```
+    fn cell_in_waitgroup_zero_guard() {}
+
+    /// ```rust
+    /// use std::cell::Cell;
+    /// use crossfire::waitgroup::WaitGroup;
+    /// let wg = WaitGroup::new(Cell::new(0), 0);
+    /// let guard = wg.add_guard();
+    /// wg.set(2);
+    ///```
+    fn cell_in_waitgroup() {}
+
+    /// ```rust
+    /// use std::cell::Cell;
+    /// use crossfire::waitgroup::WaitGroupZero;
+    /// let wg = WaitGroupZero::new(Cell::new(0));
+    /// let guard = wg.add_guard();
+    /// wg.set(2);
+    ///```
+    fn cell_in_waitgroup_zero() {}
 }
 
 #[cfg(test)]
