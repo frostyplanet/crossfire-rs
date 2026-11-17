@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [3.1.23] - 2026-11-18
+
+- waitgroup: Fix Guard Send signature (issue #75)
+
 ## [3.1.22] - 2026-10-24
 
 ### Fixed
